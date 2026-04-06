@@ -110,7 +110,6 @@
 
                 socket.on('user_update', (userData) => setUser(userData));
                 socket.on('room_sync', (data) => setRoomData(data));
-                socket.on('trigger_sync', () => { if (currentRoomId) socket.emit('join_room', { room_id: currentRoomId }); });
 
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Reward Claimed!', content: msg }));
                 socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
@@ -140,7 +139,7 @@
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
 
                 return () => socket.disconnect();
-            }, [currentRoomId]);
+            }, []); // <-- FIX: Removed [currentRoomId] from dependency array to prevent socket disconnection
 
             const requestMic = async () => {
                 try {
