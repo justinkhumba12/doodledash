@@ -51,14 +51,12 @@ async function initDB() {
                 break_end_time DATETIME,
                 last_winner_id VARCHAR(50),
                 next_drawer_id VARCHAR(50),
-                modified_at DATETIME
+                modified_at DATETIME,
+                is_private BOOLEAN DEFAULT FALSE,
+                password VARCHAR(255),
+                max_members INT DEFAULT 4
             )
         `);
-
-        // Safely alter existing rooms table for new features
-        try { await db.query('ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE'); } catch (e) {}
-        try { await db.query('ALTER TABLE rooms ADD COLUMN password VARCHAR(255)'); } catch (e) {}
-        try { await db.query('ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4'); } catch (e) {}
 
         await db.query(`
             CREATE TABLE IF NOT EXISTS room_members (
@@ -131,8 +129,8 @@ app.post('/webhook', async (req, res) => {
         const webAppUrl = process.env.WEBAPP_URL; 
         
         if (token && webAppUrl) {
-            // Append explicit URL parameter to enforce Telegram usage
-            const urlWithParams = `${webAppUrl}?tg_id=${tgId}`;
+            // Requirement 1: Include parameter as user_id of telegram
+            const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
             fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -325,12 +323,13 @@ io.on('connection', (socket) => {
         if (room.is_private) {
             if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
         } else {
-            // Deduct 1 credit for public rooms
+            // Requirement 2: Deduct 1 credit for public rooms
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
             await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
         }
 
+        // Enforce 1 room per user
         await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
         if (currentRoom) socket.leave(`room_${currentRoom}`);
 
