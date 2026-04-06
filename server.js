@@ -146,7 +146,7 @@ async function initDB() {
 // 2. TELEGRAM BOT
 // ==========================================
 const botToken = process.env.BOT_TOKEN || '8370801985:AAH42vuVLp_XnP3G3wE6PdytYHj39lXacFE';
-const webAppUrl = process.env.WEB_APP_URL || 'https://your-railway-app-url.up.railway.app/';
+const webAppUrl = process.env.WEB_APP_URL || 'https://doodledash-production-06af.up.railway.app';
 const bot = new Telegraf(botToken);
 
 bot.start(async (ctx) => {
