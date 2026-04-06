@@ -25,7 +25,7 @@ const DB_NAME = process.env.DB_NAME || 'railway';
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8370801985:AAH42vuVLp_XnP3G3wE6PdytYHj39lXacFE';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://doodledash-production-fa4e.up.railway.app';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '9f7c2a6d4b8e1c3f0a5d9e7b2c4f6a1e!';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '9f7c2a6d4b8e1c3f0a5d9e7b2c4f6a1e';
 
 const pool = mysql.createPool({
     host: DB_HOST,
