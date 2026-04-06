@@ -3,314 +3,130 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>DoodleDash - Draw & Guess</title>
+    <title>DoodleDash - React Clone</title>
+    
+    <!-- Dependencies -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- React and Babel via CDN -->
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
     
-    <!-- Socket.io Client -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        :root {
-            --primary: #6366f1; 
-            --primary-hover: #4f46e5;
-            --secondary: #f43f5e;
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-main: #1e293b;
-            --call-green: #10b981;
-            --call-red: #ef4444;
-        }
-
-        body { 
-            background-color: var(--bg-color); 
-            font-family: 'Poppins', sans-serif;
-            color: var(--text-main);
-            overflow-x: hidden;
-            touch-action: manipulation;
-        }
-
-        .app-header {
-            background: var(--card-bg);
-            padding: 15px 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 2px solid #e2e8f0;
-            margin-bottom: 20px;
-            position: sticky;
-            top: 0;
-            z-index: 1050;
-        }
-        
+        :root { --primary: #6366f1; --primary-hover: #4f46e5; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #1e293b; --call-green: #10b981; }
+        body { background-color: var(--bg-color); font-family: 'Poppins', sans-serif; color: var(--text-main); overflow-x: hidden; touch-action: manipulation; }
+        .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
         .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
-
-        .hero-section {
-            background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%);
-            border-radius: 20px;
-            padding: 30px 25px;
-            color: white;
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
-            margin-bottom: 30px;
-        }
+        .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 30px 25px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); margin-bottom: 30px; }
+        .btn-action { transition: all 0.3s ease; text-transform: uppercase; font-size: 0.85rem; border: none; }
+        .btn-action:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
+        .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s; overflow: hidden; }
+        .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); }
         
-        .btn-action {
-            transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-size: 0.85rem;
-            border: none;
-        }
-        .btn-action:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-        }
-
-        .room-card {
-            background: var(--card-bg);
-            border-radius: 16px;
-            border: 1px solid #e2e8f0;
-            transition: transform 0.2s, box-shadow 0.2s;
-            overflow: hidden;
-        }
-        .room-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12);
-            border-color: #c7d2fe;
-        }
-
-        .call-toast-container {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 1060;
-            display: flex; align-items: center; justify-content: center;
-            backdrop-filter: blur(4px);
-        }
-        .call-toast-card {
-            background: #fff; border-radius: 20px; padding: 25px;
-            width: 90%; max-width: 340px; text-align: center;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-        }
-
-        .pulse-warning-btn {
-            animation: pulseWarning 2s infinite;
-            background-color: #f59e0b !important;
-            color: #fff !important;
-            border-color: #f59e0b !important;
-        }
-        @keyframes pulseWarning {
-            0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
-        }
-
-        .whiteboard-wrapper {
-            background: var(--card-bg);
-            padding: 15px;
-            border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-            margin: 0 auto;
-            max-width: 430px; 
-            position: relative;
-        }
-        .whiteboard-header {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 10px; gap: 10px;
-        }
-        .whiteboard-container {
-            width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1 / 1;
-            margin: 0 auto; background-color: #fff;
-            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
-            background-size: 20px 20px; border: 2px solid #cbd5e1;
-            border-radius: 12px; position: relative; overflow: hidden;
-            touch-action: none;
-        }
+        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; max-width: 430px; position: relative; }
+        .whiteboard-container { width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1/1; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; }
         canvas { cursor: crosshair; width: 100%; height: 100%; display: block; }
+        .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
         
-        .wb-overlay {
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.92); backdrop-filter: blur(4px);
-            z-index: 10; display: flex; flex-direction: column; 
-            align-items: center; justify-content: center; text-align: center; 
-            padding: 10px; overflow-y: auto;
-        }
-
-        .interaction-panel {
-            position: fixed; right: -340px; top: 80px; bottom: 0;
-            width: 340px; height: calc(100vh - 80px);
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
-            border-radius: 20px 0 0 20px; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; 
-            display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.2);
-        }
+        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; }
         .interaction-panel.open { right: 0; }
-        
-        .floating-toggle {
-            position: absolute; left: -30px; top: 60%; transform: translateY(-50%);
-            width: 30px; height: 60px; background: var(--primary); color: white;
-            border-radius: 15px 0 0 15px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4);
-            font-size: 1.2rem;
-        }
-        
+        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); }
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
-        .panel-tab {
-            flex: 1; padding: 10px; text-align: center; cursor: pointer;
-            font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s;
-        }
+        .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
         .panel-tab.active { background: var(--primary); color: white; }
         .panel-body { flex: 1; overflow-y: auto; padding: 15px; }
-        .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; border-radius: 0 0 0 20px; }
+        .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
+        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; }
+        .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
+        .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
         
-        .msg-box {
-            background: #f1f5f9; padding: 10px 14px; border-radius: 12px; 
-            margin-bottom: 8px; font-size: 0.9rem; line-height: 1.4;
-        }
-        .msg-box b { color: var(--primary); }
-        .msg-box.guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
-        .msg-box.guess-wrong { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
-        .guess-self { background: #e0f2fe; border-left: 4px solid #0284c7; color: #0369a1; }
-
-        @media (max-width: 600px) {
-            .whiteboard-container { width: 100%; height: auto; }
-            .whiteboard-wrapper { padding: 10px; border-radius: 15px; max-width: 100%; }
-            .interaction-panel { width: 300px; right: -300px; }
-        }
-        
-        .heartbeat { animation: heartbeat 1.5s infinite; }
-        @keyframes heartbeat {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
-        }
+        .call-toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); z-index: 2000; text-align: center; width: 90%; max-width: 320px; }
+        @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .heartbeat { animation: heartbeat 1s infinite; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        // Setup Telegram & Socket
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        const urlParams = new URLSearchParams(window.location.search);
+        const tgId = tg.initDataUnsafe?.user?.id || urlParams.get('tg_id') || Math.floor(Math.random() * 100000).toString();
+        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
+        
         const socket = io();
 
-        // Utility to generate/fetch tg_id for simulated Auth
-        const getTGID = () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            let id = urlParams.get('tg_id');
-            if(!id) id = localStorage.getItem('mock_tg_id');
-            if(!id) {
-                id = Math.floor(Math.random() * 100000000).toString();
-                localStorage.setItem('mock_tg_id', id);
-            }
-            return id;
-        };
-
-        const formatTgId = (id) => id ? Number(id).toString(16).substring(0, 6).toUpperCase() : '';
-        const tgId = getTGID();
-        const tgPhoto = `https://ui-avatars.com/api/?name=${formatTgId(tgId)}&background=random`;
-
         const App = () => {
-            const [view, setView] = useState('auth'); // auth, lobby, game
-            const [lobbyData, setLobbyData] = useState(null);
-            const [gameData, setGameData] = useState(null);
-            const [alertModal, setAlertModal] = useState({ show: false, msg: '', type: 'info' });
+            const [user, setUser] = useState(null);
+            const [rooms, setRooms] = useState([]);
+            const [currentRoomId, setCurrentRoomId] = useState(null);
+            const [roomData, setRoomData] = useState(null);
+            const [activeTab, setActiveTab] = useState('chat');
+            const [panelOpen, setPanelOpen] = useState(false);
             
-            // WebRTC Call State
-            const [currentCall, setCurrentCall] = useState(null);
-            const pcRef = useRef(null);
-            const localStreamRef = useRef(null);
+            // WebRTC State
+            const [activeCall, setActiveCall] = useState(null);
+            const [localStream, setLocalStream] = useState(null);
+            const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
 
             useEffect(() => {
-                socket.emit('auth', { tg_id: tgId, photo_url: tgPhoto });
-                
-                socket.on('auth_success', () => {
-                    setView('lobby');
-                    socket.emit('get_lobby');
+                socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+
+                socket.on('lobby_data', (data) => {
+                    setUser(data.user);
+                    setRooms(data.rooms);
+                    if (data.currentRoom) setCurrentRoomId(data.currentRoom);
                 });
-                
-                socket.on('lobby_data', (data) => setLobbyData(data));
-                socket.on('refresh_lobby', () => socket.emit('get_lobby'));
-                
-                socket.on('room_joined', () => setView('game'));
-                socket.on('room_left', () => { setView('lobby'); setGameData(null); socket.emit('get_lobby'); });
-                
-                socket.on('sync', (data) => {
-                    if (data.error) {
-                        showAlert('Room deleted or you were removed.', 'error');
-                        setView('lobby');
-                        return;
-                    }
-                    setGameData(data);
-                    
-                    // Call UI Logic hook
-                    const myCall = data.calls?.find(c => c.caller_id === tgId || c.receiver_id === tgId);
-                    if (myCall) {
-                        setCurrentCall(myCall);
-                        if(myCall.status === 'ACTIVE' && !pcRef.current && myCall.caller_id === tgId) {
-                            initiateWebRTCConnection(myCall); // Start offering if active
-                        }
-                    } else {
-                        cleanupCall();
-                    }
+
+                socket.on('user_update', (userData) => setUser(userData));
+
+                socket.on('room_sync', (data) => {
+                    setRoomData(data);
                 });
 
                 socket.on('trigger_sync', () => {
-                    socket.emit('sync_request'); // Fast trigger to fetch
+                    if (currentRoomId) socket.emit('join_room', { room_id: currentRoomId }); // Forces a refresh
                 });
 
-                socket.on('alert', (alert) => showAlert(alert.message, alert.type));
-                
-                socket.on('webrtc_signal_received', async (data) => {
-                    if(data.target_id === tgId) handleWebRTCSignal(data);
-                });
+                // WebRTC Signaling Handlers
+                socket.on('call_update', (call) => setActiveCall(call));
+                socket.on('call_ended', () => cleanupCall());
+                socket.on('webrtc_signal_receive', handleReceiveSignal);
 
                 return () => socket.off();
-            }, []);
+            }, [currentRoomId]);
 
-            const showAlert = (msg, type) => {
-                setAlertModal({ show: true, msg, type });
-                setTimeout(() => setAlertModal({ show: false, msg: '', type: 'info' }), 3000);
-            };
-
-            const cleanupCall = () => {
-                setCurrentCall(null);
-                if (pcRef.current) {
-                    pcRef.current.close();
-                    pcRef.current = null;
-                }
-                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-            };
-
+            // --- WEBRTC LOGIC ---
             const requestMic = async () => {
-                if (localStreamRef.current) return true;
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                    localStreamRef.current = stream;
-                    return true;
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    setLocalStream(stream);
+                    return stream;
                 } catch (e) {
-                    showAlert("Microphone access is required for voice calls.", "error");
-                    return false;
+                    alert("Microphone permission required for calls.");
+                    return null;
                 }
             };
 
-            const initiateWebRTCConnection = async (callData) => {
+            const initPeerConnection = (stream, callObj) => {
                 const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-                pcRef.current = pc;
+                stream.getTracks().forEach(track => pc.addTrack(track, stream));
                 
-                if (localStreamRef.current) {
-                    localStreamRef.current.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current));
-                }
-
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
-                        socket.emit('webrtc_signal', { target_id: callData.receiver_id, payload: { type: 'candidate', data: e.candidate } });
+                        const targetId = callObj.caller === tgId ? callObj.receiver : callObj.caller;
+                        socket.emit('webrtc_signal', { call_id: callObj.id, target_id: targetId, signal: { type: 'candidate', candidate: e.candidate } });
                     }
                 };
 
@@ -321,442 +137,389 @@
                     }
                 };
 
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                socket.emit('webrtc_signal', { target_id: callData.receiver_id, payload: { type: 'offer', data: offer } });
+                peerConnectionRef.current = pc;
+                return pc;
             };
 
-            const handleWebRTCSignal = async ({ sender_id, payload }) => {
-                if (!pcRef.current) {
-                    pcRef.current = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-                    if (localStreamRef.current) {
-                        localStreamRef.current.getTracks().forEach(track => pcRef.current.addTrack(track, localStreamRef.current));
-                    }
-                    pcRef.current.onicecandidate = (e) => {
-                        if (e.candidate) {
-                            socket.emit('webrtc_signal', { target_id: sender_id, payload: { type: 'candidate', data: e.candidate } });
-                        }
-                    };
-                    pcRef.current.ontrack = (e) => {
-                        if (remoteAudioRef.current) {
-                            remoteAudioRef.current.srcObject = e.streams[0];
-                            remoteAudioRef.current.play().catch(console.error);
-                        }
-                    };
-                }
+            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
+                if (target_id !== tgId || !peerConnectionRef.current) return;
+                const pc = peerConnectionRef.current;
 
-                const pc = pcRef.current;
-                if (payload.type === 'offer') {
-                    await pc.setRemoteDescription(new RTCSessionDescription(payload.data));
+                if (signal.type === 'offer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
-                    socket.emit('webrtc_signal', { target_id: sender_id, payload: { type: 'answer', data: answer } });
-                } else if (payload.type === 'answer') {
-                    await pc.setRemoteDescription(new RTCSessionDescription(payload.data));
-                } else if (payload.type === 'candidate') {
-                    await pc.addIceCandidate(new RTCIceCandidate(payload.data));
+                    socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                } else if (signal.type === 'answer') {
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                } else if (signal.type === 'candidate') {
+                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                 }
             };
+
+            const initiateCall = async (targetId) => {
+                const stream = await requestMic();
+                if (!stream) return;
+                socket.emit('initiate_call', { receiver_id: targetId });
+            };
+
+            const acceptCall = async () => {
+                const stream = await requestMic();
+                if (!stream || !activeCall) return;
+                
+                socket.emit('accept_call', { call_id: activeCall.id });
+                const pc = initPeerConnection(stream, activeCall);
+                
+                // If I am the receiver, I wait for offer. 
+                // Wait, if I accept, the caller should send the offer.
+                // We'll let the caller detect ACTIVE status and send offer.
+            };
+
+            // Caller detects active status and sends offer
+            useEffect(() => {
+                if (activeCall?.status === 'ACTIVE' && activeCall.caller === tgId && !peerConnectionRef.current) {
+                    const startCall = async () => {
+                        const stream = localStream || await requestMic();
+                        const pc = initPeerConnection(stream, activeCall);
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        socket.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
+                    };
+                    startCall();
+                } else if (activeCall?.status === 'ACTIVE' && activeCall.receiver === tgId && !peerConnectionRef.current) {
+                    // Receiver prep
+                    initPeerConnection(localStream, activeCall);
+                }
+            }, [activeCall]);
+
+            const cleanupCall = () => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                setActiveCall(null);
+            };
+
+            // --- RENDERERS ---
+            if (!user) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
 
             return (
                 <div>
-                    <header className="app-header">
+                    <audio ref={remoteAudioRef} autoPlay playsInline hidden></audio>
+                    <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                        <div className="d-flex align-items-center gap-3">
-                            {(lobbyData || gameData) && (
-                                <div className="badge bg-light text-dark border border-warning shadow-sm d-flex align-items-center p-2 rounded-pill">
-                                    <i className="fas fa-coins text-warning"></i> 
-                                    <span className="fw-bold ms-1">{(lobbyData?.user_data || gameData?.profiles)?.credits || 0}</span>
-                                </div>
-                            )}
+                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill">
+                            <i className="fas fa-coins text-warning me-1"></i> <b>{user.credits}</b>
                         </div>
-                    </header>
+                    </div>
 
-                    {alertModal.show && (
-                        <div className="wb-overlay" style={{zIndex: 9999, position:'fixed'}}>
-                            <div className="bg-white p-4 rounded-4 shadow-lg text-center" style={{maxWidth: 350}}>
-                                <div className={`mb-3 fs-1 ${alertModal.type==='error'?'text-danger':'text-success'}`}>
-                                    <i className={`fas ${alertModal.type==='error'?'fa-exclamation-circle':'fa-check-circle'}`}></i>
+                    {!currentRoomId ? (
+                        <LobbyView user={user} rooms={rooms} onJoin={(id) => socket.emit('join_room', { room_id: id })} />
+                    ) : roomData ? (
+                        <div className="container-fluid">
+                            <GameRoom 
+                                roomData={roomData} 
+                                tgId={tgId} 
+                                onLeave={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }} 
+                                onCall={initiateCall}
+                            />
+                            
+                            <div className={`interaction-panel ${panelOpen ? 'open' : ''}`}>
+                                <div className="floating-toggle" onClick={() => setPanelOpen(!panelOpen)}>
+                                    <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                 </div>
-                                <h4 className="fw-bold text-dark mb-2">{alertModal.type==='error'?'Notice':'Success'}</h4>
-                                <p className="text-muted mb-4">{alertModal.msg}</p>
+                                <div className="panel-header">
+                                    <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                    <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
+                                </div>
+                                
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} tgId={tgId} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={tgId} roomData={roomData} />}
+                            </div>
+                        </div>
+                    ) : <div className="text-center mt-5">Loading room...</div>}
+
+                    {/* Call Incoming Modal */}
+                    {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
+                        <div className="wb-overlay" style={{ zIndex: 3000 }}>
+                            <div className="call-toast">
+                                <i className="fas fa-phone-volume heartbeat text-success fs-1 mb-3"></i>
+                                <h4>Incoming Call</h4>
+                                <p className="text-muted">From {activeCall.caller.substring(0,6)}</p>
+                                <div className="d-flex gap-2 mt-3">
+                                    <button className="btn btn-danger w-50" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
+                                    <button className="btn btn-success w-50" onClick={acceptCall}><i className="fas fa-phone"></i> Accept</button>
+                                </div>
                             </div>
                         </div>
                     )}
-
-                    {view === 'auth' && <div className="text-center mt-5"><h3><i className="fas fa-circle-notch fa-spin text-primary"></i> Connecting...</h3></div>}
-                    {view === 'lobby' && <Lobby lobbyData={lobbyData} socket={socket} />}
-                    {view === 'game' && <GameRoom gameData={gameData} socket={socket} tgId={tgId} tgPhoto={tgPhoto} 
-                                            currentCall={currentCall} setCurrentCall={setCurrentCall} 
-                                            requestMic={requestMic} remoteAudioRef={remoteAudioRef} />}
+                    
+                    {/* Active Call Floating Bar */}
+                    {activeCall && activeCall.status === 'ACTIVE' && (
+                        <div className="position-fixed bottom-0 start-50 translate-middle-x mb-3 p-3 bg-dark text-white rounded-pill shadow-lg d-flex align-items-center gap-3" style={{ zIndex: 2000 }}>
+                            <i className="fas fa-phone-volume heartbeat text-success"></i>
+                            <span>Call Active with {activeCall.caller === tgId ? activeCall.receiver.substring(0,6) : activeCall.caller.substring(0,6)}</span>
+                            <button className="btn btn-sm btn-danger rounded-circle" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        const Lobby = ({ lobbyData, socket }) => {
-            if (!lobbyData) return <div className="text-center mt-5">Loading...</div>;
-            const { user_data, rooms, current_room } = lobbyData;
-            
+        const LobbyView = ({ user, rooms, onJoin }) => {
             return (
-                <div className="container">
-                    <div className="row mb-3">
+                <div className="container mt-3">
+                    <div className="row mb-4">
                         <div className="col-md-6 mb-3">
-                            <div className="hero-section m-0 h-100 d-flex flex-column justify-content-center" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)', padding: '20px'}}>
-                                <div className="d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <h5 className="fw-bold mb-1"><i className="fas fa-calendar-check me-2"></i>Daily Claim</h5>
-                                        <p className="m-0 text-white-50" style={{fontSize: '0.8rem'}}>Get 1 Free Credit everyday!</p>
-                                    </div>
-                                    <button className="btn bg-white text-success fw-bold rounded-pill px-3 shadow-sm btn-action" style={{fontSize: '0.75rem'}} onClick={() => socket.emit('claim_reward', { type: 'daily' })}>
-                                        Claim Now
-                                    </button>
-                                </div>
+                            <div className="hero-section m-0 h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
+                                <h5><i className="fas fa-calendar-check"></i> Daily Claim</h5>
+                                <p className="small">Get 1 Free Credit everyday!</p>
+                                <button className="btn btn-light text-success fw-bold rounded-pill btn-sm" onClick={() => socket.emit('claim_reward', {type: 'daily'})}>Claim Now</button>
                             </div>
                         </div>
-                        <div className="col-md-6 mb-3">
-                            <div className="hero-section m-0 h-100 d-flex flex-column justify-content-center" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)', padding: '20px'}}>
-                                <div className="d-flex justify-content-between align-items-center border-bottom border-warning pb-2">
-                                    <div>
-                                        <h5 className="fw-bold mb-1"><i className="fas fa-tv me-2"></i>Ad 1</h5>
-                                        <p className="m-0 text-white-50" style={{fontSize: '0.8rem'}}>Get 2 Free Credits ({user_data.ad_claims_today}/2)</p>
-                                    </div>
-                                    <button className="btn bg-white text-warning fw-bold rounded-pill px-3 shadow-sm btn-action" style={{fontSize: '0.75rem'}} onClick={() => socket.emit('claim_reward', { type: 'ad1' })}>Watch</button>
-                                </div>
+                        <div className="col-md-6">
+                            <div className="hero-section m-0 h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'}}>
+                                <h5><i className="fas fa-tv"></i> Watch Ad</h5>
+                                <p className="small">Get 2 Free Credits ({user.ad_claims_today}/2)</p>
+                                <button className="btn btn-light text-warning fw-bold rounded-pill btn-sm" onClick={() => socket.emit('claim_reward', {type: 'ad1'})}>Watch Ad (Mock)</button>
                             </div>
                         </div>
                     </div>
-
-                    <div className="hero-section d-flex justify-content-between align-items-center flex-wrap gap-4">
-                        <div>
-                            <h2 className="fw-bold mb-1"><i className="fas fa-gamepad me-2"></i>Game Lobbies</h2>
-                            <p className="m-0 text-white-50 fs-6">Join a room or Create one (Costs 1 Credit)</p>
-                        </div>
-                        <div className="d-flex gap-2 flex-wrap">
-                            <button className="btn btn-dark fw-bold rounded-pill px-4 shadow-sm border border-secondary" onClick={() => socket.emit('create_room')}>
-                                <i className="fas fa-plus text-info me-1"></i> Create
-                            </button>
-                            {current_room && (
-                                <button className="btn btn-warning fw-bold rounded-pill px-4 shadow-sm" onClick={() => socket.emit('join_room', { room_id: current_room })}>
-                                    <i className="fas fa-sign-in-alt me-1"></i> Rejoin {current_room}
-                                </button>
-                            )}
-                        </div>
-                    </div>
-
+                    
+                    <h3 className="fw-bold mb-3">Game Lobbies</h3>
                     <div className="row">
-                        {rooms.map(r => {
-                            const isFull = r.member_count >= 4;
-                            const amIHere = current_room == r.id;
-                            return (
-                                <div className="col-md-6 col-lg-4 mb-4" key={r.id}>
-                                    <div className="room-card card h-100 border-0 shadow-sm">
-                                        <div className="card-body p-4">
-                                            <div className="d-flex justify-content-between align-items-center mb-3">
-                                                <h5 className="m-0 fw-bold text-dark"><i className="fas fa-door-open text-primary me-2"></i>Room {r.id}</h5>
-                                                <span className={`badge rounded-pill ${isFull?'bg-danger':'bg-success'} px-3 py-2`}>{isFull?'Full':'Available'}</span>
-                                            </div>
-                                            <div className="mb-4 text-secondary fw-medium">
-                                                <i className="fas fa-users me-2"></i> {r.member_count} / 4 Players
-                                            </div>
-                                            <button className={`btn ${amIHere?'btn-success':(isFull?'btn-secondary':'btn-primary')} w-100 fw-bold rounded-pill`} 
-                                                    disabled={isFull && !amIHere} 
-                                                    onClick={() => socket.emit('join_room', { room_id: r.id })}>
-                                                {amIHere ? 'Rejoin Room' : (isFull ? 'Lobby Full' : 'Join Lobby')}
-                                            </button>
-                                        </div>
+                        {rooms.map(r => (
+                            <div key={r.id} className="col-md-4 mb-3">
+                                <div className="room-card card h-100 p-3">
+                                    <div className="d-flex justify-content-between align-items-center mb-2">
+                                        <h5 className="fw-bold m-0">Room {r.id}</h5>
+                                        <span className={`badge ${r.member_count >= 4 ? 'bg-danger' : 'bg-success'}`}>{r.member_count >= 4 ? 'Full' : 'Open'}</span>
                                     </div>
+                                    <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / 4</p>
+                                    <button className="btn btn-primary rounded-pill w-100" disabled={r.member_count >= 4} onClick={() => onJoin(r.id)}>Join Room</button>
                                 </div>
-                            );
-                        })}
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
         };
 
-        const GameRoom = ({ gameData, socket, tgId, tgPhoto, currentCall, setCurrentCall, requestMic, remoteAudioRef }) => {
+        const GameRoom = ({ roomData, tgId, onLeave, onCall }) => {
+            const { room, members } = roomData;
+            const isDrawer = room.current_drawer_id === tgId;
+
+            return (
+                <div className="row mt-3">
+                    <div className="col-12 col-lg-8 mx-auto">
+                        <div className="whiteboard-wrapper">
+                            <div className="d-flex justify-content-between mb-2">
+                                <button className="btn btn-sm btn-outline-danger" onClick={onLeave}><i className="fas fa-sign-out-alt"></i> Leave</button>
+                                <strong className="text-primary">{room.status} Phase</strong>
+                                <span className="badge bg-danger">Room {room.id}</span>
+                            </div>
+
+                            <Whiteboard roomData={roomData} tgId={tgId} />
+                            
+                            {/* Member List */}
+                            <div className="mt-4">
+                                <h6>Players:</h6>
+                                {members.map(m => (
+                                    <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                        <div>
+                                            {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="30" height="30"/> : <i className="fas fa-user-circle fs-3 text-secondary me-2"></i>}
+                                            <span className="fw-bold">{m.user_id.substring(0,6)} {m.user_id === tgId && '(You)'}</span>
+                                            {m.is_ready ? <i className="fas fa-check text-success ms-2"></i> : ''}
+                                        </div>
+                                        {m.user_id !== tgId && (
+                                            <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Whiteboard = ({ roomData, tgId }) => {
             const canvasRef = useRef(null);
-            const [panelOpen, setPanelOpen] = useState(false);
-            const [activeTab, setActiveTab] = useState('chat');
-            const [localStrokes, setLocalStrokes] = useState([]);
-            const [vpPos, setVpPos] = useState({x: 150, y: 150});
-            const [isDragging, setIsDragging] = useState(false);
-            const [chatMsg, setChatMsg] = useState('');
-            const [guessMsg, setGuessMsg] = useState('');
-            const [wordInput, setWordInput] = useState('');
+            const { room, drawings } = roomData;
+            const isDrawer = room.current_drawer_id === tgId;
+            const isDrawingPhase = room.status === 'DRAWING';
             
-            const isDrawer = gameData?.room?.current_drawer_id === tgId;
-            const isDrawingPhase = gameData?.room?.status === 'DRAWING';
-            const showVp = isDrawer && isDrawingPhase;
-            const lastPosRef = useRef({x:0, y:0});
+            const [wordInput, setWordInput] = useState('');
+            let drawing = false;
+            let currentLine = [];
+            let lastPos = {x: 0, y: 0};
 
-            useEffect(() => {
-                socket.emit('trigger_sync');
-                const interval = setInterval(() => socket.emit('trigger_sync'), 2000);
-                return () => clearInterval(interval);
-            }, []);
-
-            useEffect(() => {
+            // Redraw canvas
+            const redraw = useCallback(() => {
                 const canvas = canvasRef.current;
-                if(!canvas || !gameData?.drawings) return;
+                if(!canvas) return;
                 const ctx = canvas.getContext('2d');
-                ctx.clearRect(0,0,400,400);
+                ctx.clearRect(0,0, canvas.width, canvas.height);
                 ctx.strokeStyle = '#334155';
                 ctx.lineCap = 'round';
                 ctx.lineWidth = 4;
-
-                gameData.drawings.forEach(json => {
+                
+                drawings.forEach(jsonStr => {
                     try {
-                        const lines = JSON.parse(json);
+                        const lines = JSON.parse(jsonStr);
                         lines.forEach(l => {
                             ctx.beginPath();
                             ctx.moveTo(l.x0, l.y0);
                             ctx.lineTo(l.x1, l.y1);
                             ctx.stroke();
                         });
-                    } catch(e) {}
+                    } catch(e){}
                 });
+            }, [drawings]);
 
+            useEffect(() => { redraw(); }, [redraw]);
+
+            // Live drawing listener
+            useEffect(() => {
+                const handleLiveDraw = (lines) => {
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    ctx.strokeStyle = '#334155';
+                    ctx.lineCap = 'round';
+                    ctx.lineWidth = 4;
+                    lines.forEach(l => {
+                        ctx.beginPath();
+                        ctx.moveTo(l.x0, l.y0);
+                        ctx.lineTo(l.x1, l.y1);
+                        ctx.stroke();
+                    });
+                };
+                socket.on('live_draw', handleLiveDraw);
+                return () => socket.off('live_draw', handleLiveDraw);
+            }, []);
+
+            const getMousePos = (e) => {
+                const rect = canvasRef.current.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                return {
+                    x: (clientX - rect.left) * (canvasRef.current.width / rect.width),
+                    y: (clientY - rect.top) * (canvasRef.current.height / rect.height)
+                };
+            };
+
+            const startDraw = (e) => {
+                if (!isDrawer || !isDrawingPhase) return;
+                e.preventDefault();
+                drawing = true;
+                currentLine = [];
+                lastPos = getMousePos(e);
+            };
+
+            const moveDraw = (e) => {
+                if (!drawing) return;
+                e.preventDefault();
+                const newPos = getMousePos(e);
+                
+                const ctx = canvasRef.current.getContext('2d');
                 ctx.beginPath();
-                localStrokes.forEach(l => {
-                    ctx.moveTo(l.x0, l.y0);
-                    ctx.lineTo(l.x1, l.y1);
-                });
+                ctx.moveTo(lastPos.x, lastPos.y);
+                ctx.lineTo(newPos.x, newPos.y);
                 ctx.stroke();
-            }, [gameData?.drawings, localStrokes]);
 
-            const handleVpStart = (e) => {
-                if(!showVp) return;
-                e.preventDefault();
-                setIsDragging(true);
-                
-                const touch = e.touches ? e.touches[0] : e;
-                const rect = canvasRef.current.getBoundingClientRect();
-                const scaleX = 400 / rect.width;
-                const scaleY = 400 / rect.height;
-                lastPosRef.current = { x: (touch.clientX - rect.left)*scaleX, y: (touch.clientY - rect.top)*scaleY };
+                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
+                lastPos = newPos;
             };
 
-            const handleVpMove = (e) => {
-                if(!isDragging || !showVp) return;
-                e.preventDefault();
-                const touch = e.touches ? e.touches[0] : e;
-                const rect = canvasRef.current.getBoundingClientRect();
-                
-                const clientX = touch.clientX - rect.left;
-                const clientY = touch.clientY - rect.top;
-                
-                setVpPos({ x: clientX, y: clientY });
-
-                const scaleX = 400 / rect.width;
-                const scaleY = 400 / rect.height;
-                const newPos = { x: clientX * scaleX, y: clientY * scaleY };
-                
-                const newLine = { x0: lastPosRef.current.x, y0: lastPosRef.current.y, x1: newPos.x, y1: newPos.y };
-                setLocalStrokes(prev => [...prev, newLine]);
-                lastPosRef.current = newPos;
-            };
-
-            const handleVpEnd = () => {
-                setIsDragging(false);
-                if(localStrokes.length > 0) {
-                    socket.emit('draw', { lines: JSON.stringify(localStrokes) });
-                    setLocalStrokes([]); // Server syncs back
+            const stopDraw = () => {
+                if(!drawing) return;
+                drawing = false;
+                if(currentLine.length > 0) {
+                    socket.emit('draw', { lines: currentLine });
                 }
             };
 
-            const handleChat = () => {
-                if(!chatMsg.trim()) return;
-                socket.emit('chat', { message: chatMsg });
-                setChatMsg('');
-            };
-
-            const handleGuess = () => {
-                if(!guessMsg.trim()) return;
-                socket.emit('guess', { guess: guessMsg });
-                setGuessMsg('');
-            };
-
-            if (!gameData) return <div>Loading Room...</div>;
-
-            const room = gameData.room;
-            let statusText = 'Waiting for Players...';
-            if(room.status === 'PRE_DRAW') statusText = isDrawer ? 'Select a word!' : 'Drawer is picking...';
-            if(room.status === 'DRAWING') statusText = isDrawer ? 'Your turn to draw!' : 'Guess the word!';
-            if(room.status === 'REVEAL') statusText = 'Round Results';
-            if(room.status === 'BREAK') statusText = 'Waiting for next round';
-
             return (
-                <div className="container-fluid position-relative">
-                    <audio ref={remoteAudioRef} autoPlay playsInline hidden></audio>
+                <div className="whiteboard-container">
+                    <canvas 
+                        ref={canvasRef} width="400" height="400"
+                        onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
+                        onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
+                    />
                     
-                    {/* Call Incoming Toast */}
-                    {currentCall?.status === 'RINGING' && currentCall.receiver_id === tgId && (
-                        <div className="call-toast-container show">
-                            <div className="call-toast-card">
-                                <div className="mb-3 fs-1 text-success"><i className="fas fa-phone-volume heartbeat"></i></div>
-                                <h4 className="fw-bold text-dark mb-1">Incoming Call</h4>
-                                <p className="text-muted mb-4">Voice connect request</p>
-                                <div className="d-flex gap-2 mt-3">
-                                    <button className="btn btn-danger flex-fill fw-bold rounded-pill" onClick={() => socket.emit('call_action', { call_id: currentCall.id, action: 'decline'})}><i className="fas fa-phone-slash"></i> Decline</button>
-                                    <button className="btn btn-success flex-fill fw-bold rounded-pill" onClick={async () => {
-                                        const granted = await requestMic();
-                                        if(granted) socket.emit('call_action', { call_id: currentCall.id, action: 'accept'});
-                                    }}><i className="fas fa-phone"></i> Accept</button>
-                                </div>
-                            </div>
+                    {/* Overlays */}
+                    {room.status === 'PRE_DRAW' && isDrawer && (
+                        <div className="wb-overlay">
+                            <h4 className="text-primary fw-bold">Your turn to draw!</h4>
+                            <input type="text" className="form-control text-center my-3 w-75" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                            <button className="btn btn-primary w-75 rounded-pill" onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                        </div>
+                    )}
+                    
+                    {room.status === 'PRE_DRAW' && !isDrawer && (
+                        <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                    )}
+
+                    {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                        <div className="wb-overlay">
+                            {room.status === 'WAITING' && <h4>Waiting for players...</h4>}
+                            {room.status !== 'WAITING' && (
+                                <>
+                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h4>
+                                    {room.last_winner_id ? <div className="alert alert-success mt-2">{room.last_winner_id.substring(0,6)} guessed it!</div> : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
+                                </>
+                            )}
+                            <button className="btn btn-success rounded-pill px-4 mt-3" onClick={() => socket.emit('set_ready')}>I'm Ready!</button>
                         </div>
                     )}
 
-                    <div className="whiteboard-wrapper">
-                        <div className="whiteboard-header">
-                            <button className="btn btn-light btn-sm fw-bold border px-2 py-1" onClick={() => socket.emit('leave_room')}><i className="fas fa-sign-out-alt fa-flip-horizontal text-danger"></i></button>
-                            <div className="m-0 fw-bold text-center flex-grow-1 px-2" style={{color: 'var(--primary)', fontSize: '0.9rem'}}>{statusText}</div>
-                        </div>
+                    {isDrawer && isDrawingPhase && (
+                        <button className="btn btn-sm btn-light position-absolute bottom-0 end-0 m-2 shadow" onClick={() => socket.emit('undo')}><i className="fas fa-undo"></i></button>
+                    )}
+                </div>
+            );
+        };
 
-                        <div className="whiteboard-container" 
-                             onMouseMove={handleVpMove} onTouchMove={handleVpMove}
-                             onMouseUp={handleVpEnd} onTouchEnd={handleVpEnd} onMouseLeave={handleVpEnd}>
-                            <canvas ref={canvasRef} width="400" height="400"></canvas>
-                            
-                            {showVp && (
-                                <div style={{position: 'absolute', top: vpPos.y, left: vpPos.x, transform: 'translate(-50%, -50%)', zIndex: 50, pointerEvents: 'none'}}>
-                                    <div style={{position: 'absolute', top: -3, left: -3, width: 6, height: 6, background: 'var(--primary)', borderRadius: '50%'}}></div>
-                                    <div style={{position: 'absolute', bottom: 0, left: 0}}><i className="fas fa-pencil-alt text-primary" style={{fontSize: '2.5rem', transform: 'translate(4px, -4px)'}}></i></div>
-                                    <div className="rounded-circle shadow-lg d-flex align-items-center justify-content-center bg-primary text-white border border-2 border-white" 
-                                         style={{position: 'absolute', top: 15, left: 20, width: 38, height: 38, cursor: 'grab', pointerEvents: 'auto'}} 
-                                         onMouseDown={handleVpStart} onTouchStart={handleVpStart}>
-                                        <i className="fas fa-paint-brush"></i>
-                                    </div>
-                                </div>
-                            )}
-
-                            {room.status === 'PRE_DRAW' && isDrawer && (
-                                <div className="wb-overlay">
-                                    <h3 className="fw-bold mb-3" style={{color: 'var(--primary)'}}>Your turn to draw!</h3>
-                                    <div className="d-flex flex-column gap-2 w-75">
-                                        <input type="text" className="form-control text-center" placeholder="e.g. Tree" value={wordInput} onChange={e=>setWordInput(e.target.value)} />
-                                        <button className="btn btn-primary px-4 py-2 fw-bold" onClick={() => {socket.emit('set_word', {word: wordInput}); setWordInput('');}}><i className="fas fa-pencil-alt"></i> Draw!</button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {(room.status === 'REVEAL' || room.status === 'BREAK') && (
-                                <div className="wb-overlay">
-                                    <h3 className="fw-bold mb-2">{room.word_to_draw ? `The word was: ${room.word_to_draw}` : 'No word selected'}</h3>
-                                    <button className="btn rounded-pill px-4 py-2 shadow-sm fw-bold btn-success" onClick={() => socket.emit('set_ready')}>
-                                        <i className="fas fa-check-circle"></i> I'm Ready!
-                                    </button>
-                                </div>
-                            )}
-                            {room.status === 'WAITING' && (
-                                <div className="wb-overlay">
-                                    <h3 className="fw-bold mb-2">Waiting for players</h3>
-                                    <button className="btn rounded-pill px-4 py-2 shadow-sm fw-bold btn-success" onClick={() => socket.emit('set_ready')}>
-                                        <i className="fas fa-check-circle"></i> I'm Ready!
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        
-                        <div className="text-center fw-bold fs-4 my-2 text-primary" style={{letterSpacing: '2px', minHeight: '35px'}}>
-                            {room.hint && <span dangerouslySetInnerHTML={{__html: isDrawer ? `Word: <b class="text-dark">${room.hint}</b>` : `Hint: <b class="text-dark">${room.hint}</b>`}}></span>}
-                        </div>
-
-                        {/* Active Call UI */}
-                        {currentCall?.status === 'ACTIVE' && (
-                            <div className="card border-0 shadow-sm mt-3" style={{background: 'linear-gradient(to right, #ecfdf5, #d1fae5)'}}>
-                                <div className="card-body p-2 px-3 d-flex justify-content-between align-items-center rounded">
-                                    <div className="d-flex align-items-center">
-                                        <div className="bg-success rounded-circle d-flex align-items-center justify-content-center me-3" style={{width: 35, height: 35}}>
-                                            <i className="fas fa-phone-volume text-white heartbeat"></i>
-                                        </div>
-                                        <div>
-                                            <div className="text-success fw-bold" style={{fontSize: '0.8rem'}}>ACTIVE CALL</div>
-                                            <div className="text-dark fw-bold">With: {formatTgId(currentCall.caller_id === tgId ? currentCall.receiver_id : currentCall.caller_id)}</div>
-                                        </div>
-                                    </div>
-                                    <button className="btn btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('call_action', { call_id: currentCall.id, action: 'end'})} style={{width: 40, height: 40}}><i className="fas fa-phone-slash"></i></button>
-                                </div>
+        const ChatBox = ({ chats, tgId }) => {
+            const [input, setInput] = useState('');
+            return (
+                <div className="d-flex flex-column h-100">
+                    <div className="panel-body">
+                        {chats.map(c => (
+                            <div key={c.id} className={`msg-box ${c.user_id === 'System' ? 'sys' : ''}`}>
+                                <b>{c.user_id === 'System' ? 'System' : c.user_id.substring(0,6)}: </b>
+                                {c.message}
                             </div>
-                        )}
-
-                        {/* Members */}
-                        <div className="mt-3 d-flex flex-column w-100 gap-2">
-                            {gameData.members.map(m => {
-                                const isMe = m.user_id === tgId;
-                                const isDrawr = m.user_id === room.current_drawer_id;
-                                const pic = gameData.profiles[m.user_id] || `https://ui-avatars.com/api/?name=${formatTgId(m.user_id)}`;
-                                
-                                return (
-                                    <div key={m.user_id} className="d-flex align-items-center p-2 bg-white shadow-sm rounded border" style={{borderLeft: `4px solid ${isDrawr ? 'var(--primary)' : 'transparent'}`}}>
-                                        <img src={pic} className="rounded-circle me-3" style={{width: 40, height: 40, border: `2px solid ${isDrawr ? 'var(--primary)' : '#e2e8f0'}`}} />
-                                        <div className="fw-bold flex-grow-1">
-                                            {formatTgId(m.user_id)} {isMe && <span className="badge bg-primary ms-1">You</span>}
-                                            {isDrawr && <span className="badge text-dark ms-1" style={{background: '#fef08a'}}><i className="fas fa-pencil-alt"></i></span>}
-                                        </div>
-                                        <div className="d-flex align-items-center gap-2">
-                                            {!isMe && !currentCall && (
-                                                <button className="btn btn-sm btn-outline-primary rounded-pill" onClick={async () => {
-                                                    if(await requestMic()) socket.emit('initiate_call', { receiver_id: m.user_id });
-                                                }}><i className="fas fa-phone-alt"></i></button>
-                                            )}
-                                            {m.is_ready ? <i className="fas fa-check-circle text-success fs-5"></i> : <i className="fas fa-clock text-secondary opacity-50 fs-5"></i>}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        ))}
                     </div>
-
-                    <div className={`interaction-panel ${panelOpen ? 'open' : ''}`}>
-                        <div className="floating-toggle" onClick={() => setPanelOpen(!panelOpen)}>
-                            <i className={`fas ${panelOpen ? 'fa-chevron-right' : 'fa-chevron-left'}`}></i>
-                        </div>
-                        
-                        <div className="panel-header">
-                            <div className={`panel-tab ${activeTab==='chat'?'active':''}`} onClick={()=>setActiveTab('chat')}><i className="fas fa-comment-dots"></i> Chat</div>
-                            <div className={`panel-tab ${activeTab==='guess'?'active':''}`} onClick={()=>setActiveTab('guess')}><i className="fas fa-lightbulb"></i> Guess</div>
-                        </div>
-                        
-                        {activeTab === 'chat' && (
-                            <div className="d-flex flex-column h-100 overflow-hidden">
-                                <div className="panel-body">
-                                    {gameData.chats.map(c => (
-                                        <div key={c.id} className="msg-box">
-                                            <b>{c.user_id==='System'?'System':formatTgId(c.user_id)}:</b> {c.message}
-                                        </div>
-                                    ))}
-                                </div>
-                                <div className="chat-input-wrapper">
-                                    <div className="input-group">
-                                        <input type="text" className="form-control border-0 bg-light rounded-start-3" placeholder="Message..." value={chatMsg} onChange={e=>setChatMsg(e.target.value)} onKeyPress={e=>e.key==='Enter'&&handleChat()}/>
-                                        <button className="btn btn-send" onClick={handleChat}><i className="fas fa-paper-plane"></i></button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'guess' && (
-                            <div className="d-flex flex-column h-100 overflow-hidden">
-                                <div className="panel-body">
-                                    {gameData.guesses.map(g => (
-                                        <div key={g.id} className={`msg-box ${g.user_id === tgId ? 'guess-self' : 'guess-other'}`}>
-                                            <div className="text-muted" style={{fontSize: '0.75rem'}}>{g.user_id === tgId ? 'You' : formatTgId(g.user_id)}</div>
-                                            <div className="fw-bold" style={{filter: g.is_blurred ? 'blur(3px)' : 'none'}}>{g.guess_text}</div>
-                                        </div>
-                                    ))}
-                                </div>
-                                {!isDrawer && (
-                                    <div className="chat-input-wrapper">
-                                        <div className="input-group">
-                                            <input type="text" className="form-control border-0 bg-light rounded-start-3" placeholder="Guess word..." value={guessMsg} onChange={e=>setGuessMsg(e.target.value)} onKeyPress={e=>e.key==='Enter'&&handleGuess()}/>
-                                            <button className="btn btn-success rounded-end-3" onClick={handleGuess}><i className="fas fa-check"></i></button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                    <div className="chat-input-wrapper d-flex">
+                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
+                        <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
                     </div>
+                </div>
+            );
+        };
+
+        const GuessBox = ({ guesses, tgId, roomData }) => {
+            const [input, setInput] = useState('');
+            const isDrawer = roomData.room.current_drawer_id === tgId;
+            const revealState = ['REVEAL', 'BREAK'].includes(roomData.room.status);
+
+            return (
+                <div className="d-flex flex-column h-100">
+                    <div className="panel-body">
+                        {guesses.map(g => (
+                            <div key={g.id} className={`msg-box ${g.is_correct ? 'guess-correct' : 'bg-light'}`}>
+                                <b>{g.user_id.substring(0,6)}: </b>
+                                {revealState || g.user_id === tgId || isDrawer ? g.guess_text : '••••••••'}
+                            </div>
+                        ))}
+                    </div>
+                    {!isDrawer && roomData.room.status === 'DRAWING' && (
+                        <div className="chat-input-wrapper d-flex">
+                            <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('guess', {guess: input}), setInput(''))} placeholder="Guess word..." />
+                            <button className="btn btn-success rounded-end-pill px-3" onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}><i className="fas fa-check"></i></button>
+                        </div>
+                    )}
                 </div>
             );
         };
