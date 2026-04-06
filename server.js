@@ -20,10 +20,10 @@ app.use(express.urlencoded({ extended: true }));
 // ==========================================
 // On Railway, you can just use process.env.MYSQL_URL
 const dbConfig = process.env.MYSQL_URL || {
-    host: process.env.DB_HOST || 'localhost',
+    host: process.env.DB_HOST || 'mysql.railway.internal',
     user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'doodledash',
+    password: process.env.DB_PASSWORD || 'rgnAMfeRHnrKzqMMlTrcyBnqbgvWFCsT',
+    database: process.env.DB_NAME || 'railway',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
@@ -145,7 +145,7 @@ async function initDB() {
 // ==========================================
 // 2. TELEGRAM BOT
 // ==========================================
-const botToken = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
+const botToken = process.env.BOT_TOKEN || '8370801985:AAH42vuVLp_XnP3G3wE6PdytYHj39lXacFE';
 const webAppUrl = process.env.WEB_APP_URL || 'https://your-railway-app-url.up.railway.app/';
 const bot = new Telegraf(botToken);
 
