@@ -10,7 +10,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 // --- Environment Variables (Railway Strict) ---
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3306;
 const DB_HOST = process.env.DB_HOST || 'mysql.railway.internal';
 const DB_USER = process.env.DB_USER || 'root';
 const DB_PASSWORD = process.env.DB_PASSWORD || 'sPOjadCTXgnleiWulhlkRyyDQytFrHGH';
