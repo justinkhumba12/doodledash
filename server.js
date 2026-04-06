@@ -143,7 +143,7 @@ async function initDB() {
 }
 
 // ==========================================
-// 2. TELEGRAM BOT
+// 2. TELEGRAM BOT (WITH WEBHOOK & SECRET KEY)
 // ==========================================
 const botToken = process.env.BOT_TOKEN || '8370801985:AAH42vuVLp_XnP3G3wE6PdytYHj39lXacFE';
 const webAppUrl = process.env.WEB_APP_URL || 'https://doodledash-production-06af.up.railway.app';
@@ -163,7 +163,30 @@ bot.start(async (ctx) => {
     }
 });
 
-bot.launch().then(() => console.log('Telegram Bot running via Long Polling'));
+// Configure Webhook or Long Polling based on Environment
+const useWebhook = process.env.USE_WEBHOOK === 'true' || process.env.NODE_ENV === 'production';
+const webhookSecret = process.env.WEBHOOK_SECRET || '9f7c2a6d4b8e1c3f0a5d9e7b2c4f6a1e!';
+
+if (useWebhook) {
+    const webhookPath = `/webhook/${botToken}`;
+    
+    // Attach webhook middleware to Express with Secret Token validation
+    app.use(bot.webhookCallback(webhookPath, {
+        secretToken: webhookSecret
+    }));
+
+    // Register Webhook to Telegram
+    bot.telegram.setWebhook(`${webAppUrl}${webhookPath}`, {
+        secret_token: webhookSecret
+    }).then(() => {
+        console.log(`✅ Telegram Webhook set securely at ${webAppUrl}${webhookPath}`);
+    }).catch(err => {
+        console.error("Failed to set Telegram Webhook:", err);
+    });
+} else {
+    // Fallback for local development
+    bot.launch().then(() => console.log('✅ Telegram Bot running via Long Polling'));
+}
 
 // ==========================================
 // 3. GLOBAL GAME TIMING ENGINE
