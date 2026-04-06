@@ -112,6 +112,41 @@ async function initDB() {
 }
 initDB();
 
+// --- TELEGRAM WEBHOOK ENDPOINT (RESTORED) ---
+app.post('/webhook', async (req, res) => {
+    const update = req.body;
+    if (update?.message?.text === '/start') {
+        const chatId = update.message.chat.id;
+        const tgId = update.message.from.id;
+        
+        // Auto-register user using UTC global time
+        try {
+            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
+        } catch (e) {
+            console.error('Webhook DB Error:', e);
+        }
+
+        const token = process.env.BOT_TOKEN; // Set this in Railway Variables
+        const webAppUrl = process.env.WEBAPP_URL; // Set this in Railway Variables
+        
+        if (token && webAppUrl) {
+            // Simple reply via Telegram API
+            fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: 'Welcome to DoodleDash! Click below to play.',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: webAppUrl } }]]
+                    }
+                })
+            }).catch(console.error);
+        }
+    }
+    res.sendStatus(200);
+});
+
 // Helper to fetch user with calculated UTC limits
 async function getUserState(tg_id) {
     const [rows] = await db.query(`
