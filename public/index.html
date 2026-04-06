@@ -24,16 +24,14 @@
         .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
         .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
         .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 25px 20px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); }
-        .btn-action { transition: all 0.3s ease; text-transform: uppercase; font-size: 0.85rem; border: none; }
-        .btn-action:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
         .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s; overflow: hidden; }
         .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); }
         
         .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
         
-        /* Fixed Square Whiteboard Constraints */
-        .whiteboard-container { width: 350px !important; height: 350px !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
-        canvas { cursor: crosshair; width: 350px; height: 350px; display: block; }
+        /* STRICT Fixed Square Whiteboard Constraints */
+        .whiteboard-container { width: 350px !important; height: 350px !important; min-width: 350px; min-height: 350px; max-width: 350px; max-height: 350px; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
+        canvas { cursor: crosshair; width: 350px !important; height: 350px !important; display: block; }
         
         .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
         
@@ -64,8 +62,12 @@
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
         
-        // Strict Enforcement: Cannot use without valid Telegram ID from parameter
-        const tgId = urlParams.get('tg_id');
+        // Audio Effects setup
+        const mgsSound = new Audio('/audio/mgs_notification.mp3');
+        const guessSound = new Audio('/audio/guess_notification.mp3');
+
+        // Requirement 1: Cannot use without valid user_id from parameter
+        const tgId = urlParams.get('user_id');
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
         const App = () => {
@@ -121,7 +123,7 @@
 
                 socket.on('room_created', ({ room_id }) => {
                     setModal(null);
-                    socket.emit('search_room', { room_id }); // Prompts user to join it immediately
+                    socket.emit('search_room', { room_id }); 
                 });
 
                 socket.on('search_result', (room) => {
@@ -264,7 +266,6 @@
 
                     <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} />
 
-                    {/* Active Call UI Components */}
                     {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
                         <div className="wb-overlay" style={{ zIndex: 3000 }}>
                             <div className="call-toast text-center w-75">
@@ -398,15 +399,17 @@
                     }
                 }
 
+                // Requirement 6: Specific Ad code implementations
                 const runAd = () => {
-                    const funcName = 'show_10604686';
-                    if (typeof window[funcName] !== 'function') {
-                        // Mock fallback logic if external library is not loaded
-                        window[funcName] = () => new Promise(res => setTimeout(res, 1500));
+                    // Safety check if ad lib isn't injected yet
+                    if (typeof window.show_10812134 !== 'function') {
+                        window.show_10812134 = () => new Promise(res => setTimeout(res, 1500)); 
                     }
-                    const arg = adNum === 2 ? 'pop' : undefined;
 
-                    window[funcName](arg).then(() => {
+                    // Trigger specific Ads
+                    const adPromise = adNum === 1 ? window.show_10812134('pop') : window.show_10812134();
+
+                    adPromise.then(() => {
                         socket.emit('claim_reward', { type: prefix });
                     }).catch(e => {
                         setModal({ type: 'error', title: 'Ad Failed', content: 'Ad could not be loaded.' });
@@ -578,7 +581,7 @@
                 const rect = canvasRef.current.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                // Since canvas is always 350x350 explicitly now, direct calculation works accurately
+                // strict width validation calculation
                 return {
                     x: (clientX - rect.left) * (canvasRef.current.width / rect.width),
                     y: (clientY - rect.top) * (canvasRef.current.height / rect.height)
@@ -658,6 +661,16 @@
 
         const ChatBox = ({ chats, socket }) => {
             const [input, setInput] = useState('');
+            const prevCount = useRef(chats.length);
+            
+            // Audio trigger on new chat message
+            useEffect(() => {
+                if (chats.length > prevCount.current) {
+                    mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                }
+                prevCount.current = chats.length;
+            }, [chats]);
+
             return (
                 <div className="d-flex flex-column h-100">
                     <div className="panel-body">
@@ -680,6 +693,19 @@
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const revealState = ['REVEAL', 'BREAK'].includes(roomData.room.status);
+            
+            const prevCount = useRef(guesses.length);
+
+            // Audio trigger on correct guess
+            useEffect(() => {
+                if (guesses.length > prevCount.current) {
+                    const lastGuess = guesses[guesses.length - 1];
+                    if (lastGuess.is_correct) {
+                        guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                    }
+                }
+                prevCount.current = guesses.length;
+            }, [guesses]);
 
             return (
                 <div className="d-flex flex-column h-100">
