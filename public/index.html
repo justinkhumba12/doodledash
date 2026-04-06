@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DoodleDash - WebSockets</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <style>
+        :root {
+            --primary: #6366f1; 
+            --primary-hover: #4f46e5;
+            --secondary: #f43f5e;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --call-green: #10b981;
+            --call-red: #ef4444;
+        }
+
+        body { 
+            background-color: var(--bg-color); 
+            font-family: 'Poppins', sans-serif;
+            color: var(--text-main);
+            overflow-x: hidden;
+            touch-action: manipulation;
+        }
+
+        /* Clean Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 15px 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 1050;
+        }
+        
+        .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
+
+        /* Enhanced Room List & Hero Section */
+        .hero-section {
+            background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%);
+            border-radius: 20px;
+            padding: 30px 25px;
+            color: white;
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
+            margin-bottom: 30px;
+        }
+        
+        .btn-action {
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.85rem;
+            border: none;
+        }
+        .btn-action:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+        }
+
+        /* Room Cards */
+        .room-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            transition: transform 0.2s, box-shadow 0.2s;
+            overflow: hidden;
+        }
+        .room-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12);
+            border-color: #c7d2fe;
+        }
+
+        /* Call Notification Modal */
+        #call-toast-container {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1060;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; visibility: hidden; transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
+        }
+        #call-toast-container.show { opacity: 1; visibility: visible; }
+        .call-toast-card {
+            background: #fff; border-radius: 20px; padding: 25px;
+            width: 90%; max-width: 340px; text-align: center;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #call-toast-container.show .call-toast-card { transform: scale(1); }
+
+        /* Whiteboard */
+        .whiteboard-wrapper {
+            background: var(--card-bg); padding: 15px; border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto;
+            max-width: 430px; position: relative;
+        }
+        .whiteboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; }
+        .whiteboard-container {
+            width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1 / 1;
+            margin: 0 auto; background-color: #fff;
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px; border: 2px solid #cbd5e1;
+            border-radius: 12px; position: relative; overflow: hidden; touch-action: none;
+        }
+        canvas { cursor: crosshair; width: 100%; height: 100%; display: block; }
+        
+        .wb-overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.92); backdrop-filter: blur(4px);
+            z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; padding: 10px; overflow-y: auto;
+        }
+
+        /* Modern Sliding Panel */
+        .interaction-panel {
+            position: fixed; right: -340px; top: 80px; bottom: 0;
+            width: 340px; height: calc(100vh - 80px);
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+            border-radius: 20px 0 0 20px; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; 
+            display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.2);
+        }
+        .interaction-panel.open { right: 0; }
+        
+        .floating-toggle {
+            position: absolute; left: -30px; top: 60%; transform: translateY(-50%);
+            width: 30px; height: 60px; background: var(--primary); color: white;
+            border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); font-size: 1.2rem;
+        }
+        
+        .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
+        .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
+        .panel-tab.active { background: var(--primary); color: white; }
+        
+        .panel-section { display: none; flex: 1; flex-direction: column; overflow: hidden; opacity: 0; transition: opacity 0.3s ease;}
+        .panel-section.active { display: flex; opacity: 1; }
+        
+        .panel-body { flex: 1; overflow-y: auto; padding: 15px; }
+        .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; border-radius: 0 0 0 20px; }
+        
+        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; line-height: 1.4; }
+        .msg-box.guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
+        .msg-box.guess-wrong { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
+        .btn-send { background: var(--primary); color: white; border: none; border-radius: 10px; padding: 0 20px; }
+
+        .screen { display: none; }
+        .screen.active { display: block; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 600px) {
+            .whiteboard-container { width: 100%; height: auto; }
+            .whiteboard-wrapper { padding: 10px; border-radius: 15px; max-width: 100%; }
+            .interaction-panel { width: 300px; right: -300px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-header">
+    <h1 class="app-title"><i class="fas fa-palette"></i> DoodleDash WS</h1>
+    <div class="d-flex align-items-center gap-3">
+        <div id="credit-badge" class="badge bg-light text-dark border border-warning shadow-sm d-flex align-items-center" style="font-size: 0.8rem; padding: 6px 12px; border-radius: 20px;">
+            <i class="fas fa-coins text-warning"></i> 
+            <span id="user-credits" class="fw-bold ms-1 me-2">0</span>
+        </div>
+    </div>
+</div>
+
+<div id="modal-alert" class="wb-overlay" style="display:none; position:fixed; z-index:10001; background: rgba(0,0,0,0.6);">
+    <div class="bg-white p-4 rounded-4 shadow-lg text-center" style="max-width: 350px;">
+        <h4 id="modal-alert-title" class="fw-bold text-dark mb-2">Notice</h4>
+        <p id="modal-alert-message" class="text-muted mb-4"></p>
+        <button class="btn btn-primary w-100 rounded-pill fw-bold" onclick="document.getElementById('modal-alert').style.display='none'">Got it!</button>
+    </div>
+</div>
+
+<!-- SCREENS -->
+<div id="screen-auth" class="screen active container mt-5 text-center">
+    <h3><i class="fas fa-circle-notch fa-spin text-primary"></i> Connecting to WebSockets...</h3>
+</div>
+
+<div id="screen-rooms" class="screen container">
+    <div class="hero-section d-flex justify-content-between align-items-center flex-wrap gap-4">
+        <div>
+            <h2 class="fw-bold mb-1"><i class="fas fa-gamepad me-2"></i>Game Lobbies</h2>
+            <p class="m-0 text-white-50 fs-6">Global Multiplayer Rooms (Fast WebSockets)</p>
+        </div>
+    </div>
+    <div class="row" id="room-list"></div>
+</div>
+
+<div id="screen-game" class="screen container-fluid">
+    <div class="whiteboard-wrapper">
+        <div class="whiteboard-header">
+            <button class="btn btn-light btn-sm fw-bold border px-2 py-1" onclick="leaveRoom()"><i class="fas fa-sign-out-alt text-danger"></i></button>
+            <div id="status-bar" class="m-0 fw-bold text-center flex-grow-1 px-2" style="color: var(--primary);">Loading...</div>
+            <div id="timer" class="m-0 text-danger fw-bold bg-danger bg-opacity-10 px-2 py-1 rounded-pill">--</div>
+        </div>
+
+        <div class="whiteboard-container">
+            <canvas id="whiteboard" width="400" height="400"></canvas>
+            
+            <div id="word-modal" class="wb-overlay" style="display:none;">
+                <h3 class="fw-bold mb-3 text-primary">Your turn to draw!</h3>
+                <input type="text" id="word-input" class="form-control mb-2 text-center" placeholder="e.g. Tree">
+                <button class="btn btn-primary w-100" onclick="submitWord()">Draw!</button>
+            </div>
+            
+            <div id="break-modal" class="wb-overlay" style="display:none;">
+                <h3 id="reveal-text" class="fw-bold mb-2"></h3>
+                <div id="congrats-ui" class="w-100 mb-2 px-2"></div>
+                <button id="btn-ready" class="btn btn-success rounded-pill px-4 py-2" onclick="setReady()">I'm Ready!</button>
+            </div>
+        </div>
+        
+        <div id="draw-controls" class="justify-content-center gap-3 mt-2" style="display: none;">
+            <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="triggerUndo()"><i class="fas fa-undo"></i> Undo</button>
+        </div>
+
+        <div id="game-hint-container" class="text-center fw-bold fs-4 my-2 text-primary"></div>
+        <div class="mt-2 d-flex flex-column w-100 gap-2" id="members-list"></div>
+    </div>
+    
+    <div class="interaction-panel" id="right-panel">
+        <div class="floating-toggle" onclick="togglePanel()"><i class="fas fa-chevron-left" id="panel-icon"></i></div>
+        <div class="panel-header">
+            <div class="panel-tab active" onclick="switchTab('chat')">Chat</div>
+            <div class="panel-tab" onclick="switchTab('guess')">Guess</div>
+        </div>
+        
+        <div class="panel-section active" id="tab-chat">
+            <div class="panel-body" id="chat-box"></div>
+            <div class="chat-input-wrapper">
+                <div class="input-group">
+                    <input type="text" id="chat-input" class="form-control bg-light" placeholder="Message..." onkeypress="if(event.key==='Enter') sendChat()">
+                    <button class="btn btn-send" onclick="sendChat()"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="panel-section" id="tab-guess">
+            <div class="panel-body" id="guess-box">
+                <div id="guesses-list"></div>
+            </div>
+            <div class="chat-input-wrapper" id="guess-input-wrapper">
+                <div class="input-group">
+                    <input type="text" id="guess-input" class="form-control bg-light" placeholder="Your guess..." onkeypress="if(event.key==='Enter') sendGuess()">
+                    <button class="btn btn-success" onclick="sendGuess()"><i class="fas fa-check"></i></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+    const tg = window.Telegram.WebApp;
+    tg.expand(); 
+    
+    const tg_id = tg.initDataUnsafe?.user?.id || Math.floor(Math.random() * 100000); // Fallback for browser testing
+    const photo_url = tg.initDataUnsafe?.user?.photo_url || '';
+    
+    let isDrawer = false;
+    let localStrokes = [];
+    const canvas = document.getElementById('whiteboard');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    let lastPos = {x:0, y:0};
+
+    function showAlert(msg) {
+        document.getElementById('modal-alert-message').innerText = msg;
+        document.getElementById('modal-alert').style.display = 'flex';
+    }
+
+    function showScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+
+    // =======================================
+    // SOCKET EVENTS
+    // =======================================
+
+    socket.on('connect', () => {
+        socket.emit('auth', { tg_id, photo_url });
+    });
+
+    socket.on('auth_success', () => {
+        showScreen('screen-rooms');
+        socket.emit('get_rooms');
+    });
+
+    socket.on('alert', (data) => showAlert(data.message));
+
+    socket.on('rooms_list', (data) => {
+        if(document.getElementById('screen-rooms').classList.contains('active')) {
+            document.getElementById('user-credits').innerText = data.user_data?.credits || 0;
+            const list = document.getElementById('room-list');
+            list.innerHTML = '';
+            data.rooms.forEach(r => {
+                const isFull = r.member_count >= 4;
+                list.innerHTML += `
+                    <div class="col-md-6 mb-4">
+                        <div class="room-card card h-100 p-4">
+                            <h5>Room ${r.id}</h5>
+                            <p>${r.member_count}/4 Players</p>
+                            <button class="btn btn-${isFull ? 'secondary' : 'primary'}" ${isFull?'disabled':''} onclick="socket.emit('join_room', ${r.id})">
+                                Join Room
+                            </button>
+                        </div>
+                    </div>`;
+            });
+        }
+    });
+
+    socket.on('join_success', (data) => {
+        showScreen('screen-game');
+    });
+
+    socket.on('draw_update', (linesJson) => {
+        try {
+            const lines = JSON.parse(linesJson);
+            ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4;
+            lines.forEach(l => {
+                ctx.beginPath();
+                ctx.moveTo(l.x0, l.y0);
+                ctx.lineTo(l.x1, l.y1);
+                ctx.stroke();
+            });
+        } catch(e){}
+    });
+
+    socket.on('sync', (data) => {
+        if(data.error) {
+            showAlert("Room closed.");
+            showScreen('screen-rooms');
+            socket.emit('get_rooms');
+            return;
+        }
+
+        const r = data.room;
+        isDrawer = String(r.current_drawer_id) === String(tg_id);
+        
+        // Timer update
+        if(r.round_end_time) {
+            let diff = Math.floor((new Date(r.round_end_time) - new Date()) / 1000);
+            document.getElementById('timer').innerText = diff > 0 ? diff + 's' : '0s';
+        }
+
+        // Draw phase logic
+        document.getElementById('word-modal').style.display = 'none';
+        document.getElementById('break-modal').style.display = 'none';
+        document.getElementById('draw-controls').style.display = isDrawer && r.status === 'DRAWING' ? 'flex' : 'none';
+        
+        if (r.status === 'PRE_DRAW' && isDrawer) {
+            document.getElementById('word-modal').style.display = 'flex';
+        } else if (r.status === 'REVEAL' || r.status === 'BREAK') {
+            document.getElementById('break-modal').style.display = 'flex';
+            document.getElementById('reveal-text').innerText = "Word: " + r.word_to_draw;
+            let readyMember = data.members.find(m => String(m.user_id) === String(tg_id));
+            if(readyMember && readyMember.is_ready) {
+                document.getElementById('btn-ready').innerText = "Waiting...";
+                document.getElementById('btn-ready').disabled = true;
+            } else {
+                document.getElementById('btn-ready').innerText = "I'm Ready!";
+                document.getElementById('btn-ready').disabled = false;
+            }
+        }
+
+        document.getElementById('status-bar').innerText = r.status;
+        document.getElementById('game-hint-container').innerHTML = r.hint ? `Hint: ${r.hint}` : '';
+
+        // Members Render
+        document.getElementById('members-list').innerHTML = data.members.map(m => `
+            <div class="p-2 border rounded mb-2 bg-white d-flex justify-content-between align-items-center">
+                <span><b>User ${m.user_id.substring(0,6)}</b> ${m.user_id==tg_id?'(You)':''} ${m.user_id==r.current_drawer_id?'🎨':''}</span>
+                <span>${m.is_ready ? '✅' : '⏳'}</span>
+            </div>
+        `).join('');
+
+        // Chat Render
+        document.getElementById('chat-box').innerHTML = data.chats.map(c => `
+            <div class="msg-box"><b>${c.user_id==='System'?'SYS':c.user_id.substring(0,6)}:</b> ${c.message}</div>
+        `).join('');
+
+        // Guess Render
+        document.getElementById('guesses-list').innerHTML = data.guesses.map(g => {
+            let blur = g.is_blurred ? 'filter: blur(3px);' : '';
+            return `<div class="msg-box"><b style="font-size:12px;">User ${g.real_user ? g.real_user.substring(0,6) : g.user_id.substring(0,6)}:</b> <span style="${blur}">${g.guess_text}</span></div>`;
+        }).join('');
+
+        // Full redraw if syncing full state (skip if just actively drawing)
+        if (!drawing) redrawCanvas(data.drawings);
+    });
+
+    // =======================================
+    // UI ACTIONS & DRAWING LOGIC
+    // =======================================
+    function leaveRoom() {
+        socket.emit('leave_room');
+        showScreen('screen-rooms');
+        socket.emit('get_rooms');
+    }
+
+    function setReady() { socket.emit('set_ready'); }
+    function submitWord() {
+        let w = document.getElementById('word-input').value;
+        if(w.length > 2) socket.emit('set_word', w);
+    }
+    function sendChat() {
+        let i = document.getElementById('chat-input');
+        socket.emit('chat', i.value);
+        i.value = '';
+    }
+    function sendGuess() {
+        let i = document.getElementById('guess-input');
+        socket.emit('guess', i.value);
+        i.value = '';
+    }
+    function triggerUndo() { socket.emit('undo_draw'); }
+
+    function switchTab(t) {
+        document.getElementById('tab-chat').classList.remove('active');
+        document.getElementById('tab-guess').classList.remove('active');
+        document.getElementById('tab-'+t).classList.add('active');
+    }
+    function togglePanel() { document.getElementById('right-panel').classList.toggle('open'); }
+
+    // Drawing Canvas Events
+    function getEventPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches ? e.touches[0] : e;
+        return {
+            x: (touch.clientX - rect.left) * (canvas.width / rect.width),
+            y: (touch.clientY - rect.top) * (canvas.height / rect.height)
+        };
+    }
+
+    canvas.addEventListener('mousedown', (e) => { if(!isDrawer) return; drawing = true; lastPos = getEventPos(e); });
+    canvas.addEventListener('touchstart', (e) => { if(!isDrawer) return; drawing = true; lastPos = getEventPos(e); }, {passive: false});
+
+    const moveHandler = (e) => {
+        if (!drawing || !isDrawer) return;
+        e.preventDefault();
+        const newPos = getEventPos(e);
+        
+        ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(newPos.x, newPos.y); ctx.stroke();
+        
+        localStrokes.push({ x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y });
+        lastPos = newPos;
+
+        if(localStrokes.length > 5) { // batch emit
+            socket.emit('draw', JSON.stringify(localStrokes));
+            localStrokes = [];
+        }
+    };
+
+    canvas.addEventListener('mousemove', moveHandler);
+    canvas.addEventListener('touchmove', moveHandler, {passive: false});
+
+    const stopDrawing = () => { 
+        drawing = false; 
+        if(localStrokes.length > 0) {
+            socket.emit('draw', JSON.stringify(localStrokes));
+            localStrokes = [];
+        }
+    };
+    canvas.addEventListener('mouseup', stopDrawing);
+    canvas.addEventListener('touchend', stopDrawing);
+
+    function redrawCanvas(drawingsData) {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4;
+        if(!drawingsData) return;
+        drawingsData.forEach(jsonStr => {
+            try {
+                JSON.parse(jsonStr).forEach(l => {
+                    ctx.beginPath(); ctx.moveTo(l.x0, l.y0); ctx.lineTo(l.x1, l.y1); ctx.stroke();
+                });
+            }catch(e){}
+        });
+    }
+
+    // Ping for rooms periodically if on lobby
+    setInterval(() => {
+        if(document.getElementById('screen-rooms').classList.contains('active')) socket.emit('get_rooms');
+    }, 5000);
+
+</script>
+</body>
+</html>
