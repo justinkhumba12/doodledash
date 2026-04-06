@@ -1,15 +1,14 @@
 {
-  "name": "doodledash-node",
+  "name": "doodledash-websocket",
   "version": "1.0.0",
-  "description": "DoodleDash WebSockets Edition",
+  "description": "DoodleDash Draw & Guess Game via WebSockets",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "mysql2": "^3.6.5",
-    "socket.io": "^4.7.4",
-    "node-fetch": "^2.7.0"
+    "socket.io": "^4.7.2",
+    "sqlite3": "^5.1.6"
   }
 }
