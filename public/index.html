@@ -29,9 +29,12 @@
         .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s; overflow: hidden; }
         .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); }
         
-        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; max-width: 430px; position: relative; }
-        .whiteboard-container { width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1/1; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; }
-        canvas { cursor: crosshair; width: 100%; height: 100%; display: block; }
+        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
+        
+        /* Fixed Square Whiteboard Constraints */
+        .whiteboard-container { width: 350px !important; height: 350px !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
+        canvas { cursor: crosshair; width: 350px; height: 350px; display: block; }
+        
         .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
         
         .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; }
@@ -60,10 +63,10 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
-        const tgId = tg.initDataUnsafe?.user?.id || urlParams.get('tg_id') || Math.floor(Math.random() * 100000).toString();
-        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
         
-        const socket = io();
+        // Strict Enforcement: Cannot use without valid Telegram ID from parameter
+        const tgId = urlParams.get('tg_id');
+        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
         const App = () => {
             const [user, setUser] = useState(null);
@@ -78,8 +81,23 @@
             const [localStream, setLocalStream] = useState(null);
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
+            const socketRef = useRef(null);
+
+            if (!tgId) {
+                return (
+                    <div className="container mt-5 text-center">
+                        <div className="alert alert-danger shadow-lg py-5 rounded-4">
+                            <h1><i className="fas fa-lock mb-3"></i></h1>
+                            <h3 className="fw-bold">Access Denied</h3>
+                            <p>You can only access DoodleDash directly through the official Telegram Bot.</p>
+                        </div>
+                    </div>
+                );
+            }
 
             useEffect(() => {
+                const socket = io();
+                socketRef.current = socket;
                 socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
 
                 socket.on('lobby_data', (data) => {
@@ -93,12 +111,17 @@
                 socket.on('trigger_sync', () => { if (currentRoomId) socket.emit('join_room', { room_id: currentRoomId }); });
 
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Reward Claimed!', content: msg }));
-                socket.on('reward_error', (msg) => setModal({ type: 'error', title: 'Claim Failed', content: msg }));
+                socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
                 socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
                 
+                socket.on('join_success', (roomId) => {
+                    setCurrentRoomId(roomId);
+                    setModal(null);
+                });
+
                 socket.on('room_created', ({ room_id }) => {
                     setModal(null);
-                    socket.emit('search_room', { room_id });
+                    socket.emit('search_room', { room_id }); // Prompts user to join it immediately
                 });
 
                 socket.on('search_result', (room) => {
@@ -114,7 +137,7 @@
                 socket.on('call_ended', () => cleanupCall());
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
 
-                return () => socket.off();
+                return () => socket.disconnect();
             }, [currentRoomId]);
 
             const requestMic = async () => {
@@ -135,7 +158,7 @@
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
                         const targetId = callObj.caller === tgId ? callObj.receiver : callObj.caller;
-                        socket.emit('webrtc_signal', { call_id: callObj.id, target_id: targetId, signal: { type: 'candidate', candidate: e.candidate } });
+                        socketRef.current.emit('webrtc_signal', { call_id: callObj.id, target_id: targetId, signal: { type: 'candidate', candidate: e.candidate } });
                     }
                 };
 
@@ -157,7 +180,7 @@
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
-                    socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                    socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                 } else if (signal.type === 'answer') {
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
                 } else if (signal.type === 'candidate') {
@@ -168,13 +191,13 @@
             const initiateCall = async (targetId) => {
                 const stream = await requestMic();
                 if (!stream) return;
-                socket.emit('initiate_call', { receiver_id: targetId });
+                socketRef.current.emit('initiate_call', { receiver_id: targetId });
             };
 
             const acceptCall = async () => {
                 const stream = await requestMic();
                 if (!stream || !activeCall) return;
-                socket.emit('accept_call', { call_id: activeCall.id });
+                socketRef.current.emit('accept_call', { call_id: activeCall.id });
                 initPeerConnection(stream, activeCall);
             };
 
@@ -185,7 +208,7 @@
                         const pc = initPeerConnection(stream, activeCall);
                         const offer = await pc.createOffer();
                         await pc.setLocalDescription(offer);
-                        socket.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
+                        socketRef.current.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
                     };
                     startCall();
                 } else if (activeCall?.status === 'ACTIVE' && activeCall.receiver === tgId && !peerConnectionRef.current) {
@@ -200,7 +223,7 @@
                 setActiveCall(null);
             };
 
-            if (!user) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
+            if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
 
             return (
                 <div>
@@ -213,14 +236,15 @@
                     </div>
 
                     {!currentRoomId ? (
-                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />
+                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
                     ) : roomData ? (
                         <div className="container-fluid">
                             <GameRoom 
                                 roomData={roomData} 
                                 tgId={tgId} 
-                                onLeave={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }} 
+                                onLeave={() => { socketRef.current.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }} 
                                 onCall={initiateCall}
+                                socket={socketRef.current}
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`}>
@@ -232,13 +256,13 @@
                                     <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
                                 </div>
                                 
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} tgId={tgId} />}
-                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={tgId} roomData={roomData} />}
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socketRef.current} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={tgId} roomData={roomData} socket={socketRef.current} />}
                             </div>
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socket} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} />
 
                     {/* Active Call UI Components */}
                     {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
@@ -248,7 +272,7 @@
                                 <h4>Incoming Call</h4>
                                 <p className="text-muted">From {activeCall.caller.substring(0,6)}</p>
                                 <div className="d-flex gap-2 mt-3">
-                                    <button className="btn btn-danger w-50" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
+                                    <button className="btn btn-danger w-50" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
                                     <button className="btn btn-success w-50" onClick={acceptCall}><i className="fas fa-phone"></i> Accept</button>
                                 </div>
                             </div>
@@ -258,7 +282,7 @@
                         <div className="position-fixed bottom-0 start-50 translate-middle-x mb-3 p-3 bg-dark text-white rounded-pill shadow-lg d-flex align-items-center gap-3" style={{ zIndex: 2000 }}>
                             <i className="fas fa-phone-volume heartbeat text-success"></i>
                             <span>Call Active with {activeCall.caller === tgId ? activeCall.receiver.substring(0,6) : activeCall.caller.substring(0,6)}</span>
-                            <button className="btn btn-sm btn-danger rounded-circle" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                            <button className="btn btn-sm btn-danger rounded-circle" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
                         </div>
                     )}
                 </div>
@@ -269,8 +293,9 @@
             if (!modal) return null;
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
+            const [maxMembers, setMaxMembers] = useState(4);
 
-            const close = () => { setModal(null); setPwd(''); setIsPriv(false); };
+            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); };
 
             let content = null;
             if (modal.type === 'success' || modal.type === 'error') {
@@ -287,10 +312,25 @@
                             <input className="form-check-input" type="checkbox" checked={isPriv} onChange={e => setIsPriv(e.target.checked)} id="privCheck" />
                             <label className="form-check-label" htmlFor="privCheck">Make Room Private</label>
                         </div>
-                        {isPriv && <input type="text" className="form-control mb-3" placeholder="Set a Password..." value={pwd} onChange={e => setPwd(e.target.value)} />}
+                        {isPriv && (
+                            <>
+                                <input type="text" className="form-control mb-3" placeholder="Set a Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Max Players</label>
+                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
+                                        <option value={2}>2 Players</option>
+                                        <option value={3}>3 Players</option>
+                                        <option value={4}>4 Players</option>
+                                    </select>
+                                </div>
+                                <div className="alert alert-warning py-2 small mb-3">
+                                    <i className="fas fa-coins text-warning me-1"></i> Cost: 4 Credits
+                                </div>
+                            </>
+                        )}
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd }); close(); }}>Create</button>
+                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers }); close(); }}>Create</button>
                         </div>
                     </>
                 );
@@ -301,7 +341,7 @@
                         <input type="password" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); close(); }}>Join Room</button>
+                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
                         </div>
                     </>
                 );
@@ -311,7 +351,7 @@
                         <p className="text-muted">{modal.content}</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); close(); }}>Confirm Join</button>
+                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm Join</button>
                         </div>
                     </>
                 );
@@ -421,35 +461,37 @@
                     </div>
 
                     <div className="row">
-                        {rooms.map(r => (
-                            <div key={r.id} className="col-md-4 mb-3">
-                                <div className="room-card card h-100 p-3">
-                                    <div className="d-flex justify-content-between align-items-center mb-2">
-                                        <h5 className="fw-bold m-0">Room {r.id}</h5>
-                                        <span className={`badge ${r.member_count >= 4 ? 'bg-danger' : 'bg-success'}`}>{r.member_count >= 4 ? 'Full' : 'Open'}</span>
+                        {rooms.map(r => {
+                            const isFull = r.member_count >= r.max_members;
+                            return (
+                                <div key={r.id} className="col-md-4 mb-3">
+                                    <div className="room-card card h-100 p-3">
+                                        <div className="d-flex justify-content-between align-items-center mb-2">
+                                            <h5 className="fw-bold m-0">Room {r.id}</h5>
+                                            <span className={`badge ${isFull ? 'bg-danger' : 'bg-success'}`}>{isFull ? 'Full' : 'Open'}</span>
+                                        </div>
+                                        <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members}</p>
+                                        <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={isFull} 
+                                            onClick={() => setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${r.id}? This costs 1 Credit.`, room_id: r.id })}>
+                                            Join (1 Credit)
+                                        </button>
                                     </div>
-                                    <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / 4</p>
-                                    <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={r.member_count >= 4} 
-                                        onClick={() => setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${r.id}? This costs 1 Credit.`, room_id: r.id })}>
-                                        Join (1 Credit)
-                                    </button>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onLeave, onCall }) => {
+        const GameRoom = ({ roomData, tgId, onLeave, onCall, socket }) => {
             const { room, members } = roomData;
-            const isDrawer = room.current_drawer_id === tgId;
 
             return (
                 <div className="row mt-3">
                     <div className="col-12 col-lg-8 mx-auto">
                         <div className="whiteboard-wrapper">
-                            <div className="d-flex justify-content-between mb-2">
+                            <div className="d-flex justify-content-between w-100 mb-2 px-1">
                                 <button className="btn btn-sm btn-outline-danger" onClick={onLeave}><i className="fas fa-sign-out-alt"></i> Leave</button>
                                 <strong className="text-primary">{room.status} Phase</strong>
                                 <span className="badge bg-danger">Room {room.id} {room.is_private ? '(Private)' : ''}</span>
@@ -458,8 +500,8 @@
                             <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
                             
                             {/* Member List */}
-                            <div className="mt-4">
-                                <h6>Players:</h6>
+                            <div className="mt-4 w-100">
+                                <h6>Players ({members.length}/{room.max_members}):</h6>
                                 {members.map(m => (
                                     <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                         <div>
@@ -536,6 +578,7 @@
                 const rect = canvasRef.current.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                // Since canvas is always 350x350 explicitly now, direct calculation works accurately
                 return {
                     x: (clientX - rect.left) * (canvasRef.current.width / rect.width),
                     y: (clientY - rect.top) * (canvasRef.current.height / rect.height)
@@ -576,7 +619,7 @@
             return (
                 <div className="whiteboard-container">
                     <canvas 
-                        ref={canvasRef} width="400" height="400"
+                        ref={canvasRef} width="350" height="350"
                         onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
                         onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
                     />
@@ -613,7 +656,7 @@
             );
         };
 
-        const ChatBox = ({ chats, tgId }) => {
+        const ChatBox = ({ chats, socket }) => {
             const [input, setInput] = useState('');
             return (
                 <div className="d-flex flex-column h-100">
@@ -633,7 +676,7 @@
             );
         };
 
-        const GuessBox = ({ guesses, tgId, roomData }) => {
+        const GuessBox = ({ guesses, tgId, roomData, socket }) => {
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const revealState = ['REVEAL', 'BREAK'].includes(roomData.room.status);
