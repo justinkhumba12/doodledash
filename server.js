@@ -1,457 +1,511 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const mysql = require('mysql2/promise');
-const crypto = require('crypto');
-const fetch = require('node-fetch');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// --- Environment Variables (Railway Strict) ---
-const PORT = process.env.PORT || 3000;
-const DB_HOST = process.env.DB_HOST || 'mysql.railway.internal';
-const DB_USER = process.env.DB_USER || 'root';
-const DB_PASSWORD = process.env.DB_PASSWORD || 'sPOjadCTXgnleiWulhlkRyyDQytFrHGH';
-const DB_NAME = process.env.DB_NAME || 'railway';
-const BOT_TOKEN = process.env.BOT_TOKEN || '8370801985:AAH42vuVLp_XnP3G3wE6PdytYHj39lXacFE';
-const WEB_APP_URL = process.env.WEB_APP_URL || 'https://doodledash-production-34a6.up.railway.app';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '9f7c2a6d4b8e1c3f0a5d9e7b2c4f6a1e';
-
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
-app.use(express.static('public'));
 
-let pool;
+// ==========================================
+// IN-MEMORY DATABASE (TABLES)
+// ==========================================
+const db = {
+    users: {}, // tg_id -> { tg_id, credits, last_daily_claim, ad_claims_today, last_ad_claim_time, last_ad_claim_date, ... }
+    rooms: {}, // room_id -> { id, status, current_drawer_id, word_to_draw, round_end_time, break_end_time, last_winner_id, next_drawer_id }
+    room_members: [], // [{ room_id, user_id, is_ready, consecutive_turns, total_turns }]
+    drawings: [], // [{ id, room_id, line_data }]
+    chat_messages: [], // [{ id, room_id, user_id, message, created_at }]
+    guesses: [], // [{ id, room_id, user_id, guess_text, created_at }]
+    calls: {}, // call_id -> { id, room_id, caller_id, receiver_id, status, started_at, last_billed_at }
+    webrtc_signals: [] // [{ call_id, sender_id, receiver_id, type, payload }]
+};
 
-// --- Auto Database Initialization & Tables ---
-async function initDB() {
-    pool = mysql.createPool({
-        host: DB_HOST, user: DB_USER, password: DB_PASSWORD, database: DB_NAME,
-        waitForConnections: true, connectionLimit: 10, queueLimit: 0,
-        timezone: '+00:00' // Global Timing
-    });
+let drawingIdCounter = 1;
+let chatMsgIdCounter = 1;
+let guessIdCounter = 1;
+let callIdCounter = 1;
 
-    try {
-        await pool.query(`CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY, tg_id VARCHAR(50) UNIQUE,
-            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            profile_pic VARCHAR(500), credits INT DEFAULT 0, last_daily_claim DATE, ad_claims_today INT DEFAULT 0,
-            last_ad_claim_time DATETIME, last_ad_claim_date DATE, ad2_claims_today INT DEFAULT 0,
-            last_ad2_claim_time DATETIME, last_ad2_claim_date DATE, last_notified_date DATE
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS rooms (
-            id INT AUTO_INCREMENT PRIMARY KEY, status ENUM('WAITING', 'PRE_DRAW', 'DRAWING', 'REVEAL', 'BREAK') DEFAULT 'WAITING',
-            current_drawer_id VARCHAR(50), word_to_draw VARCHAR(30), round_end_time DATETIME, break_end_time DATETIME,
-            last_winner_id VARCHAR(50), next_drawer_id VARCHAR(50), modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS room_members (
-            room_id INT, user_id VARCHAR(50), is_ready TINYINT(1) DEFAULT 0, joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            consecutive_turns INT DEFAULT 0, total_turns INT DEFAULT 0, join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (room_id, user_id)
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS chat_messages (
-            id INT AUTO_INCREMENT PRIMARY KEY, room_id INT, user_id VARCHAR(50), message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS drawings (
-            id INT AUTO_INCREMENT PRIMARY KEY, room_id INT, line_data LONGTEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS guesses (
-            id INT AUTO_INCREMENT PRIMARY KEY, room_id INT, user_id VARCHAR(50), guess_text VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS calls (
-            id INT AUTO_INCREMENT PRIMARY KEY, room_id INT, caller_id VARCHAR(255), receiver_id VARCHAR(255),
-            status ENUM('RINGING','ACTIVE','ENDED','DECLINED'), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, started_at TIMESTAMP NULL, last_billed_at TIMESTAMP NULL
-        )`);
-        await pool.query(`CREATE TABLE IF NOT EXISTS webrtc_signals (
-            id INT AUTO_INCREMENT PRIMARY KEY, call_id INT, sender_id VARCHAR(255), receiver_id VARCHAR(255),
-            type VARCHAR(50), payload TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
-        console.log("Database & Tables Verified Successfully.");
-    } catch (e) {
-        console.error("DB Init Error:", e);
-    }
+// Helper to format Date matching PHP logic
+function getNowStr() {
+    return new Date().toISOString().replace('T', ' ').substring(0, 19);
 }
 
-// --- Telegram Webhook Setup ---
-async function setupWebhook() {
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${WEB_APP_URL}/webhook&secret_token=${WEBHOOK_SECRET}`;
-    try {
-        const res = await fetch(url);
-        const data = await res.json();
-        console.log("Telegram Webhook Status:", data.description);
-    } catch (e) { console.error("Webhook Error:", e); }
+function getTodayStr() {
+    return new Date().toISOString().split('T')[0];
 }
 
-app.post('/webhook', async (req, res) => {
-    if (req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) return res.status(403).send('Forbidden');
-    const update = req.body;
+const gameWords = ["Apple", "Banana", "Car", "Dog", "House", "Sun", "Tree", "Computer", "Phone", "Pizza", "Ocean", "Mountain", "River", "Bird", "Cat", "Fish", "Elephant", "Tiger", "Lion", "Bear", "Guitar", "Rocket", "Robot", "Brain", "Castle"];
+
+// ==========================================
+// GAME ENGINE LOOP (Runs every 1s)
+// ==========================================
+setInterval(() => {
+    const now = new Date();
     
-    if (update.message && update.message.text === '/start') {
-        const tgId = update.message.from.id;
-        const chatId = update.message.chat.id;
-        try { await pool.query("INSERT IGNORE INTO users (tg_id) VALUES (?)", [tgId]); } catch (e) {}
-        
-        const payload = {
-            chat_id: chatId, text: "Welcome! Click below to join DoodleDash!",
-            reply_markup: { inline_keyboard: [[{ text: '🎮 Play Draw & Guess', web_app: { url: WEB_APP_URL } }]] }
-        };
-        fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-        }).catch(console.error);
-    }
-    res.sendStatus(200);
-});
+    Object.values(db.rooms).forEach(room => {
+        const roomId = room.id;
+        const members = db.room_members.filter(rm => rm.room_id === roomId);
+        const membersCount = members.length;
 
-// --- Security ---
-function verifyTelegramData(initData, botToken) {
-    if(!initData) return false;
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    params.delete('hash');
-    const sortedKeys = Array.from(params.keys()).sort();
-    const dataCheckString = sortedKeys.map(key => `${key}=${params.get(key)}`).join('\n');
-    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
-    const checkHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-    return checkHash === hash;
-}
-
-// --- Global Memory Game State & Event Scheduling ---
-const activeDrawings = {}; 
-const roomTimers = {};
-const callIntervals = {};
-
-function clearRoomTimer(roomId) {
-    if(roomTimers[roomId]) {
-        clearTimeout(roomTimers[roomId]);
-        delete roomTimers[roomId];
-    }
-}
-
-// Fast Global Broadcast Helper
-async function broadcastLobby() {
-    const [rooms] = await pool.query("SELECT r.id, r.status, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id");
-    io.to('lobby').emit('update_room_list', rooms);
-}
-
-// User Global Data Updater 
-async function pushUserData(tg_id) {
-    const [u] = await pool.query("SELECT * FROM users WHERE tg_id = ?", [tg_id]);
-    if(u.length) io.to(`user_${tg_id}`).emit('update_user', u[0]);
-}
-
-
-// Scheduled Event Processors
-async function handleRoundEnd(room_id) {
-    await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(NOW(), INTERVAL 5 SECOND), modified_at = NOW() WHERE id = ?", [room_id]);
-    clearRoomTimer(room_id);
-    roomTimers[room_id] = setTimeout(() => {
-        handleBreakStart(room_id);
-    }, 5000);
-    syncRoomState(room_id);
-}
-
-async function handleBreakStart(room_id) {
-    await pool.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(NOW(), INTERVAL 600 SECOND), modified_at = NOW() WHERE id = ?", [room_id]);
-    clearRoomTimer(room_id);
-    syncRoomState(room_id);
-}
-
-async function checkReadyState(room_id) {
-    const [members] = await pool.query("SELECT user_id, is_ready FROM room_members WHERE room_id = ?", [room_id]);
-    const [roomData] = await pool.query("SELECT status, next_drawer_id FROM rooms WHERE id = ?", [room_id]);
-    if(!roomData.length) return;
-    
-    const r = roomData[0];
-    if (members.length < 2) {
-        await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [room_id]);
-        clearRoomTimer(room_id);
-        syncRoomState(room_id);
-    } else if (['WAITING', 'BREAK', 'REVEAL'].includes(r.status) && members.every(m => m.is_ready)) {
-        const nextDrawer = r.next_drawer_id || members[Math.floor(Math.random() * members.length)].user_id;
-        await pool.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL, last_winner_id = NULL WHERE id = ?", [nextDrawer, room_id]);
-        await pool.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [room_id]);
-        activeDrawings[room_id] = [];
-        clearRoomTimer(room_id);
-        syncRoomState(room_id);
-    }
-}
-
-// --- Sync State Dispatcher ---
-async function syncRoomState(room_id = null) {
-    if (!room_id) return;
-    
-    const [room] = await pool.query("SELECT * FROM rooms WHERE id = ?", [room_id]);
-    if (!room.length) {
-        io.to(`room_${room_id}`).emit('room_closed');
-        return;
-    }
-
-    const [members] = await pool.query("SELECT m.user_id, m.is_ready, u.profile_pic FROM room_members m JOIN users u ON m.user_id = u.tg_id WHERE m.room_id = ?", [room_id]);
-    const [chats] = await pool.query("SELECT user_id, message, created_at FROM chat_messages WHERE room_id = ? ORDER BY id DESC LIMIT 20", [room_id]);
-    const [guesses] = await pool.query("SELECT user_id, guess_text, created_at FROM guesses WHERE room_id = ? ORDER BY created_at ASC", [room_id]);
-    const [calls] = await pool.query("SELECT id, caller_id, receiver_id, status FROM calls WHERE room_id = ? AND status IN ('RINGING', 'ACTIVE')", [room_id]);
-
-    let remaining_time_ms = 0;
-    const now = new Date().getTime();
-    if (room[0].status === 'DRAWING' && room[0].round_end_time) {
-        remaining_time_ms = new Date(room[0].round_end_time).getTime() - now;
-    } else if (room[0].status === 'REVEAL' && room[0].break_end_time) {
-        remaining_time_ms = new Date(room[0].break_end_time).getTime() - now;
-    } else if (room[0].status === 'BREAK' && room[0].break_end_time) {
-        remaining_time_ms = new Date(room[0].break_end_time).getTime() - now;
-    }
-
-    const state = {
-        room: room[0],
-        members,
-        chats: chats.reverse(),
-        guesses,
-        calls,
-        remaining_time_ms: Math.max(0, remaining_time_ms),
-        drawings: activeDrawings[room_id] || []
-    };
-    io.to(`room_${room_id}`).emit('sync_state', state);
-}
-
-
-// --- Socket Events ---
-io.use((socket, next) => {
-    const { tg_data, tg_id } = socket.handshake.auth;
-    if (verifyTelegramData(tg_data, BOT_TOKEN) || process.env.NODE_ENV !== 'production') {
-        socket.tg_id = String(tg_id);
-        socket.join(`user_${socket.tg_id}`); 
-        next();
-    } else {
-        next(new Error("Unauthorized"));
-    }
-});
-
-io.on('connection', (socket) => {
-    const tg_id = socket.tg_id;
-    pool.query("UPDATE users SET last_active = NOW() WHERE tg_id = ?", [tg_id]);
-
-    const syncUserAndRooms = async () => {
-        const [users] = await pool.query("SELECT * FROM users WHERE tg_id = ?", [tg_id]);
-        const [rooms] = await pool.query("SELECT r.id, r.status, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id");
-        const [myRoom] = await pool.query("SELECT room_id FROM room_members WHERE user_id = ?", [tg_id]);
-        
-        socket.emit('rooms_data', { user_data: users[0], rooms, current_room: myRoom.length ? myRoom[0].room_id : null });
-        
-        if (myRoom.length) {
-            syncRoomState(myRoom[0].room_id);
-        } else {
-            socket.join('lobby'); 
-        }
-    };
-    syncUserAndRooms();
-
-    async function joinRoom(room_id) {
-        const [oldRoom] = await pool.query("SELECT room_id FROM room_members WHERE user_id = ?", [tg_id]);
-        if (oldRoom.length) {
-            const old_id = oldRoom[0].room_id;
-            await pool.query("DELETE FROM room_members WHERE user_id = ?", [tg_id]);
-            socket.leave(`room_${old_id}`);
-            await checkReadyState(old_id);
-            syncRoomState(old_id);
+        // 1. Handle Not Enough Players
+        if (membersCount < 2 && room.status !== 'WAITING') {
+            room.status = 'WAITING';
+            room.current_drawer_id = null;
+            room.word_to_draw = null;
+            db.room_members.forEach(rm => { if(rm.room_id === roomId) rm.is_ready = 0; });
+            broadcastSync(roomId);
+            return;
         }
 
-        await pool.query("INSERT INTO room_members (room_id, user_id) VALUES (?, ?)", [room_id, tg_id]);
-        socket.join(`room_${room_id}`);
-        socket.leave('lobby');
-        
-        if(!activeDrawings[room_id]) activeDrawings[room_id] = [];
-        await checkReadyState(room_id);
-        syncRoomState(room_id);
-        broadcastLobby();
-    }
-
-    socket.on('create_room', async () => {
-        const [users] = await pool.query("SELECT credits FROM users WHERE tg_id = ?", [tg_id]);
-        if (users[0].credits < 1) return socket.emit('alert', { msg: "Not enough credits.", type: "error" });
-        
-        await pool.query("UPDATE users SET credits = credits - 1 WHERE tg_id = ?", [tg_id]);
-        pushUserData(tg_id); // Instant credit sync update
-        
-        const [res] = await pool.query("INSERT INTO rooms (status, modified_at) VALUES ('WAITING', NOW())");
-        joinRoom(res.insertId);
-    });
-
-    socket.on('join_room', async ({ room_id }) => joinRoom(room_id));
-    
-    // NEW FEATURE: Random Join
-    socket.on('join_random_room', async () => {
-        const [rooms] = await pool.query(`
-            SELECT r.id, COUNT(rm.user_id) as member_count 
-            FROM rooms r 
-            LEFT JOIN room_members rm ON r.id = rm.room_id 
-            WHERE r.status = 'WAITING' 
-            GROUP BY r.id 
-            HAVING member_count < 4 
-            ORDER BY RAND() LIMIT 1
-        `);
-        
-        if (rooms.length > 0) {
-            joinRoom(rooms[0].id);
-        } else {
-            socket.emit('alert', { msg: "No open waiting rooms available. Please create one!", type: "info" });
-        }
-    });
-
-    socket.on('leave_room', async () => {
-        const [room] = await pool.query("SELECT room_id FROM room_members WHERE user_id = ?", [tg_id]);
-        if (room.length) {
-            const room_id = room[0].room_id;
-            await pool.query("DELETE FROM room_members WHERE user_id = ?", [tg_id]);
-            socket.leave(`room_${room_id}`);
-            socket.join('lobby');
-            await checkReadyState(room_id);
-            syncRoomState(room_id);
-            broadcastLobby();
-        }
-    });
-
-    // NEW FEATURE: Watch Ad Logic for claiming credits
-    socket.on('watch_ad', async () => {
-        // Here you verify ad rewards logic (usually triggers ad API callback)
-        await pool.query("UPDATE users SET credits = credits + 1, ad_claims_today = ad_claims_today + 1, last_ad_claim_time = NOW() WHERE tg_id = ?", [tg_id]);
-        pushUserData(tg_id);
-        socket.emit('alert', { msg: "Ad watched successfully! +1 Credit added.", type: "success" });
-    });
-
-    socket.on('disconnect', async () => {
-        const [room] = await pool.query("SELECT room_id FROM room_members WHERE user_id = ?", [tg_id]);
-        if (room.length) {
-            const room_id = room[0].room_id;
-            await pool.query("DELETE FROM room_members WHERE user_id = ?", [tg_id]);
-            await checkReadyState(room_id);
-            syncRoomState(room_id);
-            broadcastLobby();
-        }
-
-        const [activeCalls] = await pool.query("SELECT id, room_id FROM calls WHERE (caller_id = ? OR receiver_id = ?) AND status IN ('RINGING', 'ACTIVE')", [tg_id, tg_id]);
-        for(let call of activeCalls) {
-            await pool.query("UPDATE calls SET status = 'ENDED' WHERE id = ?", [call.id]);
-            if(callIntervals[call.id]) {
-                clearInterval(callIntervals[call.id]);
-                delete callIntervals[call.id];
+        // 2. WAITING -> PRE_DRAW (If all ready)
+        if (room.status === 'WAITING' && membersCount >= 2) {
+            const allReady = members.every(m => m.is_ready === 1);
+            if (allReady) {
+                const nextDrawer = members.sort((a,b) => a.total_turns - b.total_turns || Math.random() - 0.5)[0].user_id;
+                db.room_members.forEach(rm => { 
+                    if(rm.room_id === roomId) {
+                        rm.is_ready = 0;
+                        if(rm.user_id === nextDrawer) {
+                            rm.consecutive_turns = 1;
+                            rm.total_turns += 1;
+                        }
+                    }
+                });
+                room.status = 'PRE_DRAW';
+                room.current_drawer_id = nextDrawer;
+                room.word_to_draw = null;
+                db.guesses = db.guesses.filter(g => g.room_id !== roomId);
+                broadcastSync(roomId);
             }
-            syncRoomState(call.room_id);
         }
-    });
 
-    socket.on('chat', async ({ room_id, message }) => {
-        if (!message || message.length > 200) return;
-        await pool.query("INSERT INTO chat_messages (room_id, user_id, message) VALUES (?, ?, ?)", [room_id, tg_id, message]);
-        syncRoomState(room_id);
-    });
-
-    socket.on('guess', async ({ room_id, guess }) => {
-        const [roomData] = await pool.query("SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?", [room_id]);
-        if(!roomData.length || roomData[0].status !== 'DRAWING') return;
-        
-        const [counts] = await pool.query("SELECT COUNT(*) as c FROM guesses WHERE room_id = ? AND user_id = ?", [room_id, tg_id]);
-        if (counts[0].c >= 5) {
-            const [u] = await pool.query("SELECT credits FROM users WHERE tg_id = ?", [tg_id]);
-            if (u[0].credits < 1) return socket.emit('alert', { msg: "Max free guesses. Cost: 1 Credit.", type: "error" });
-            await pool.query("UPDATE users SET credits = credits - 1 WHERE tg_id = ?", [tg_id]);
-            pushUserData(tg_id);
+        // 3. DRAWING Timer Ends
+        if (room.status === 'DRAWING') {
+            const end = new Date(room.round_end_time);
+            if (now >= end) {
+                endRound(roomId, room);
+                broadcastSync(roomId);
+            }
         }
-        await pool.query("INSERT INTO guesses (room_id, user_id, guess_text) VALUES (?, ?, ?)", [room_id, tg_id, guess]);
 
-        if (guess.toLowerCase() === (roomData[0].word_to_draw || '').toLowerCase()) {
-            await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(NOW(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [tg_id, room_id]);
-            clearRoomTimer(room_id);
-            roomTimers[room_id] = setTimeout(() => {
-                handleBreakStart(room_id);
-            }, 5000);
+        // 4. REVEAL Timer Ends
+        if (room.status === 'REVEAL') {
+            const end = new Date(room.break_end_time);
+            if (now >= end) {
+                room.status = 'BREAK';
+                const nextBreak = new Date(now.getTime() + 600000); // 10 mins Break wait
+                room.break_end_time = nextBreak.toISOString().replace('T', ' ').substring(0, 19);
+                broadcastSync(roomId);
+            }
         }
-        syncRoomState(room_id);
-    });
 
-    socket.on('draw', ({ room_id, lines }) => {
-        const parsed = JSON.parse(lines);
-        if(!activeDrawings[room_id]) activeDrawings[room_id] = [];
-        activeDrawings[room_id].push(parsed);
-        socket.to(`room_${room_id}`).emit('draw_update', parsed);
-    });
-    
-    socket.on('undo_draw', ({ room_id }) => {
-        if(activeDrawings[room_id] && activeDrawings[room_id].length > 0) {
-            activeDrawings[room_id].pop();
-            io.to(`room_${room_id}`).emit('clear_canvas');
-            io.to(`room_${room_id}`).emit('full_draw_state', activeDrawings[room_id]);
+        // 5. BREAK/REVEAL -> PRE_DRAW (If all ready)
+        if ((room.status === 'BREAK' || room.status === 'REVEAL') && membersCount >= 2) {
+            const allReady = members.every(m => m.is_ready === 1);
+            if (allReady) {
+                const nextDrawer = room.next_drawer_id || room.current_drawer_id;
+                db.room_members.forEach(rm => { 
+                    if(rm.room_id === roomId) {
+                        rm.is_ready = 0;
+                        if(rm.user_id === nextDrawer) rm.total_turns += 1;
+                    }
+                });
+                room.status = 'PRE_DRAW';
+                room.current_drawer_id = nextDrawer;
+                room.word_to_draw = null;
+                room.last_winner_id = null;
+                room.next_drawer_id = null;
+                db.guesses = db.guesses.filter(g => g.room_id !== roomId);
+                broadcastSync(roomId);
+            }
         }
-    });
 
-    socket.on('set_word', async ({ room_id, word }) => {
-        await pool.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(NOW(), INTERVAL 125 SECOND), modified_at = NOW() WHERE id = ? AND current_drawer_id = ?", [word, room_id, tg_id]);
-        activeDrawings[room_id] = []; 
-        await pool.query("DELETE FROM guesses WHERE room_id = ?", [room_id]);
-        
-        clearRoomTimer(room_id);
-        roomTimers[room_id] = setTimeout(() => {
-            handleRoundEnd(room_id);
-        }, 125000);
-        syncRoomState(room_id);
-    });
-
-    socket.on('set_ready', async ({ room_id }) => {
-        await pool.query("UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?", [room_id, tg_id]);
-        await checkReadyState(room_id);
-        syncRoomState(room_id);
-    });
-
-    socket.on('initiate_call', async ({ room_id, receiver_id }) => {
-        const [users] = await pool.query("SELECT credits FROM users WHERE tg_id = ?", [tg_id]);
-        if (users[0].credits < 1) return socket.emit('alert', { msg: "Need 1 credit.", type: "error" });
-        await pool.query("INSERT INTO calls (room_id, caller_id, receiver_id, status) VALUES (?, ?, ?, 'RINGING')", [room_id, tg_id, receiver_id]);
-        syncRoomState(room_id);
-    });
-
-    socket.on('accept_call', async ({ call_id }) => {
-        await pool.query("UPDATE calls SET status = 'ACTIVE', started_at = NOW(), last_billed_at = NOW() WHERE id = ?", [call_id]);
-        
-        if (callIntervals[call_id]) clearInterval(callIntervals[call_id]);
-        
-        callIntervals[call_id] = setInterval(async () => {
-            const [callData] = await pool.query("SELECT caller_id, room_id FROM calls WHERE id = ?", [call_id]);
-            if (!callData.length) return clearInterval(callIntervals[call_id]);
-            const { caller_id, room_id } = callData[0];
+        // 6. CALL DAEMON: End active calls if over 2 mins and credits < 1
+        Object.values(db.calls).filter(c => c.room_id === roomId && c.status === 'ACTIVE').forEach(call => {
+            const caller = db.users[call.caller_id];
+            const timeSinceBilled = (now.getTime() - new Date(call.last_billed_at).getTime()) / 1000;
             
-            const [users] = await pool.query("SELECT credits FROM users WHERE tg_id = ?", [caller_id]);
-            if (users[0].credits < 1) {
-                await pool.query("UPDATE calls SET status = 'ENDED' WHERE id = ?", [call_id]);
-                clearInterval(callIntervals[call_id]);
-                delete callIntervals[call_id];
-                syncRoomState(room_id);
-            } else {
-                await pool.query("UPDATE users SET credits = credits - 1 WHERE tg_id = ?", [caller_id]);
-                await pool.query("UPDATE calls SET last_billed_at = NOW() WHERE id = ?", [call_id]);
-                pushUserData(caller_id);
+            if (timeSinceBilled >= 120) {
+                if (caller.credits < 1) {
+                    call.status = 'ENDED';
+                } else {
+                    caller.credits -= 1;
+                    call.last_billed_at = getNowStr();
+                }
+                broadcastSync(roomId); // Trigger update to show dropped call or credit change
             }
-        }, 120000);
-        
-        const [callInfo] = await pool.query("SELECT room_id FROM calls WHERE id = ?", [call_id]);
-        if(callInfo.length) syncRoomState(callInfo[0].room_id);
+        });
     });
+}, 1000);
 
-    socket.on('end_call', async ({ call_id }) => {
-        await pool.query("UPDATE calls SET status = 'ENDED' WHERE id = ?", [call_id]);
-        if (callIntervals[call_id]) {
-            clearInterval(callIntervals[call_id]);
-            delete callIntervals[call_id];
+function endRound(roomId, room, forceNextDrawer = null) {
+    const correctGuess = db.guesses.find(g => g.room_id === roomId && g.guess_text.toLowerCase() === room.word_to_draw.toLowerCase());
+    const winner = correctGuess ? correctGuess.user_id : null;
+    
+    let nextDrawer = forceNextDrawer;
+    if (!nextDrawer) {
+        if (winner) nextDrawer = winner;
+        else {
+            const members = db.room_members.filter(rm => rm.room_id === roomId);
+            nextDrawer = members.sort((a,b) => a.total_turns - b.total_turns || Math.random() - 0.5)[0]?.user_id;
         }
-        const [callInfo] = await pool.query("SELECT room_id FROM calls WHERE id = ?", [call_id]);
-        if(callInfo.length) syncRoomState(callInfo[0].room_id);
+    }
+
+    let drawerMember = db.room_members.find(rm => rm.room_id === roomId && rm.user_id === room.current_drawer_id);
+    let consecutive = drawerMember ? drawerMember.consecutive_turns : 0;
+    
+    if (nextDrawer === room.current_drawer_id) consecutive++;
+    else consecutive = 1;
+
+    let sysMsg = null;
+    if (consecutive > 3) {
+        const members = db.room_members.filter(rm => rm.room_id === roomId);
+        nextDrawer = members.sort((a,b) => a.total_turns - b.total_turns || Math.random() - 0.5)[0]?.user_id;
+        consecutive = 1;
+        sysMsg = `✏️ Player ${room.current_drawer_id} reached max 3 consecutive turns! Changing drawer.`;
+    }
+
+    db.room_members.forEach(rm => {
+        if(rm.room_id === roomId) {
+            rm.is_ready = 0;
+            if(rm.user_id === nextDrawer) rm.consecutive_turns = consecutive;
+        }
     });
 
-    socket.on('webrtc_signal', ({ call_id, receiver_id, type, payload }) => {
-        io.to(`user_${receiver_id}`).emit('webrtc_signal', { sender_id: tg_id, type, payload });
+    if (sysMsg) {
+        db.chat_messages.push({ id: chatMsgIdCounter++, room_id: roomId, user_id: 'System', message: sysMsg, created_at: getNowStr() });
+    }
+
+    room.status = 'REVEAL';
+    room.last_winner_id = winner;
+    room.next_drawer_id = nextDrawer;
+    
+    const breakEnd = new Date(new Date().getTime() + 5000); // 5 sec reveal
+    room.break_end_time = breakEnd.toISOString().replace('T', ' ').substring(0, 19);
+}
+
+// ==========================================
+// SOCKET.IO HANDLERS
+// ==========================================
+io.on('connection', (socket) => {
+    
+    socket.on('auth', (data) => {
+        let tg_id = data.tg_id;
+        if (!db.users[tg_id]) {
+            // Auto register mock user
+            db.users[tg_id] = {
+                tg_id: tg_id, credits: 10, last_daily_claim: '', ad_claims_today: 0, 
+                last_ad_claim_time: null, last_ad_claim_date: '', ad2_claims_today: 0,
+                last_ad2_claim_time: null, last_ad2_claim_date: ''
+            };
+        }
+        socket.tg_id = tg_id;
+        socket.emit('auth_success', db.users[tg_id]);
+        sendGlobalData(socket);
+    });
+
+    socket.on('disconnect', () => {
+        if (socket.tg_id && socket.currentRoom) {
+            // Disconnect logic handled by explicit leave or AFK on client side for now.
+        }
+    });
+
+    socket.on('get_rooms', () => sendGlobalData(socket));
+
+    // Economy
+    socket.on('claim_daily', () => {
+        const user = db.users[socket.tg_id];
+        const today = getTodayStr();
+        if (user.last_daily_claim === today) return socket.emit('alert', { type: 'error', message: 'Already claimed today!' });
+        user.credits += 1;
+        user.last_daily_claim = today;
+        socket.emit('alert', { type: 'success', message: 'Claimed 1 Daily Credit!' });
+        sendGlobalData(socket);
+    });
+
+    socket.on('claim_ad', (data) => {
+        const type = data.type; // 'ad1' or 'ad2'
+        const user = db.users[socket.tg_id];
+        const today = getTodayStr();
+        const now = getNowStr();
+        
+        const claimDateKey = type === 'ad2' ? 'last_ad2_claim_date' : 'last_ad_claim_date';
+        const claimTimeKey = type === 'ad2' ? 'last_ad2_claim_time' : 'last_ad_claim_time';
+        const claimsTodayKey = type === 'ad2' ? 'ad2_claims_today' : 'ad_claims_today';
+
+        if (user[claimDateKey] !== today) user[claimsTodayKey] = 0;
+        
+        if (user[claimsTodayKey] >= 2) return socket.emit('alert', { type: 'error', message: 'Limit reached (Max 2/day)!' });
+        
+        if (user[claimsTodayKey] > 0 && user[claimTimeKey]) {
+            const hoursSince = (new Date(now) - new Date(user[claimTimeKey])) / 3600000;
+            if (hoursSince < 3) return socket.emit('alert', { type: 'error', message: 'Cooldown active! Wait 3 hours.' });
+        }
+
+        user.credits += 2;
+        user[claimsTodayKey] += 1;
+        user[claimDateKey] = today;
+        user[claimTimeKey] = now;
+        socket.emit('alert', { type: 'success', message: 'Claimed 2 Ad Credits!' });
+        sendGlobalData(socket);
+    });
+
+    // Room Actions
+    socket.on('create_room', () => {
+        const user = db.users[socket.tg_id];
+        if (Object.keys(db.rooms).length >= 10) return socket.emit('alert', { type: 'error', message: 'Max 10 rooms limit reached.' });
+        if (user.credits < 1) return socket.emit('alert', { type: 'error', message: 'Creating a room costs 1 credit.' });
+        
+        user.credits -= 1;
+        const newRoomId = Date.now();
+        db.rooms[newRoomId] = { id: newRoomId, status: 'WAITING', current_drawer_id: null };
+        socket.emit('room_created', { room_id: newRoomId });
+        sendGlobalData(io); // Update all
+    });
+
+    socket.on('join_room', (data) => {
+        const roomId = parseInt(data.room_id);
+        const tg_id = socket.tg_id;
+        if (!db.rooms[roomId]) return socket.emit('alert', { type: 'error', message: 'Room not found.' });
+
+        const currentMembers = db.room_members.filter(rm => rm.room_id === roomId);
+        const inRoom = currentMembers.find(rm => rm.user_id === tg_id);
+        
+        if (currentMembers.length >= 4 && !inRoom) return socket.emit('alert', { type: 'error', message: 'Room is full.' });
+
+        // Remove from other rooms first
+        db.room_members = db.room_members.filter(rm => rm.user_id !== tg_id);
+        
+        db.room_members.push({ room_id: roomId, user_id: tg_id, is_ready: 0, consecutive_turns: 0, total_turns: 0 });
+        socket.join(roomId.toString());
+        socket.currentRoom = roomId;
+        
+        socket.emit('join_success', { room_id: roomId });
+        broadcastSync(roomId);
+        sendGlobalData(io);
+    });
+
+    socket.on('leave_room', () => {
+        if (!socket.currentRoom) return;
+        const roomId = socket.currentRoom;
+        
+        db.room_members = db.room_members.filter(rm => rm.user_id !== socket.tg_id);
+        
+        // End calls
+        Object.values(db.calls).forEach(c => {
+            if (c.room_id === roomId && (c.caller_id === socket.tg_id || c.receiver_id === socket.tg_id)) {
+                c.status = 'ENDED';
+            }
+        });
+
+        // Handle drawer leaving
+        const room = db.rooms[roomId];
+        if (room && room.current_drawer_id === socket.tg_id && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
+            room.status = 'WAITING';
+            room.current_drawer_id = null;
+            db.room_members.forEach(rm => { if(rm.room_id === roomId) rm.is_ready = 0; });
+            db.chat_messages.push({ id: chatMsgIdCounter++, room_id: roomId, user_id: 'System', message: '⚠️ The drawer left the game! Resetting round.', created_at: getNowStr() });
+            db.guesses = db.guesses.filter(g => g.room_id !== roomId);
+        }
+
+        socket.leave(roomId.toString());
+        socket.currentRoom = null;
+        broadcastSync(roomId);
+        sendGlobalData(io);
+    });
+
+    socket.on('set_ready', (data) => {
+        const rm = db.room_members.find(rm => rm.room_id === data.room_id && rm.user_id === socket.tg_id);
+        if (rm) rm.is_ready = 1;
+        broadcastSync(data.room_id);
+    });
+
+    socket.on('set_word', (data) => {
+        const room = db.rooms[data.room_id];
+        if (!room || room.current_drawer_id !== socket.tg_id) return;
+        room.word_to_draw = data.word;
+        room.status = 'DRAWING';
+        
+        const end = new Date(new Date().getTime() + 125000); // 120s + 5s prep
+        room.round_end_time = end.toISOString().replace('T', ' ').substring(0, 19);
+        
+        db.drawings = db.drawings.filter(d => d.room_id !== room.id);
+        db.guesses = db.guesses.filter(g => g.room_id !== room.id);
+        broadcastSync(room.id);
+    });
+
+    socket.on('draw', (data) => {
+        const room = db.rooms[data.room_id];
+        if (!room || room.current_drawer_id !== socket.tg_id) return;
+        db.drawings.push({ id: drawingIdCounter++, room_id: room.id, line_data: data.lines });
+        
+        // Fast broadcast to room for instant drawing
+        socket.to(data.room_id.toString()).emit('draw_update', { lines: data.lines });
+    });
+
+    socket.on('undo_draw', (data) => {
+        const room = db.rooms[data.room_id];
+        if (!room || room.current_drawer_id !== socket.tg_id) return;
+        
+        const roomDrawings = db.drawings.filter(d => d.room_id === room.id);
+        if (roomDrawings.length > 0) {
+            const last = roomDrawings[roomDrawings.length - 1];
+            db.drawings = db.drawings.filter(d => d.id !== last.id);
+            socket.emit('undo_success', { line_data: last.line_data });
+            broadcastSync(room.id);
+        }
+    });
+
+    socket.on('chat', (data) => {
+        db.chat_messages.push({ id: chatMsgIdCounter++, room_id: data.room_id, user_id: socket.tg_id, message: data.message, created_at: getNowStr() });
+        broadcastSync(data.room_id);
+    });
+
+    socket.on('guess', (data) => {
+        const room = db.rooms[data.room_id];
+        if (!room) return;
+
+        const myGuesses = db.guesses.filter(g => g.room_id === data.room_id && g.user_id === socket.tg_id);
+        if (myGuesses.length >= 5) {
+            const user = db.users[socket.tg_id];
+            if (user.credits < 1) return socket.emit('alert', { type: 'error', message: 'Need 1 credit for extra guesses.' });
+            user.credits -= 1;
+        }
+
+        db.guesses.push({ id: guessIdCounter++, room_id: data.room_id, user_id: socket.tg_id, guess_text: data.guess, created_at: getNowStr() });
+        
+        if (data.guess.toLowerCase() === (room.word_to_draw || '').toLowerCase()) {
+            endRound(data.room_id, room);
+        }
+        broadcastSync(data.room_id);
+    });
+
+    // Calls / WebRTC Signaling
+    socket.on('initiate_call', (data) => {
+        const user = db.users[socket.tg_id];
+        if (user.credits < 1) return socket.emit('alert', { type: 'error', message: 'Need 1 credit.'});
+        
+        const existing = Object.values(db.calls).find(c => c.status !== 'ENDED' && (c.caller_id === data.receiver_id || c.receiver_id === data.receiver_id));
+        if (existing) return socket.emit('alert', { type: 'error', message: 'User is busy.' });
+
+        const cid = callIdCounter++;
+        db.calls[cid] = { id: cid, room_id: data.room_id, caller_id: socket.tg_id, receiver_id: data.receiver_id, status: 'RINGING' };
+        broadcastSync(data.room_id);
+    });
+
+    socket.on('accept_call', (data) => {
+        const call = db.calls[data.call_id];
+        if (call && call.status === 'RINGING' && call.receiver_id === socket.tg_id) {
+            const caller = db.users[call.caller_id];
+            if (caller.credits < 1) {
+                call.status = 'DECLINED';
+                return socket.emit('alert', { type: 'error', message: 'Caller out of credits.' });
+            }
+            call.status = 'ACTIVE';
+            call.started_at = getNowStr();
+            call.last_billed_at = getNowStr();
+            broadcastSync(call.room_id);
+        }
+    });
+
+    socket.on('end_call', (data) => {
+        const call = db.calls[data.call_id];
+        if (call && (call.caller_id === socket.tg_id || call.receiver_id === socket.tg_id)) {
+            call.status = data.action === 'decline' ? 'DECLINED' : 'ENDED';
+            db.webrtc_signals = db.webrtc_signals.filter(s => s.call_id !== data.call_id);
+            broadcastSync(call.room_id);
+        }
+    });
+
+    socket.on('webrtc_signal', (data) => {
+        db.webrtc_signals.push({ call_id: data.call_id, sender_id: socket.tg_id, receiver_id: data.receiver_id, type: data.type, payload: data.payload });
+        broadcastSync(db.calls[data.call_id]?.room_id);
     });
 });
 
-server.listen(PORT, async () => {
-    console.log(`Server globally running on port ${PORT}`);
-    await initDB();
-    setupWebhook();
-});
+function sendGlobalData(target) {
+    const roomsFormatted = Object.values(db.rooms).map(r => ({
+        id: r.id, status: r.status, member_count: db.room_members.filter(rm => rm.room_id === r.id).length
+    }));
+    
+    // For specific socket
+    if (target.emit) {
+        const userData = db.users[target.tg_id];
+        const currentRoomId = db.room_members.find(rm => rm.user_id === target.tg_id)?.room_id;
+        target.emit('global_update', {
+            rooms: roomsFormatted,
+            user_data: userData,
+            current_room: currentRoomId,
+            server_date: getTodayStr(),
+            server_time: getNowStr()
+        });
+    } else {
+        // Broadcast to all
+        target.emit('rooms_update', { rooms: roomsFormatted });
+    }
+}
+
+function broadcastSync(roomId) {
+    if (!roomId) return;
+    const room = db.rooms[roomId];
+    if (!room) return;
+
+    const members = db.room_members.filter(rm => rm.room_id === roomId);
+    const chats = db.chat_messages.filter(c => c.room_id === roomId).slice(-20);
+    const roomDrawings = db.drawings.filter(d => d.room_id === roomId).map(d => d.line_data);
+    const calls = Object.values(db.calls).filter(c => c.room_id === roomId && c.status !== 'ENDED' && c.status !== 'DECLINED');
+    const signals = db.webrtc_signals.filter(s => calls.find(c => c.id === s.call_id));
+
+    // Dynamic hint generation logic matching PHP
+    if (room.word_to_draw) {
+        if (['REVEAL', 'BREAK'].includes(room.status)) {
+            room.hint = room.word_to_draw;
+        } else {
+            const word = room.word_to_draw;
+            let len = word.length;
+            let revealCount = 1;
+            if (len >= 10) revealCount = 4;
+            else if (len >= 7) revealCount = 3;
+            else if (len >= 4) revealCount = 2;
+
+            // Simple stable scramble based on string (mocking PHP srand)
+            let hintArr = word.split('').map(c => /[a-zA-Z]/.test(c) ? '_' : c);
+            for(let i=0; i<revealCount; i++) {
+                let idx = (room.id + i * 3) % word.length; // Pseudo random deterministic
+                if(/[a-zA-Z]/.test(word[idx])) hintArr[idx] = word[idx];
+            }
+            room.hint = hintArr.join(' ');
+        }
+    }
+
+    io.to(roomId.toString()).fetchSockets().then(sockets => {
+        sockets.forEach(s => {
+            const isDrawer = room.current_drawer_id === s.tg_id;
+            const revealState = ['REVEAL', 'BREAK'].includes(room.status) || isDrawer;
+            
+            const guesses = db.guesses.filter(g => g.room_id === roomId).map(g => {
+                if (revealState || g.user_id === s.tg_id) return { ...g, is_blurred: false };
+                return { ...g, guess_text: '••••••••', is_blurred: true };
+            });
+
+            const mySignals = signals.filter(sig => sig.receiver_id === s.tg_id);
+            // Delete signals once delivered
+            db.webrtc_signals = db.webrtc_signals.filter(sig => sig.receiver_id !== s.tg_id);
+
+            s.emit('sync', {
+                room, members, chats, guesses, calls,
+                drawings: roomDrawings,
+                webrtc_signals: mySignals,
+                server_time: getNowStr(),
+                dynamic_cooldown: 10
+            });
+        });
+    });
+}
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`DoodleDash Server running on port ${PORT}`));
