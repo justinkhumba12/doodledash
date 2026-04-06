@@ -177,13 +177,13 @@ async function getUserState(tg_id) {
 
 const activeCalls = new Map(); 
 
-io.on('connection', (socket) => {
-    let currentUser = null;
-    let currentRoom = null;
-
-    const syncRoom = async (roomId) => {
-        if (!roomId) return;
+// FIX: Lifted syncRoom outside the socket connection scope so the game loop can independently update rooms
+const syncRoom = async (roomId) => {
+    if (!roomId) return;
+    try {
         const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
+        if (roomData.length === 0) return; // safeguard
+
         const [members] = await db.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
         const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20', [roomId]);
         const [guesses] = await db.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
@@ -205,7 +205,14 @@ io.on('connection', (socket) => {
             profiles,
             server_time: new Date()
         });
-    };
+    } catch (error) {
+        console.error("syncRoom error:", error);
+    }
+};
+
+io.on('connection', (socket) => {
+    let currentUser = null;
+    let currentRoom = null;
 
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         if (!tg_id) return;
@@ -329,15 +336,21 @@ io.on('connection', (socket) => {
             await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
         }
 
-        // Enforce 1 room per user
+        // FIX: Properly handle changing rooms (leave old room and sync the UI for it)
+        const oldRoom = currentRoom;
         await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-        if (currentRoom) socket.leave(`room_${currentRoom}`);
+        if (oldRoom) {
+            socket.leave(`room_${oldRoom}`);
+        }
 
         await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [room_id, currentUser]);
         currentRoom = room_id;
         socket.join(`room_${currentRoom}`);
         
         socket.emit('join_success', currentRoom);
+        
+        // Sync both rooms immediately
+        if (oldRoom) syncRoom(oldRoom);
         syncRoom(currentRoom);
 
         const userState = await getUserState(currentUser);
@@ -440,13 +453,14 @@ setInterval(async () => {
         const [drawingRooms] = await db.query("SELECT id FROM rooms WHERE status = 'DRAWING' AND round_end_time <= UTC_TIMESTAMP()");
         for (let r of drawingRooms) {
             await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND) WHERE id = ?", [r.id]);
-            io.to(`room_${r.id}`).emit('trigger_sync');
+            // FIX: Removed trigger_sync requirement. The server directly syncs the room.
+            syncRoom(r.id);
         }
 
         const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
         for (let r of revealRooms) {
             await db.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [r.id]);
-            io.to(`room_${r.id}`).emit('trigger_sync');
+            syncRoom(r.id);
         }
 
         const [waitingRooms] = await db.query("SELECT * FROM rooms WHERE status IN ('WAITING', 'BREAK')");
@@ -457,7 +471,7 @@ setInterval(async () => {
                 await db.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, r.id]);
                 await db.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [r.id]);
                 await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
-                io.to(`room_${r.id}`).emit('trigger_sync');
+                syncRoom(r.id);
             }
         }
     } catch (e) { console.error("Game Loop Error:", e); }
