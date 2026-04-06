@@ -38,98 +38,116 @@ const pool = mysql.createPool({
     timezone: '+05:30' // IST Timezone
 });
 
-// Create tables automatically on startup
+// ==========================================
+// 2. AUTOMATIC DATABASE INITIALIZATION
+// Based strictly on uploaded phpMyAdmin screenshots
+// ==========================================
 async function initDatabase() {
     try {
         const connection = await pool.getConnection();
         await connection.query(`SET time_zone = '+05:30';`);
 
+        // 1. users table
         await connection.query(`CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            tg_id VARCHAR(50) UNIQUE,
-            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            profile_pic VARCHAR(500) NULL,
-            credits INT DEFAULT 0,
-            last_daily_claim DATE NULL,
-            ad_claims_today INT DEFAULT 0,
-            last_ad_claim_time DATETIME NULL,
-            last_ad_claim_date DATE NULL,
-            last_notified_date DATE NULL,
-            ad2_claims_today INT DEFAULT 0,
-            last_ad2_claim_time DATETIME NULL,
-            last_ad2_claim_date DATE NULL
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            tg_id varchar(50) DEFAULT NULL UNIQUE,
+            registered_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_active timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            profile_pic varchar(500) DEFAULT NULL,
+            credits int(11) DEFAULT '0',
+            last_daily_claim date DEFAULT NULL,
+            ad_claims_today int(11) DEFAULT '0',
+            last_ad_claim_time datetime DEFAULT NULL,
+            last_ad_claim_date date DEFAULT NULL,
+            last_notified_date date DEFAULT NULL,
+            ad2_claims_today int(11) DEFAULT '0',
+            last_ad2_claim_time datetime DEFAULT NULL,
+            last_ad2_claim_date date DEFAULT NULL,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 2. rooms table
         await connection.query(`CREATE TABLE IF NOT EXISTS rooms (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            status ENUM('WAITING', 'PRE_DRAW', 'DRAWING', 'REVEAL', 'BREAK') DEFAULT 'WAITING',
-            current_drawer_id VARCHAR(50) NULL,
-            word_to_draw VARCHAR(30) NULL,
-            round_end_time DATETIME NULL,
-            break_end_time DATETIME NULL,
-            last_winner_id VARCHAR(50) NULL,
-            next_drawer_id VARCHAR(50) NULL,
-            modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            status enum('WAITING','PRE_DRAW','DRAWING','REVEAL','BREAK') DEFAULT 'WAITING',
+            current_drawer_id varchar(50) DEFAULT NULL,
+            word_to_draw varchar(30) DEFAULT NULL,
+            round_end_time datetime DEFAULT NULL,
+            break_end_time datetime DEFAULT NULL,
+            last_winner_id varchar(50) DEFAULT NULL,
+            next_drawer_id varchar(50) DEFAULT NULL,
+            modified_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 3. room_members table
         await connection.query(`CREATE TABLE IF NOT EXISTS room_members (
-            room_id INT,
-            user_id VARCHAR(50),
-            is_ready TINYINT(1) DEFAULT 0,
-            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            consecutive_turns INT DEFAULT 0,
-            total_turns INT DEFAULT 0,
-            join_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY(room_id, user_id)
-        )`);
+            room_id int(11) NOT NULL,
+            user_id varchar(50) NOT NULL,
+            is_ready tinyint(1) DEFAULT '0',
+            joined_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            consecutive_turns int(11) DEFAULT '0',
+            total_turns int(11) DEFAULT '0',
+            join_time timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (room_id, user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 4. chat_messages table
         await connection.query(`CREATE TABLE IF NOT EXISTS chat_messages (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            room_id INT NOT NULL,
-            user_id VARCHAR(50) NULL,
-            message TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            room_id int(11) NOT NULL,
+            user_id varchar(50) DEFAULT NULL,
+            message text NOT NULL,
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 5. guesses table
         await connection.query(`CREATE TABLE IF NOT EXISTS guesses (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            room_id INT NOT NULL,
-            user_id VARCHAR(50) NULL,
-            guess_text VARCHAR(50) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            room_id int(11) NOT NULL,
+            user_id varchar(50) DEFAULT NULL,
+            guess_text varchar(50) NOT NULL,
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 6. drawings table
         await connection.query(`CREATE TABLE IF NOT EXISTS drawings (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            room_id INT NOT NULL,
-            line_data LONGTEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            room_id int(11) NOT NULL,
+            line_data longtext NOT NULL,
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 7. calls table
         await connection.query(`CREATE TABLE IF NOT EXISTS calls (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            room_id INT NOT NULL,
-            caller_id VARCHAR(255) NOT NULL,
-            receiver_id VARCHAR(255) NOT NULL,
-            status ENUM('RINGING', 'ACTIVE', 'ENDED', 'DECLINED', 'MISSED') DEFAULT 'RINGING',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            started_at TIMESTAMP NULL,
-            last_billed_at TIMESTAMP NULL
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            room_id int(11) NOT NULL,
+            caller_id varchar(255) NOT NULL,
+            receiver_id varchar(255) NOT NULL,
+            status enum('RINGING','ACTIVE','ENDED','DECLINED','MISSED') DEFAULT 'RINGING',
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at timestamp NULL DEFAULT NULL,
+            last_billed_at timestamp NULL DEFAULT NULL,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
+        // 8. webrtc_signals table
         await connection.query(`CREATE TABLE IF NOT EXISTS webrtc_signals (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            call_id INT NOT NULL,
-            sender_id VARCHAR(50) NOT NULL,
-            receiver_id VARCHAR(50) NOT NULL,
-            type VARCHAR(50) NOT NULL,
-            payload TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
+            id int(11) NOT NULL AUTO_INCREMENT,
+            call_id int(11) NOT NULL,
+            sender_id varchar(50) NOT NULL,
+            receiver_id varchar(50) NOT NULL,
+            type varchar(50) NOT NULL,
+            payload text NOT NULL,
+            created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;`);
 
         connection.release();
-        console.log('✅ Database Tables Initialized');
+        console.log('✅ Database Tables Initialized Successfully');
     } catch (err) {
         console.error('❌ Database Initialization Error:', err);
     }
@@ -137,7 +155,7 @@ async function initDatabase() {
 initDatabase();
 
 // ==========================================
-// 2. UTILITY FUNCTIONS
+// 3. UTILITY FUNCTIONS
 // ==========================================
 function verifyTelegramWebAppData(telegramInitData, botToken) {
     if (!telegramInitData) return false;
@@ -170,11 +188,10 @@ function getIST() {
     };
 }
 
-// User active socket tracking { tg_id: socket.id }
 const activeUsers = {};
 
 // ==========================================
-// 3. TELEGRAM WEBHOOK ROUTE
+// 4. TELEGRAM WEBHOOK ROUTE
 // ==========================================
 app.post('/webhook', async (req, res) => {
     const headerToken = req.headers['x-telegram-bot-api-secret-token'];
@@ -207,7 +224,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ==========================================
-// 4. WEBSOCKET HANDLERS (GAME LOGIC)
+// 5. WEBSOCKET HANDLERS (GAME LOGIC)
 // ==========================================
 io.on('connection', (socket) => {
     let currentUser = null;
@@ -297,7 +314,6 @@ io.on('connection', (socket) => {
     socket.on('join_room', async ({ room_id }) => {
         if (!currentUser) return;
         try {
-            // Check full
             const [count] = await pool.query("SELECT COUNT(*) as c FROM room_members WHERE room_id = ?", [room_id]);
             const [existing] = await pool.query("SELECT room_id FROM room_members WHERE user_id = ?", [currentUser]);
             
@@ -306,7 +322,7 @@ io.on('connection', (socket) => {
             }
             
             if (existing.length && existing[0].room_id !== room_id) {
-                await pool.query("DELETE FROM room_members WHERE user_id = ?", [currentUser]); // Force leave old room
+                await pool.query("DELETE FROM room_members WHERE user_id = ?", [currentUser]); 
                 socket.leave(existing[0].room_id.toString());
             }
 
@@ -316,8 +332,8 @@ io.on('connection', (socket) => {
             
             socket.join(room_id.toString());
             socket.emit('joined_room', { room_id });
-            sendLobbyData(socket); // Broadcast overall changes
-            io.to(room_id.toString()).emit('room_updated'); // Trigger room sync
+            sendLobbyData(socket); 
+            io.to(room_id.toString()).emit('room_updated');
         } catch(e) { console.error(e); }
     });
 
@@ -427,15 +443,13 @@ io.on('connection', (socket) => {
         if (!currentUser) return;
         await pool.query("UPDATE calls SET status='ENDED' WHERE id=? AND (caller_id=? OR receiver_id=?)", [call_id, currentUser, currentUser]);
         await pool.query("DELETE FROM webrtc_signals WHERE call_id=?", [call_id]);
-        socket.emit('room_updated'); // force sync local
+        socket.emit('room_updated');
     });
 
     socket.on('webrtc_signal', async ({ call_id, receiver_id, type, payload }) => {
         if (!currentUser) return;
-        // Save to DB for historical/strict schema matching
         await pool.query("INSERT INTO webrtc_signals (call_id, sender_id, receiver_id, type, payload) VALUES (?, ?, ?, ?, ?)", [call_id, currentUser, receiver_id, type, JSON.stringify(payload)]);
         
-        // Instant routing via WebSockets
         if (activeUsers[receiver_id]) {
             io.to(activeUsers[receiver_id]).emit('webrtc_signal_received', {
                 call_id, sender_id: currentUser, type, payload
@@ -446,11 +460,9 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         if (currentUser) {
             delete activeUsers[currentUser];
-            // Optionally remove from room_members if needed after delay, handled by cron/global loop
         }
     });
 
-    // Helper functions inside socket context
     async function sendLobbyData(sock) {
         const ist = getIST();
         const [rooms] = await pool.query("SELECT r.id, r.status, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id");
@@ -468,7 +480,7 @@ io.on('connection', (socket) => {
 });
 
 // ==========================================
-// 5. GLOBAL TIMING & GAME LOOP
+// 6. GLOBAL TIMING & GAME LOOP
 // ==========================================
 async function endRound(room_id, winner_id = null) {
     const [room] = await pool.query("SELECT current_drawer_id, word_to_draw FROM rooms WHERE id = ?", [room_id]);
@@ -535,7 +547,7 @@ setInterval(async () => {
             // Reveal -> Break
             else if (r.status === 'REVEAL' && r.break_end_time) {
                 if (new Date(r.break_end_time).getTime() <= new Date(nowStr).getTime()) {
-                    const breakEnd = new Date(new Date(nowStr).getTime() + 600000); // 10 min AFK timeout
+                    const breakEnd = new Date(new Date(nowStr).getTime() + 600000); 
                     const breakStr = `${breakEnd.getFullYear()}-${String(breakEnd.getMonth()+1).padStart(2,'0')}-${String(breakEnd.getDate()).padStart(2,'0')} ${String(breakEnd.getHours()).padStart(2,'0')}:${String(breakEnd.getMinutes()).padStart(2,'0')}:${String(breakEnd.getSeconds()).padStart(2,'0')}`;
                     await pool.query("UPDATE rooms SET status='BREAK', break_end_time=? WHERE id=?", [breakStr, r.id]);
                     changed = true;
@@ -592,7 +604,6 @@ setInterval(async () => {
             const [drawings] = await pool.query("SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC", [room_id]);
             const [calls] = await pool.query("SELECT id, caller_id, receiver_id, status FROM calls WHERE room_id = ? AND status IN ('RINGING', 'ACTIVE')", [room_id]);
             
-            // Masking guesses for non-drawers unless reveal phase
             const isReveal = ['REVEAL', 'BREAK'].includes(roomData[0].status);
             
             let userIds = members.map(m => m.user_id).concat(guesses.map(g => g.user_id)).concat(chats.filter(c=>c.user_id!=='System').map(c=>c.user_id));
@@ -608,7 +619,6 @@ setInterval(async () => {
 
             const ist = getIST();
             
-            // Prepare payload
             const payload = {
                 room: roomData[0],
                 members,
@@ -621,12 +631,11 @@ setInterval(async () => {
                 isReveal
             };
 
-            // Send to each socket, adjusting masks
             for (let s of socks) {
                 const tg_id = Object.keys(activeUsers).find(key => activeUsers[key] === s.id);
                 if (!tg_id) continue;
                 
-                const customPayload = JSON.parse(JSON.stringify(payload)); // Deep copy
+                const customPayload = JSON.parse(JSON.stringify(payload)); 
                 const isDrawer = roomData[0].current_drawer_id === tg_id;
                 
                 customPayload.guesses.forEach(g => {
@@ -636,12 +645,10 @@ setInterval(async () => {
                     }
                 });
                 
-                // Add hint generator
                 if (roomData[0].word_to_draw) {
                     if (isDrawer || isReveal) {
                         customPayload.room.hint = roomData[0].word_to_draw;
                     } else {
-                        // Simple hint obscuring
                         let hint = roomData[0].word_to_draw.replace(/[a-zA-Z]/g, '_ ');
                         customPayload.room.hint = hint.trim();
                     }
