@@ -54,6 +54,7 @@
             color: white;
             box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
             margin-bottom: 30px;
+            text-align: center;
         }
         
         .btn-action {
@@ -214,7 +215,7 @@
 </div>
 
 <div id="screen-auth" class="screen active container mt-5 text-center">
-    <h3><i class="fas fa-circle-notch fa-spin text-primary"></i> Connecting to WebSocket...</h3>
+    <h3><i class="fas fa-circle-notch fa-spin text-primary"></i> Loading DoodleDash...</h3>
 </div>
 
 <div id="modal-alert" class="wb-overlay" style="display:none; position:fixed; z-index:10001; background: rgba(0,0,0,0.6); opacity: 0; transition: opacity 0.3s ease;">
@@ -227,14 +228,20 @@
 </div>
 
 <div id="screen-rooms" class="screen container">
-    <div class="hero-section d-flex justify-content-between align-items-center flex-wrap gap-4">
-        <div>
-            <h2 class="fw-bold mb-1"><i class="fas fa-gamepad me-2"></i>Game Lobbies</h2>
-            <p class="m-0 text-white-50 fs-6">Join a room or Create one (Costs 1 Credit)</p>
-        </div>
-        <div class="d-flex gap-2 flex-wrap">
+    <div class="hero-section">
+        <h2 class="fw-bold mb-2"><i class="fas fa-gamepad me-2"></i>Game Lobbies</h2>
+        <p class="text-white-50 fs-6 mb-3">Join a room or Create one (Costs 1 Credit)</p>
+        
+        <div class="d-flex gap-2 flex-wrap justify-content-center">
+            <!-- New Features Injected Exactly into Your Layout -->
+            <button class="btn btn-success fw-bold btn-action rounded-pill px-4 shadow-sm border border-light" onclick="joinRandomRoom()">
+                <i class="fas fa-random me-1"></i> Quick Play
+            </button>
             <button class="btn btn-dark fw-bold btn-action rounded-pill px-4 shadow-sm border border-secondary" onclick="createRoom()">
                 <i class="fas fa-plus text-info me-1"></i> Create
+            </button>
+            <button class="btn btn-warning fw-bold btn-action rounded-pill px-4 shadow-sm border border-light" onclick="watchAd()">
+                <i class="fas fa-video me-1 text-dark"></i> Get Credits
             </button>
         </div>
     </div>
@@ -333,7 +340,6 @@
 
     let currentRoom = null;
     let isDrawer = false;
-    let serverTimeOffset = 0;
     
     // Timer Tracking Globals
     let uiTimerInterval = null;
@@ -357,10 +363,6 @@
     // --- WebSockets Init ---
     const socket = io({ auth: { tg_data, tg_id } });
 
-    socket.on('connect', () => {
-        console.log("WebSocket connected globally!");
-    });
-
     socket.on('rooms_data', (data) => {
         showScreen(data.current_room ? 'screen-game' : 'screen-rooms');
         document.getElementById('credit-badge').style.display = 'flex';
@@ -369,9 +371,13 @@
         renderRooms(data.rooms);
     });
 
-    // Targeted user credit push update handler
-    socket.on('update_credits', (credits) => {
-        document.getElementById('user-credits').innerText = credits;
+    socket.on('update_room_list', (rooms) => {
+        if (!currentRoom) renderRooms(rooms);
+    });
+
+    // Real-time credit update push
+    socket.on('update_user', (userData) => {
+        document.getElementById('user-credits').innerText = userData.credits;
     });
 
     socket.on('sync_state', (data) => {
@@ -411,8 +417,12 @@
         processSignalingData(sender_id, type, payload);
     });
 
+    // New Game Features Mapping
     function createRoom() { socket.emit('create_room'); }
     function joinRoom(id) { socket.emit('join_room', { room_id: id }); }
+    function joinRandomRoom() { socket.emit('join_random_room'); }
+    function watchAd() { socket.emit('watch_ad'); } // Tells server ad is watched to claim reward
+
     function leaveRoom() { 
         socket.emit('leave_room'); 
         currentRoom = null; 
@@ -420,6 +430,7 @@
         document.getElementById('timer').innerText = '--';
         showScreen('screen-rooms'); 
     }
+    
     function sendChat() {
         const msg = document.getElementById('chat-input').value;
         if(msg) socket.emit('chat', { room_id: currentRoom, message: msg });
@@ -494,8 +505,7 @@
 
     function updateUITimer() {
         if(!targetEndTime) return;
-        const now = Date.now() - serverTimeOffset;
-        let diff = Math.floor((targetEndTime - now) / 1000);
+        let diff = Math.floor((targetEndTime - Date.now()) / 1000);
         if (diff < 0) diff = 0;
         document.getElementById('timer').innerText = diff + 's';
     }
@@ -504,18 +514,10 @@
         const r = data.room;
         isDrawer = String(r.current_drawer_id) === String(tg_id);
         
-        // Handle UI Timer sync
+        // Handle UI Timer sync (Flawless Client-Side Timing without parsing offsets)
         targetEndTime = null;
-        if (r.status === 'DRAWING' && r.round_end_time) {
-            targetEndTime = new Date(r.round_end_time).getTime();
-        } else if (r.status === 'REVEAL' && r.break_end_time) {
-            targetEndTime = new Date(r.break_end_time).getTime();
-        } else if (r.status === 'BREAK' && r.break_end_time) {
-            targetEndTime = new Date(r.break_end_time).getTime();
-        }
-
-        if(targetEndTime) {
-            serverTimeOffset = Date.now() - new Date(data.server_time).getTime();
+        if (data.remaining_time_ms > 0) {
+            targetEndTime = Date.now() + data.remaining_time_ms;
             if(!uiTimerInterval) {
                 uiTimerInterval = setInterval(updateUITimer, 1000);
             }
@@ -529,7 +531,6 @@
         if (data.chats.length > 0) {
             const newestMsg = data.chats[data.chats.length - 1];
             const msgTime = new Date(newestMsg.created_at).getTime();
-            // Checking if the message is fresh & not our own
             if (lastChatTime && msgTime > lastChatTime && newestMsg.user_id !== tg_id) {
                 document.getElementById('audio-msg').play().catch(e => console.log('Audio Blocked:', e));
             }
