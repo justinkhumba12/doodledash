@@ -31,50 +31,152 @@
             touch-action: manipulation;
         }
 
-        .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; margin-bottom: 20px; position: sticky; top: 0; z-index: 1050; }
+        .app-header {
+            background: var(--card-bg);
+            padding: 15px 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 1050;
+        }
+        
         .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
 
-        .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 30px 25px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); margin-bottom: 30px; }
-        .btn-action { transition: all 0.3s ease; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.85rem; border: none; }
-        .btn-action:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
+        .hero-section {
+            background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%);
+            border-radius: 20px;
+            padding: 30px 25px;
+            color: white;
+            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
+            margin-bottom: 30px;
+        }
+        
+        .btn-action {
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.85rem;
+            border: none;
+        }
+        .btn-action:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+        }
 
-        .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s, box-shadow 0.2s; overflow: hidden; }
-        .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); border-color: #c7d2fe; }
+        .room-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            transition: transform 0.2s, box-shadow 0.2s;
+            overflow: hidden;
+        }
+        .room-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12);
+            border-color: #c7d2fe;
+        }
 
-        #call-toast-container { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1060; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; transition: all 0.3s ease; backdrop-filter: blur(4px); }
+        #call-toast-container {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1060;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; visibility: hidden; transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
+        }
         #call-toast-container.show { opacity: 1; visibility: visible; }
-        .call-toast-card { background: #fff; border-radius: 20px; padding: 25px; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.2); transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .call-toast-card {
+            background: #fff; border-radius: 20px; padding: 25px;
+            width: 90%; max-width: 340px; text-align: center;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
         #call-toast-container.show .call-toast-card { transform: scale(1); }
 
         #active-call-container { animation: fadeIn 0.3s ease; }
-        @keyframes pulseWarning { 0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); } 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); } }
-        .pulse-warning-btn { animation: pulseWarning 2s infinite; background-color: #f59e0b !important; color: #fff !important; border-color: #f59e0b !important; }
+        
+        .pulse-warning-btn {
+            animation: pulseWarning 2s infinite;
+            background-color: #f59e0b !important;
+            color: #fff !important;
+            border-color: #f59e0b !important;
+        }
 
-        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; max-width: 430px; position: relative; }
+        .whiteboard-wrapper {
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+            margin: 0 auto;
+            max-width: 430px; 
+            position: relative;
+        }
         .whiteboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; }
-        .whiteboard-container { width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1/1; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; }
+        .whiteboard-container {
+            width: 400px; height: 400px; max-width: 100%; aspect-ratio: 1 / 1;
+            margin: 0 auto; background-color: #fff;
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px;
+            position: relative; overflow: hidden; touch-action: none;
+        }
         canvas { cursor: crosshair; width: 100%; height: 100%; display: block; }
-        .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; overflow-y: auto; }
+        
+        .wb-overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.92); backdrop-filter: blur(4px);
+            z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; padding: 10px; overflow-y: auto;
+        }
 
         #pic-modal { opacity: 0; transition: opacity 0.3s ease; }
         #pic-modal-content { transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 
-        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.2); }
+        .interaction-panel {
+            position: fixed; right: -340px; top: 80px; bottom: 0;
+            width: 340px; height: calc(100vh - 80px);
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+            border-radius: 20px 0 0 20px; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; 
+            display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.2);
+        }
         .interaction-panel.open { right: 0; }
-        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); font-size: 1.2rem; }
+        
+        .floating-toggle {
+            position: absolute; left: -30px; top: 60%; transform: translateY(-50%);
+            width: 30px; height: 60px; background: var(--primary); color: white;
+            border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); font-size: 1.2rem;
+        }
         
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
-        .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
+        .panel-tab {
+            flex: 1; padding: 10px; text-align: center; cursor: pointer;
+            font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s;
+        }
         .panel-tab.active { background: var(--primary); color: white; }
+        
         .panel-section { display: none; flex: 1; flex-direction: column; overflow: hidden; opacity: 0; transition: opacity 0.3s ease;}
         .panel-section.active { display: flex; opacity: 1; }
         .panel-body { flex: 1; overflow-y: auto; padding: 15px; }
         .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; border-radius: 0 0 0 20px; }
         
-        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; line-height: 1.4; }
+        .msg-box {
+            background: #f1f5f9; padding: 10px 14px; border-radius: 12px; 
+            margin-bottom: 8px; font-size: 0.9rem; line-height: 1.4;
+        }
+        .msg-box b { color: var(--primary); }
         .msg-box.guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
         .msg-box.guess-wrong { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
+        .guess-self { background: #e0f2fe; border-left: 4px solid #0284c7; color: #0369a1; }
+        .guess-other { background: #f1f5f9; border-left: 4px solid #94a3b8; color: #475569; }
         
+        .btn-send { background: var(--primary); color: white; border: none; border-radius: 10px; padding: 0 20px; }
+
         .screen { display: none; }
         .screen.active { display: block; animation: fadeIn 0.3s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -90,6 +192,7 @@
 
 <div class="app-header">
     <h1 class="app-title"><i class="fas fa-palette"></i> DoodleDash</h1>
+    
     <div class="d-flex align-items-center gap-3">
         <div id="credit-badge" class="badge bg-light text-dark border border-warning shadow-sm d-flex align-items-center" style="display: none; font-size: 0.8rem; padding: 6px 12px; border-radius: 20px;">
             <i class="fas fa-coins text-warning" style="font-size: 0.9rem;"></i> 
@@ -111,103 +214,79 @@
 </div>
 
 <div id="screen-auth" class="screen active container mt-5 text-center">
-    <h3><i class="fas fa-circle-notch fa-spin text-primary"></i> Connecting to WebSockets...</h3>
+    <h3><i class="fas fa-circle-notch fa-spin text-primary"></i> Connecting to WebSocket...</h3>
 </div>
 
-<div id="modal-alert" class="wb-overlay" style="display:none; position:fixed; z-index:10001; background: rgba(0,0,0,0.6);">
-    <div class="bg-white p-4 rounded-4 shadow-lg text-center" style="max-width: 350px;">
+<div id="modal-alert" class="wb-overlay" style="display:none; position:fixed; z-index:10001; background: rgba(0,0,0,0.6); opacity: 0; transition: opacity 0.3s ease;">
+    <div id="modal-alert-content" class="bg-white p-4 rounded-4 shadow-lg text-center" style="max-width: 350px; transform: scale(0.8); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+        <div id="modal-alert-icon" class="mb-3 fs-1 text-primary"><i class="fas fa-info-circle"></i></div>
         <h4 id="modal-alert-title" class="fw-bold text-dark mb-2">Notice</h4>
         <p id="modal-alert-message" class="text-muted mb-4"></p>
-        <button class="btn btn-primary w-100 rounded-pill fw-bold" onclick="document.getElementById('modal-alert').style.display='none'">Got it!</button>
+        <button class="btn btn-primary w-100 rounded-pill fw-bold" onclick="closeAlert()">Got it!</button>
     </div>
 </div>
 
-<!-- LOBBY SCREEN -->
 <div id="screen-rooms" class="screen container">
-    <div class="row mb-3" id="rewards-section" style="display: none;">
-        <div class="col-md-6 mb-3 mb-md-0">
-            <div class="hero-section m-0 h-100 d-flex flex-column justify-content-center" style="background: linear-gradient(135deg, #10b981 0%, #34d399 100%); padding: 20px;">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="fw-bold mb-1"><i class="fas fa-calendar-check me-2"></i>Daily Claim</h5>
-                        <p class="m-0 text-white-50" style="font-size: 0.8rem;">Get 1 Free Credit everyday!</p>
-                    </div>
-                    <button id="btn-daily-claim" class="btn bg-white text-success fw-bold btn-action rounded-pill px-3 shadow-sm" style="font-size: 0.75rem;" onclick="claimDaily()">Claim Now</button>
-                    <div id="daily-timer-div" style="display:none; font-size: 0.75rem;" class="fw-bold bg-dark bg-opacity-25 px-2 py-1 rounded-pill text-center"><i class="fas fa-check text-white"></i> Claimed</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="hero-section m-0 h-100 d-flex flex-column justify-content-center" style="background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%); padding: 20px;">
-                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom border-warning border-opacity-50">
-                    <div><h5 class="fw-bold mb-1"><i class="fas fa-tv me-2"></i>Ad 1</h5><p class="m-0 text-white-50" style="font-size: 0.8rem;" id="ad-status-text">Get 2 Free Credits (0/2)</p></div>
-                    <button id="btn-ad-claim" class="btn bg-white text-warning fw-bold btn-action rounded-pill px-3 shadow-sm" style="font-size: 0.75rem;" onclick="watchAd('ad1')">Watch</button>
-                    <div id="ad-timer-div" style="display:none; font-size: 0.75rem;" class="fw-bold bg-dark bg-opacity-25 px-2 py-1 rounded-pill"><i class="fas fa-clock"></i> Wait...</div>
-                </div>
-                <div class="d-flex justify-content-between align-items-center mt-1">
-                    <div><h5 class="fw-bold mb-1"><i class="fas fa-play-circle me-2"></i>Ad 2</h5><p class="m-0 text-white-50" style="font-size: 0.8rem;" id="ad2-status-text">Get 2 Free Credits (0/2)</p></div>
-                    <button id="btn-ad2-claim" class="btn bg-white text-warning fw-bold btn-action rounded-pill px-3 shadow-sm" style="font-size: 0.75rem;" onclick="watchAd('ad2')">Watch</button>
-                    <div id="ad2-timer-div" style="display:none; font-size: 0.75rem;" class="fw-bold bg-dark bg-opacity-25 px-2 py-1 rounded-pill"><i class="fas fa-clock"></i> Wait...</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <div class="hero-section d-flex justify-content-between align-items-center flex-wrap gap-4">
         <div>
             <h2 class="fw-bold mb-1"><i class="fas fa-gamepad me-2"></i>Game Lobbies</h2>
             <p class="m-0 text-white-50 fs-6">Join a room or Create one (Costs 1 Credit)</p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
-            <button class="btn btn-dark fw-bold btn-action rounded-pill px-4 shadow-sm border border-secondary" onclick="createRoom()"><i class="fas fa-plus text-info me-1"></i> Create</button>
+            <button class="btn btn-dark fw-bold btn-action rounded-pill px-4 shadow-sm border border-secondary" onclick="createRoom()">
+                <i class="fas fa-plus text-info me-1"></i> Create
+            </button>
         </div>
     </div>
     <div class="row" id="room-list"></div>
 </div>
 
-<!-- GAME SCREEN -->
 <div id="screen-game" class="screen container-fluid">
     <audio id="remote-audio" autoplay playsinline hidden></audio>
     
     <div class="whiteboard-wrapper">
         <div class="whiteboard-header">
-            <button class="btn btn-light btn-sm fw-bold border px-2 py-1" onclick="leaveRoom()"><i class="fas fa-sign-out-alt fa-flip-horizontal text-danger"></i></button>
-            <div id="status-bar" class="m-0 fw-bold text-center flex-grow-1 px-2" style="color: var(--primary);">Loading...</div>
+            <button class="btn btn-light btn-sm fw-bold border px-2 py-1" onclick="leaveRoom()" title="Leave Room">
+                <i class="fas fa-sign-out-alt fa-flip-horizontal text-danger"></i>
+            </button>
+            <div id="status-bar" class="m-0 fw-bold text-center flex-grow-1 px-2" style="color: var(--primary);">Waiting...</div>
             <div id="timer" class="m-0 text-danger fw-bold bg-danger bg-opacity-10 px-2 py-1 rounded-pill">--</div>
         </div>
 
         <div class="whiteboard-container">
             <canvas id="whiteboard" width="400" height="400"></canvas>
             
+            <div id="virtual-pencil" style="display: none; position: absolute; z-index: 50; top: 150px; left: 150px; pointer-events: none;">
+                <div style="position: absolute; top: -3px; left: -3px; width: 6px; height: 6px; background: var(--primary); border-radius: 50%;"></div>
+                <div id="pencil-handle-draw" class="rounded-circle d-flex align-items-center justify-content-center bg-primary text-white border border-2 border-white" style="position: absolute; top: 15px; left: 20px; width: 38px; height: 38px; cursor: grab; pointer-events: auto;">
+                    <i class="fas fa-paint-brush"></i>
+                </div>
+            </div>
+            
             <div id="word-modal" class="wb-overlay" style="display:none;">
                 <h3 class="fw-bold mb-3" style="color: var(--primary);">Your turn to draw!</h3>
-                <input type="text" id="word-input" class="form-control text-center mb-2" placeholder="e.g. Tree" onkeypress="if(event.key==='Enter') submitWord()">
-                <button class="btn btn-primary px-4 py-2 fw-bold w-100" onclick="submitWord()">Draw!</button>
+                <input type="text" id="word-input" class="form-control text-center w-75 mb-2" maxlength="30" placeholder="e.g. Tree">
+                <button class="btn btn-primary w-75" onclick="submitWord()">Draw!</button>
             </div>
             
             <div id="break-modal" class="wb-overlay" style="display:none;">
                 <h3 id="reveal-text" class="fw-bold mb-2"></h3>
                 <div id="congrats-ui" class="w-100 mb-2 px-2"></div>
-                <button id="btn-ready" class="btn btn-success rounded-pill px-4 py-2 shadow-sm fw-bold" onclick="setReady()">I'm Ready!</button>
+                <button id="btn-ready" class="btn btn-success rounded-pill px-4 py-2" onclick="setReady()">I'm Ready!</button>
             </div>
         </div>
         
         <div id="draw-controls" class="justify-content-center gap-3 mt-2" style="display: none;">
-            <button class="btn btn-sm btn-outline-secondary rounded-pill px-3 shadow-sm fw-bold" onclick="triggerUndo()"><i class="fas fa-undo me-1"></i> Undo</button>
+            <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="triggerUndo()">Undo</button>
         </div>
 
         <div id="game-hint-container" class="text-center fw-bold fs-4 my-2 text-primary"></div>
         
         <div id="active-call-container" class="mt-3 mb-2" style="display: none;">
-            <div class="card border-0 shadow-sm" style="background: linear-gradient(to right, #ecfdf5, #d1fae5);">
-                <div class="card-body p-2 px-3 d-flex justify-content-between align-items-center">
-                    <div class="d-flex align-items-center">
-                        <div class="bg-success rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 35px; height: 35px;"><i class="fas fa-phone-volume text-white heartbeat"></i></div>
-                        <div><div class="text-success fw-bold" style="font-size: 0.8rem;">ACTIVE CALL</div><div class="text-dark fw-bold" id="active-call-user"></div></div>
-                    </div>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-danger rounded-circle" onclick="endCall()"><i class="fas fa-phone-slash"></i></button>
-                    </div>
+            <div class="card border-0 shadow-sm" style="background: #d1fae5;">
+                <div class="card-body p-2 px-3 d-flex justify-content-between align-items-center rounded">
+                    <div><b class="text-success">ACTIVE CALL</b><br><span id="active-call-user">With: ---</span></div>
+                    <button class="btn btn-danger rounded-circle shadow-sm" onclick="endCall()" style="width: 40px; height: 40px;"><i class="fas fa-phone-slash"></i></button>
                 </div>
             </div>
         </div>
@@ -221,18 +300,24 @@
             <div class="panel-tab active" onclick="switchTab('chat')">Chat</div>
             <div class="panel-tab" onclick="switchTab('guess')">Guess</div>
         </div>
+        
         <div class="panel-section active" id="tab-chat">
             <div class="panel-body" id="chat-box"></div>
-            <div class="chat-input-wrapper input-group">
-                <input type="text" id="chat-input" class="form-control" placeholder="Message" onkeypress="if(event.key==='Enter') sendChat()">
-                <button class="btn btn-primary" onclick="sendChat()"><i class="fas fa-paper-plane"></i></button>
+            <div class="chat-input-wrapper">
+                <div class="input-group">
+                    <input type="text" id="chat-input" class="form-control" placeholder="Message">
+                    <button class="btn btn-send" onclick="sendChat()"><i class="fas fa-paper-plane"></i></button>
+                </div>
             </div>
         </div>
+        
         <div class="panel-section" id="tab-guess">
             <div class="panel-body" id="guess-box"><div id="guesses-list"></div></div>
-            <div class="chat-input-wrapper input-group" id="guess-input-wrapper">
-                <input type="text" id="guess-input" class="form-control" placeholder="Your guess..." onkeypress="if(event.key==='Enter') sendGuess()">
-                <button class="btn btn-success" onclick="sendGuess()"><i class="fas fa-check"></i></button>
+            <div class="chat-input-wrapper" id="guess-input-wrapper">
+                <div class="input-group">
+                    <input type="text" id="guess-input" class="form-control" placeholder="Guess word...">
+                    <button class="btn btn-success" onclick="sendGuess()"><i class="fas fa-check"></i></button>
+                </div>
             </div>
         </div>
     </div>
@@ -240,250 +325,265 @@
 
 <script>
     const tg = window.Telegram.WebApp;
-    tg.expand(); 
-    tg.ready();
-    
+    tg.expand(); tg.ready();
     const tg_data = tg.initData || ''; 
-    const tg_photo_url = tg.initDataUnsafe?.user?.photo_url || '';
-    const raw_tg_id = tg.initDataUnsafe?.user?.id;
-    const tg_id = raw_tg_id ? String(raw_tg_id) : '';
+    const tg_id = tg.initDataUnsafe?.user?.id || new URLSearchParams(window.location.search).get('tg_id') || 'test1234';
 
-    if (!tg_id) {
-        document.getElementById('screen-auth').innerHTML = '<div class="alert alert-danger mx-auto mt-5">Please open via Telegram Bot.</div>';
-    }
-
-    const socket = io();
     let currentRoom = null;
     let isDrawer = false;
-    let localStrokes = [];
-    let drawing = false;
-    let lastPos = {x:0, y:0};
-    const canvas = document.getElementById('whiteboard');
-    const ctx = canvas.getContext('2d');
+    let serverTimeOffset = 0;
     
-    // WEBRTC
+    // WebRTC globals
     let peerConnection = null;
     let localStream = null;
-    let currentCallData = null;
-    let iceQueue = [];
+    let currentCallId = null;
+    let webrtcState = 'idle';
 
-    // 1. Connection & Auth
+    const canvas = document.getElementById('whiteboard');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    let localStrokes = [];
+
+    // --- WebSockets Init ---
+    const socket = io({ auth: { tg_data, tg_id } });
+
     socket.on('connect', () => {
-        socket.emit('authenticate', { tg_id, tg_data, photo_url: tg_photo_url });
+        console.log("WebSocket connected globally!");
     });
 
-    socket.on('authenticated', () => {
-        socket.emit('get_lobby');
-    });
-
-    socket.on('auth_error', (data) => {
-        document.getElementById('screen-auth').innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
-    });
-
-    socket.on('alert', (data) => showAlert(data.message));
-
-    // 2. Lobby Management
-    socket.on('lobby_data', (data) => {
-        if (!currentRoom) showScreen('screen-rooms');
-        document.getElementById('rewards-section').style.display = 'flex';
+    socket.on('rooms_data', (data) => {
+        showScreen(data.current_room ? 'screen-game' : 'screen-rooms');
         document.getElementById('credit-badge').style.display = 'flex';
         document.getElementById('user-credits').innerText = data.user_data.credits;
-
-        const list = document.getElementById('room-list');
-        list.innerHTML = '';
-        data.rooms.forEach(r => {
-            const isFull = r.member_count >= 4;
-            const amIHere = data.current_room === r.id;
-            list.innerHTML += `
-                <div class="col-md-6 col-lg-4 mb-4">
-                    <div class="room-card card h-100 p-4">
-                        <div class="d-flex justify-content-between mb-3">
-                            <h5 class="fw-bold">Room ${r.id}</h5>
-                            <span class="badge ${isFull ? 'bg-danger' : 'bg-success'}">${isFull ? 'Full' : 'Open'}</span>
-                        </div>
-                        <div class="mb-3">${r.member_count} / 4 Players</div>
-                        <button class="btn ${amIHere ? 'btn-success' : 'btn-primary'} w-100" onclick="joinRoom(${r.id})">${amIHere ? 'Rejoin' : 'Join'}</button>
-                    </div>
-                </div>
-            `;
-        });
+        if(data.current_room) currentRoom = data.current_room;
+        renderRooms(data.rooms);
     });
 
-    // 3. Room Management
-    socket.on('room_created', (data) => { joinRoom(data.room_id); });
-    socket.on('joined_room', (data) => { currentRoom = data.room_id; showScreen('screen-game'); });
-    socket.on('left_room', () => { currentRoom = null; showScreen('screen-rooms'); socket.emit('get_lobby'); });
-
-    // 4. Real-time Game Sync
     socket.on('sync_state', (data) => {
-        if (!currentRoom) return;
-        const r = data.room;
-        isDrawer = (r.current_drawer_id === tg_id);
-        
-        document.getElementById('word-modal').style.display = r.status === 'PRE_DRAW' && isDrawer ? 'flex' : 'none';
-        document.getElementById('break-modal').style.display = ['WAITING', 'REVEAL', 'BREAK'].includes(r.status) ? 'flex' : 'none';
-        document.getElementById('draw-controls').style.display = isDrawer && r.status === 'DRAWING' ? 'flex' : 'none';
-        document.getElementById('guess-input-wrapper').style.display = isDrawer ? 'none' : 'flex';
+        updateGameState(data);
+    });
 
-        if (r.status === 'REVEAL') {
-            document.getElementById('reveal-text').innerHTML = `The word was: <span class="text-success">${r.word_to_draw}</span>`;
-            document.getElementById('congrats-ui').innerHTML = r.last_winner_id ? `<div class="alert alert-success">Winner: ${r.last_winner_id}</div>` : `<div class="alert alert-warning">No one guessed it!</div>`;
-        } else if (r.status === 'WAITING') {
-            document.getElementById('reveal-text').innerHTML = `Room ${r.id}`;
-            document.getElementById('congrats-ui').innerHTML = 'Waiting for players to join & ready up.';
-        }
-
-        document.getElementById('status-bar').innerText = r.status;
-        document.getElementById('game-hint-container').innerHTML = r.hint ? `Word: ${r.hint}` : '';
-
-        // Render Members
-        let memHtml = '';
-        data.members.forEach(m => {
-            let ready = m.is_ready ? '<i class="fas fa-check text-success ms-auto"></i>' : '';
-            let drBadge = m.user_id === r.current_drawer_id ? '<span class="badge bg-warning text-dark ms-2">Drawer</span>' : '';
-            let callBtn = (m.user_id !== tg_id) ? `<button class="btn btn-sm btn-outline-primary ms-2" onclick="initCall('${m.user_id}')"><i class="fas fa-phone"></i></button>` : '';
-            memHtml += `<div class="d-flex align-items-center p-2 bg-white rounded shadow-sm mb-2">
-                <b>${m.user_id === tg_id ? 'You' : m.user_id}</b> ${drBadge} ${callBtn} ${ready}
-            </div>`;
-        });
-        document.getElementById('members-list').innerHTML = memHtml;
-
-        // Render Chats
-        document.getElementById('chat-box').innerHTML = data.chats.map(c => `<div class="msg-box"><b>${c.user_id}</b>: ${c.message}</div>`).join('');
-        // Render Guesses
-        document.getElementById('guesses-list').innerHTML = data.guesses.map(g => `<div class="msg-box"><b>${g.user_id}</b>: ${g.guess_text}</div>`).join('');
-
-        // Call UI updates
-        manageCalls(data.calls);
-
-        // Draw Canvas from state
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4;
-        data.drawings.forEach(jsonStr => {
-            try { JSON.parse(jsonStr).forEach(l => { ctx.beginPath(); ctx.moveTo(l.x0, l.y0); ctx.lineTo(l.x1, l.y1); ctx.stroke(); }); } catch(e){}
+    socket.on('draw_update', (linesObj) => {
+        linesObj.forEach(l => {
+            ctx.beginPath();
+            ctx.moveTo(l.x0, l.y0);
+            ctx.lineTo(l.x1, l.y1);
+            ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4;
+            ctx.stroke();
         });
     });
 
-    socket.on('draw_update', (data) => {
-        if (isDrawer) return; // Drawn locally
-        data.lines.forEach(l => {
-            ctx.beginPath(); ctx.moveTo(l.x0, l.y0); ctx.lineTo(l.x1, l.y1); ctx.stroke();
+    socket.on('clear_canvas', () => ctx.clearRect(0, 0, canvas.width, canvas.height));
+    socket.on('full_draw_state', (allLines) => {
+        allLines.forEach(lines => {
+            lines.forEach(l => {
+                ctx.beginPath(); ctx.moveTo(l.x0, l.y0); ctx.lineTo(l.x1, l.y1); ctx.stroke();
+            });
         });
     });
 
-    // Inputs
+    socket.on('room_closed', () => {
+        showCustomAlert("Room closed", "warning");
+        leaveRoom();
+    });
+
+    socket.on('alert', ({ msg, type }) => showCustomAlert(msg, type));
+
+    // --- WebRTC Socket Handlers (Pure Memory Routing = Fast Economy) ---
+    socket.on('webrtc_signal', ({ sender_id, type, payload }) => {
+        processSignalingData(sender_id, type, payload);
+    });
+
     function createRoom() { socket.emit('create_room'); }
     function joinRoom(id) { socket.emit('join_room', { room_id: id }); }
-    function leaveRoom() { socket.emit('leave_room', { room_id: currentRoom }); }
-    function sendChat() { const i = document.getElementById('chat-input'); if(i.value) socket.emit('chat', { room_id: currentRoom, message: i.value }); i.value=''; }
-    function sendGuess() { const i = document.getElementById('guess-input'); if(i.value) socket.emit('guess', { room_id: currentRoom, guess: i.value }); i.value=''; }
-    function submitWord() { const i = document.getElementById('word-input'); if(i.value.length>2) socket.emit('set_word', { room_id: currentRoom, word: i.value }); i.value=''; }
+    function leaveRoom() { socket.emit('leave_room'); currentRoom = null; showScreen('screen-rooms'); }
+    function sendChat() {
+        const msg = document.getElementById('chat-input').value;
+        if(msg) socket.emit('chat', { room_id: currentRoom, message: msg });
+        document.getElementById('chat-input').value = '';
+    }
+    function sendGuess() {
+        const guess = document.getElementById('guess-input').value;
+        if(guess) socket.emit('guess', { room_id: currentRoom, guess });
+        document.getElementById('guess-input').value = '';
+    }
+    function submitWord() {
+        const word = document.getElementById('word-input').value;
+        if(word) socket.emit('set_word', { room_id: currentRoom, word });
+        document.getElementById('word-input').value = '';
+    }
     function setReady() { socket.emit('set_ready', { room_id: currentRoom }); }
-    function triggerUndo() { socket.emit('undo_draw', { room_id: currentRoom }); }
+    
+    // Drawing Logic
+    const vPencil = document.getElementById('virtual-pencil');
+    const hDraw = document.getElementById('pencil-handle-draw');
+    let lastPos = {x:0, y:0};
 
-    function claimDaily() { socket.emit('claim_daily'); }
-    function watchAd(t) { socket.emit('claim_ad', { type: t }); }
-
-    // Canvas Drawing
-    canvas.addEventListener('mousedown', e => { if(isDrawer) { drawing=true; updatePos(e); }});
-    canvas.addEventListener('mousemove', e => { if(drawing) drawLine(e); });
-    canvas.addEventListener('mouseup', () => { drawing=false; pushDrawings(); });
-    canvas.addEventListener('touchstart', e => { if(isDrawer) { drawing=true; updatePos(e.touches[0]); }}, {passive:false});
-    canvas.addEventListener('touchmove', e => { if(drawing) { e.preventDefault(); drawLine(e.touches[0]); }}, {passive:false});
-    canvas.addEventListener('touchend', () => { drawing=false; pushDrawings(); });
-
-    function updatePos(e) {
+    hDraw.addEventListener('touchstart', e => {
+        if(!isDrawer) return;
+        e.preventDefault(); drawing = true;
         const rect = canvas.getBoundingClientRect();
-        lastPos = { x: (e.clientX - rect.left) * (canvas.width/rect.width), y: (e.clientY - rect.top) * (canvas.height/rect.height) };
-    }
-    function drawLine(e) {
+        lastPos = { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+    }, {passive: false});
+
+    window.addEventListener('touchmove', e => {
+        if (!drawing) return;
+        e.preventDefault();
         const rect = canvas.getBoundingClientRect();
-        const newPos = { x: (e.clientX - rect.left) * (canvas.width/rect.width), y: (e.clientY - rect.top) * (canvas.height/rect.height) };
-        ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(newPos.x, newPos.y); ctx.stroke();
-        localStrokes.push({ x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y });
-        lastPos = newPos;
-    }
-    function pushDrawings() {
-        if(localStrokes.length > 0) {
+        let newX = e.touches[0].clientX - rect.left;
+        let newY = e.touches[0].clientY - rect.top;
+        
+        vPencil.style.left = newX + 'px';
+        vPencil.style.top = newY + 'px';
+
+        ctx.beginPath(); ctx.moveTo(lastPos.x, lastPos.y); ctx.lineTo(newX, newY);
+        ctx.strokeStyle = '#334155'; ctx.lineCap = 'round'; ctx.lineWidth = 4; ctx.stroke();
+        
+        localStrokes.push({ x0: lastPos.x, y0: lastPos.y, x1: newX, y1: newY });
+        lastPos = { x: newX, y: newY };
+    }, {passive: false});
+
+    window.addEventListener('touchend', () => {
+        if (drawing && localStrokes.length > 0) {
             socket.emit('draw', { room_id: currentRoom, lines: JSON.stringify(localStrokes) });
             localStrokes = [];
         }
+        drawing = false;
+    });
+
+    function triggerUndo() { socket.emit('undo_draw', { room_id: currentRoom }); }
+
+    // Render logic
+    function renderRooms(rooms) {
+        const list = document.getElementById('room-list');
+        list.innerHTML = '';
+        rooms.forEach(r => {
+            list.innerHTML += `
+                <div class="col-md-6 mb-3">
+                    <div class="room-card card p-3 shadow-sm text-center">
+                        <h5>Room ${r.id}</h5>
+                        <p>${r.member_count} / 4 Players</p>
+                        <button class="btn btn-primary" onclick="joinRoom(${r.id})">Join</button>
+                    </div>
+                </div>`;
+        });
     }
 
-    // Call Engine
-    async function requestMedia() {
-        if(localStream) return true;
-        try { localStream = await navigator.mediaDevices.getUserMedia({ audio: true }); return true; } 
-        catch (e) { showAlert("Mic access required."); return false; }
-    }
+    function updateGameState(data) {
+        const r = data.room;
+        isDrawer = String(r.current_drawer_id) === String(tg_id);
+        
+        document.getElementById('word-modal').style.display = 'none';
+        document.getElementById('break-modal').style.display = 'none';
+        document.getElementById('virtual-pencil').style.display = isDrawer && r.status === 'DRAWING' ? 'block' : 'none';
+        document.getElementById('draw-controls').style.display = isDrawer && r.status === 'DRAWING' ? 'flex' : 'none';
 
-    function initCall(receiverId) { requestMedia().then(g => { if(g) socket.emit('initiate_call', { room_id: currentRoom, receiver_id: receiverId }); }); }
-    function acceptCall() { requestMedia().then(g => { if(g && currentCallData) socket.emit('accept_call', { call_id: currentCallData.id }); }); }
-    function declineCall() { if(currentCallData) socket.emit('end_call', { call_id: currentCallData.id }); cleanupCall(); }
-    function endCall() { if(currentCallData) socket.emit('end_call', { call_id: currentCallData.id }); cleanupCall(); }
+        if (r.status === 'WAITING') document.getElementById('status-bar').innerText = "Waiting for players...";
+        else if (r.status === 'PRE_DRAW') {
+            document.getElementById('status-bar').innerText = isDrawer ? "Pick a word!" : "Drawer picking...";
+            if(isDrawer) document.getElementById('word-modal').style.display = 'flex';
+        } 
+        else if (r.status === 'DRAWING') {
+            document.getElementById('status-bar').innerText = isDrawer ? "Your turn!" : "Guess the word!";
+            document.getElementById('game-hint-container').innerHTML = isDrawer ? `Word: <b>${r.word_to_draw}</b>` : 'Hint: ***';
+        }
+        else if (r.status === 'REVEAL' || r.status === 'BREAK') {
+            document.getElementById('break-modal').style.display = 'flex';
+            document.getElementById('reveal-text').innerText = "Word: " + r.word_to_draw;
+        }
 
-    function manageCalls(activeCalls) {
-        let myCall = activeCalls.find(c => c.caller_id === tg_id || c.receiver_id === tg_id);
-        if (!myCall) { if(currentCallData) cleanupCall(); return; }
-        currentCallData = myCall;
+        document.getElementById('members-list').innerHTML = data.members.map(m => 
+            `<div class="p-2 border bg-white mb-1 shadow-sm rounded d-flex justify-content-between">
+                <b>${m.user_id}</b> 
+                <div>
+                    ${m.user_id !== tg_id ? `<button class="btn btn-sm btn-outline-primary" onclick="initiateCall('${m.user_id}')"><i class="fas fa-phone"></i></button>` : ''}
+                    ${m.is_ready ? '<i class="fas fa-check text-success"></i>' : '<i class="fas fa-clock"></i>'}
+                </div>
+            </div>`
+        ).join('');
 
-        if (myCall.status === 'RINGING' && myCall.receiver_id === tg_id) {
-            document.getElementById('call-toast-container').classList.add('show');
-            document.getElementById('call-toast-title').innerText = `Call from ${myCall.caller_id}`;
-        } else if (myCall.status === 'ACTIVE') {
+        document.getElementById('chat-box').innerHTML = data.chats.map(c => `<div class="msg-box"><b>${c.user_id}:</b> ${c.message}</div>`).join('');
+        document.getElementById('guesses-list').innerHTML = data.guesses.map(g => `<div class="msg-box"><b>${g.user_id}:</b> ${g.guess_text}</div>`).join('');
+
+        // Calls
+        let myCall = data.calls.find(c => c.caller_id == tg_id || c.receiver_id == tg_id);
+        if(myCall) {
+            currentCallId = myCall.id;
+            if(myCall.status === 'RINGING' && myCall.receiver_id == tg_id) {
+                document.getElementById('call-toast-container').classList.add('show');
+            } else if (myCall.status === 'ACTIVE') {
+                document.getElementById('call-toast-container').classList.remove('show');
+                document.getElementById('active-call-container').style.display = 'block';
+                document.getElementById('active-call-user').innerText = `With: ${myCall.caller_id == tg_id ? myCall.receiver_id : myCall.caller_id}`;
+                if(webrtcState === 'idle') initWebrtc(myCall);
+            }
+        } else {
             document.getElementById('call-toast-container').classList.remove('show');
-            document.getElementById('active-call-container').style.display = 'block';
-            document.getElementById('active-call-user').innerText = `With ${myCall.caller_id===tg_id?myCall.receiver_id:myCall.caller_id}`;
-            
-            if (!peerConnection) startWebRTC();
+            document.getElementById('active-call-container').style.display = 'none';
+            webrtcState = 'idle';
         }
     }
 
-    function startWebRTC() {
-        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]});
+    // --- WebRTC Logic ---
+    function initiateCall(receiver_id) { socket.emit('initiate_call', { room_id: currentRoom, receiver_id }); }
+    function acceptCall() { socket.emit('accept_call', { call_id: currentCallId }); }
+    function declineCall() { socket.emit('end_call', { call_id: currentCallId }); }
+    function endCall() { socket.emit('end_call', { call_id: currentCallId }); }
+
+    async function initWebrtc(call) {
+        if(peerConnection) return;
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
         localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
         
         peerConnection.onicecandidate = e => {
-            if (e.candidate) socket.emit('webrtc_signal', { call_id: currentCallData.id, receiver_id: currentCallData.caller_id===tg_id?currentCallData.receiver_id:currentCallData.caller_id, type: 'candidate', payload: e.candidate });
+            if(e.candidate) socket.emit('webrtc_signal', { call_id: call.id, receiver_id: call.caller_id == tg_id ? call.receiver_id : call.caller_id, type: 'candidate', payload: JSON.stringify(e.candidate) });
         };
-        peerConnection.ontrack = e => { document.getElementById('remote-audio').srcObject = e.streams[0]; document.getElementById('remote-audio').play(); };
-
-        if (currentCallData.caller_id === tg_id) {
-            peerConnection.createOffer().then(o => peerConnection.setLocalDescription(o)).then(() => {
-                socket.emit('webrtc_signal', { call_id: currentCallData.id, receiver_id: currentCallData.receiver_id, type: 'offer', payload: peerConnection.localDescription });
-            });
+        peerConnection.ontrack = e => document.getElementById('remote-audio').srcObject = e.streams[0];
+        
+        if(call.caller_id == tg_id) {
+            webrtcState = 'offering';
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('webrtc_signal', { call_id: call.id, receiver_id: call.receiver_id, type: 'offer', payload: JSON.stringify(offer) });
+        } else {
+            webrtcState = 'waiting';
         }
     }
 
-    socket.on('webrtc_signal_received', async (data) => {
-        if (!peerConnection) startWebRTC();
-        if (data.type === 'offer') {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
-            const ans = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(ans);
-            socket.emit('webrtc_signal', { call_id: data.call_id, receiver_id: data.sender_id, type: 'answer', payload: peerConnection.localDescription });
-        } else if (data.type === 'answer') {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
-        } else if (data.type === 'candidate') {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data.payload));
+    async function processSignalingData(sender, type, payload) {
+        if(!peerConnection) return;
+        const data = JSON.parse(payload);
+        if(type === 'offer') {
+            await peerConnection.setRemoteDescription(data);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('webrtc_signal', { call_id: currentCallId, receiver_id: sender, type: 'answer', payload: JSON.stringify(answer) });
+        } else if (type === 'answer') {
+            await peerConnection.setRemoteDescription(data);
+        } else if (type === 'candidate') {
+            await peerConnection.addIceCandidate(data);
         }
-    });
-
-    function cleanupCall() {
-        document.getElementById('call-toast-container').classList.remove('show');
-        document.getElementById('active-call-container').style.display = 'none';
-        if (peerConnection) { peerConnection.close(); peerConnection = null; }
-        currentCallData = null;
     }
 
-    function showScreen(id) { document.querySelectorAll('.screen').forEach(s => s.classList.remove('active')); document.getElementById(id).classList.add('active'); }
-    function showAlert(msg) { document.getElementById('modal-alert-message').innerText = msg; document.getElementById('modal-alert').style.display='flex'; }
+    // Basic UI interactions
     function togglePanel() { document.getElementById('right-panel').classList.toggle('open'); }
-    function switchTab(t) {
+    function switchTab(tab) {
         document.getElementById('tab-chat').classList.remove('active');
         document.getElementById('tab-guess').classList.remove('active');
-        document.getElementById(`tab-${t}`).classList.add('active');
+        document.getElementById(`tab-${tab}`).classList.add('active');
     }
+    function showScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+    function showCustomAlert(msg) {
+        document.getElementById('modal-alert-message').innerText = msg;
+        const modal = document.getElementById('modal-alert');
+        modal.style.display = 'flex';
+        setTimeout(() => modal.style.opacity = '1', 10);
+    }
+    function closeAlert() { document.getElementById('modal-alert').style.display = 'none'; }
 </script>
 </body>
 </html>
