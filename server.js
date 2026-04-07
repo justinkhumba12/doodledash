@@ -165,8 +165,8 @@ async function getUserState(tg_id) {
     const [rows] = await db.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
+        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
+        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
         (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
@@ -188,8 +188,20 @@ let lastCleanupDay = new Date().getUTCDate();
 
 const broadcastRooms = async () => {
     // Send both Private and Public Rooms
-    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
-    io.emit('lobby_rooms_update', rooms);
+    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+    
+    io.sockets.sockets.forEach(s => {
+        const userId = s.currentUser;
+        const customizedRooms = rooms.map(r => {
+            if (r.creator_id === userId) {
+                return r; // Send password if they created it
+            } else {
+                const { password, ...safeRoom } = r;
+                return safeRoom;
+            }
+        });
+        s.emit('lobby_rooms_update', customizedRooms);
+    });
 };
 
 // Auto Room Resetter and Deleter
@@ -334,7 +346,8 @@ io.on('connection', (socket) => {
             }
 
             const userState = await getUserState(tg_id);
-            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+            const customizedRooms = rooms.map(r => r.creator_id === tg_id ? r : { ...r, password: null });
             
             const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
             if (existing.length > 0) {
@@ -343,7 +356,7 @@ io.on('connection', (socket) => {
                 syncRoom(currentRoom);
             }
 
-            socket.emit('lobby_data', { user: userState, rooms, currentRoom });
+            socket.emit('lobby_data', { user: userState, rooms: customizedRooms, currentRoom });
         } catch (err) {}
     });
 
@@ -382,11 +395,11 @@ io.on('connection', (socket) => {
                     if (!user.last_date || !isToday) {
                         await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
-                    } else if (user.claims < 2 && (user.mins_passed === null || user.mins_passed >= 180)) {
+                    } else if (user.claims < 3 && (user.mins_passed === null || user.mins_passed >= 180)) {
                         await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
                     } else {
-                        msg = 'Ad reward not available yet. Max 2 per day, 3 hours apart.';
+                        msg = 'Ad reward not available yet. Max 3 per day, 3 hours apart.';
                     }
                 }
             }
@@ -409,11 +422,12 @@ io.on('connection', (socket) => {
 
             if (is_private) {
                 const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-                let cost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+                let timeCost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+                let totalCost = limit + timeCost;
 
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Private rooms cost ${cost} credits.`);
-                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                if (u[0].credits < totalCost) return socket.emit('create_error', `Not enough credits. Costs ${totalCost} credits.`);
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
                 
                 [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password || null, limit, currentUser, hours]);
             } else {
@@ -628,7 +642,7 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom) return;
 
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+            if (u[0].credits < 3) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
             const [member] = await db.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             if(member.length === 0) return;
@@ -636,10 +650,10 @@ io.on('connection', (socket) => {
             let purchased = JSON.parse(member[0].purchased_hints || '[]');
             if (!purchased.includes(index)) {
                 purchased.push(index);
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                await db.query('UPDATE users SET credits = credits - 3 WHERE tg_id = ?', [currentUser]);
                 await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
                 
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 1 Credit!`]);
+                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 3 Credits!`]);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
