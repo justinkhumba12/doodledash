@@ -205,32 +205,40 @@ const syncRoom = async (roomId) => {
             users.forEach(u => profiles[u.tg_id] = u.profile_pic);
         }
 
-        const activeCallsList = Array.from(activeCalls.values()).filter(c => c.room_id === roomId);
-        const sockets = await io.in(`room_${roomId}`).fetchSockets();
+        // FIX: Strip interval/NodeJS timer objects to prevent Call Stack Exceeded on binary parser
+        const activeCallsList = Array.from(activeCalls.values())
+            .filter(c => c.room_id === roomId)
+            .map(c => ({
+                id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id
+            }));
 
-        // Broadcast tailor-made states for server-side blurring 
-        for (let s of sockets) {
-            const userId = s.currentUser;
-            const isDrawer = roomData[0].current_drawer_id === userId;
-            
-            const sanitizedGuesses = guesses.map(g => {
-                // Determine if we show the real guess or blur it securely from the server
-                if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
-                    return g;
+        const roomSockets = io.sockets.adapter.rooms.get(`room_${roomId}`);
+        if (roomSockets) {
+            for (const socketId of roomSockets) {
+                const s = io.sockets.sockets.get(socketId);
+                if (s) {
+                    const userId = s.currentUser;
+                    const isDrawer = roomData[0].current_drawer_id === userId;
+                    
+                    const sanitizedGuesses = guesses.map(g => {
+                        if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
+                            return g;
+                        }
+                        return { ...g, guess_text: '••••••••' };
+                    });
+
+                    s.emit('room_sync', {
+                        room: roomData[0],
+                        members,
+                        chats, 
+                        guesses: sanitizedGuesses,
+                        drawings: drawings.map(d => d.line_data),
+                        profiles,
+                        activeCalls: activeCallsList,
+                        server_time: new Date()
+                    });
                 }
-                return { ...g, guess_text: '••••••••' };
-            });
-
-            s.emit('room_sync', {
-                room: roomData[0],
-                members,
-                chats, 
-                guesses: sanitizedGuesses,
-                drawings: drawings.map(d => d.line_data),
-                profiles,
-                activeCalls: activeCallsList,
-                server_time: new Date()
-            });
+            }
         }
     } catch (error) {
         console.error("syncRoom error:", error);
@@ -241,12 +249,13 @@ io.on('connection', (socket) => {
     let currentUser = null;
     let currentRoom = null;
     socket.lastActiveEvent = Date.now();
+    socket.idleWarned = false;
 
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         try {
             if (!tg_id) return;
             currentUser = tg_id;
-            socket.currentUser = tg_id; // Set for targeted fetching
+            socket.currentUser = tg_id; 
             socket.join(`user_${tg_id}`);
             
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
@@ -424,10 +433,13 @@ io.on('connection', (socket) => {
 
     socket.on('guess', async ({ guess }) => {
         try {
-            if (!currentUser || !currentRoom || !guess.trim()) return;
+            if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
+            if (!guess || !guess.trim()) return;
             
             const [room] = await db.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
-            if (room.length === 0 || room[0].status !== 'DRAWING' || room[0].current_drawer_id === currentUser) return; // Only allow guesses during drawing phase
+            if (room.length === 0) return;
+            if (room[0].status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
+            if (room[0].current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
             
             // Validate Max 5 Guesses
             const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
@@ -442,19 +454,20 @@ io.on('connection', (socket) => {
             }
             await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
             
-            const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.toLowerCase();
+            const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.trim().toLowerCase();
             
-            await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess, isCorrect]);
+            await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess.trim(), isCorrect]);
             if (isCorrect) {
                 await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
             }
             
-            // Send user update to reflect deducted credit
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
 
             syncRoom(currentRoom);
-        } catch (err) {}
+        } catch (err) {
+            console.error('Guess Error:', err);
+        }
     });
 
     socket.on('set_word', async ({ word }) => {
@@ -594,7 +607,7 @@ setInterval(async () => {
             }
         }
         
-        // Idle Tracker - 60 sec inactivity remove logic
+        // Idle Tracker - 60 sec inactivity remove logic & 50s Warning
         const now = Date.now();
         io.sockets.sockets.forEach(s => {
             if (s.currentRoom) {
