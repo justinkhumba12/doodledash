@@ -272,6 +272,7 @@ io.on('connection', (socket) => {
 
     socket.on('active_event', () => {
         socket.lastActiveEvent = Date.now();
+        socket.idleWarned = false;
     });
 
     socket.on('claim_reward', async ({ type }) => {
@@ -425,8 +426,8 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom || !guess.trim()) return;
             
-            const [room] = await db.query('SELECT word_to_draw, current_drawer_id FROM rooms WHERE id = ?', [currentRoom]);
-            if (room[0]?.current_drawer_id === currentUser) return; // Drawer can't guess
+            const [room] = await db.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
+            if (room.length === 0 || room[0].status !== 'DRAWING' || room[0].current_drawer_id === currentUser) return; // Only allow guesses during drawing phase
             
             // Validate Max 5 Guesses
             const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
@@ -441,7 +442,7 @@ io.on('connection', (socket) => {
             }
             await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
             
-            const isCorrect = room[0]?.word_to_draw?.toLowerCase() === guess.toLowerCase();
+            const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.toLowerCase();
             
             await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess, isCorrect]);
             if (isCorrect) {
@@ -511,7 +512,9 @@ io.on('connection', (socket) => {
     socket.on('initiate_call', async ({ receiver_id }) => {
         if (!currentUser || !currentRoom) return;
         const callId = `call_${Date.now()}_${Math.random()}`;
-        activeCalls.set(callId, { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom });
+        const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
+        activeCalls.set(callId, callObj);
+        io.to(`room_${currentRoom}`).emit('call_update', callObj);
         syncRoom(currentRoom);
     });
 
@@ -521,6 +524,7 @@ io.on('connection', (socket) => {
             call.status = 'ACTIVE';
             call.startTime = Date.now();
             activeCalls.set(call_id, call);
+            io.to(`room_${call.room_id}`).emit('call_update', call);
             
             // Charge ONLY the caller for the call
             call.interval = setInterval(async () => {
@@ -585,6 +589,7 @@ setInterval(async () => {
                 await db.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, r.id]);
                 await db.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [r.id]);
                 await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
+                roomRedoStacks[r.id] = [];
                 syncRoom(r.id);
             }
         }
@@ -592,16 +597,24 @@ setInterval(async () => {
         // Idle Tracker - 60 sec inactivity remove logic
         const now = Date.now();
         io.sockets.sockets.forEach(s => {
-            if (s.currentRoom && now - (s.lastActiveEvent || now) > 60000) {
-                s.emit('kick_idle');
-                db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
-                    checkRoomReset(s.currentRoom).then(() => {
-                        syncRoom(s.currentRoom);
-                        broadcastRooms();
+            if (s.currentRoom) {
+                const idleTime = now - (s.lastActiveEvent || now);
+                if (idleTime > 60000) {
+                    s.emit('kick_idle');
+                    db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
+                        checkRoomReset(s.currentRoom).then(() => {
+                            syncRoom(s.currentRoom);
+                            broadcastRooms();
+                        });
                     });
-                });
-                s.leave(`room_${s.currentRoom}`);
-                s.currentRoom = null;
+                    s.leave(`room_${s.currentRoom}`);
+                    s.currentRoom = null;
+                } else if (idleTime > 50000 && !s.idleWarned) {
+                    s.idleWarned = true;
+                    s.emit('idle_warning');
+                } else if (idleTime <= 50000) {
+                    s.idleWarned = false;
+                }
             }
         });
     } catch (e) { console.error("Game Loop Error:", e); }
