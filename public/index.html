@@ -119,6 +119,7 @@
             const remoteAudioRef = useRef(null);
             const socketRef = useRef(null);
             const candidateQueue = useRef([]);
+            const earlySignalsQueue = useRef([]); // Critical fix for resolving one-way audio race conditions
             const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
 
@@ -160,7 +161,6 @@
 
             const requestMic = async () => {
                 try {
-                    // Added echoCancellation, noiseSuppression, and autoGainControl for better audio quality
                     const stream = await navigator.mediaDevices.getUserMedia({ 
                         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
                     });
@@ -180,7 +180,6 @@
                         { urls: 'stun:stun3.l.google.com:19302' },
                         { urls: 'stun:global.stun.twilio.com:3478' },
                         { urls: 'stun:stun.cloudflare.com:3478' },
-                        // Added Free Public TURN Servers to fix IPv4/IPv6 mismatch and Symmetric NAT issues (One-sided audio fix)
                         { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
                         { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
                         { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
@@ -212,9 +211,6 @@
                 };
 
                 pc.oniceconnectionstatechange = () => {
-                    // Fix for auto-disconnects: 
-                    // 'disconnected' can be a temporary state when changing networks.
-                    // We only terminate the call automatically if the connection permanently 'failed' or 'closed'.
                     if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
                         socketRef.current.emit('end_call', { call_id: callId });
                     }
@@ -228,6 +224,7 @@
                 if (peerConnectionRef.current) peerConnectionRef.current.close();
                 peerConnectionRef.current = null;
                 candidateQueue.current = [];
+                earlySignalsQueue.current = [];
                 if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
                 if (localStreamRef.current) {
                     localStreamRef.current.getTracks().forEach(track => track.stop());
@@ -242,41 +239,55 @@
             const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
                 if (String(target_id) !== String(tgIdRef.current)) return;
                 
-                const pc = peerConnectionRef.current;
-                if (!pc) return; // Signal arrived before connection initialized, ignore/drop
-                
-                try {
-                    if (signal.type === 'offer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
-                        
-                        while (candidateQueue.current.length > 0) {
-                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
-                        }
-                    } else if (signal.type === 'answer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-                        while (candidateQueue.current.length > 0) {
-                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
-                        }
-                    } else if (signal.type === 'candidate') {
-                        const candidate = new RTCIceCandidate(signal.candidate);
-                        if (pc.remoteDescription && pc.remoteDescription.type) {
-                            try { await pc.addIceCandidate(candidate); } catch (e) {}
-                        } else {
-                            candidateQueue.current.push(candidate);
-                        }
+                // Receiver Logic: Create PeerConnection ONLY when the Caller's Offer arrives.
+                // This eliminates the race condition where Receiver candidates drop because Caller isn't ready.
+                if (signal.type === 'offer') {
+                    let stream = localStreamRef.current;
+                    if (!stream) {
+                         stream = await requestMic();
+                         if (stream) { setLocalStream(stream); localStreamRef.current = stream; }
                     }
-                } catch (e) {
-                    console.error("WebRTC Signal Error:", e);
+                    if (!stream) return; 
+                    
+                    const pc = initPeerConnection(stream, sender_id, call_id);
+                    
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                    
+                    // Process any ICE Candidates that arrived slightly before the Offer
+                    while (earlySignalsQueue.current.length > 0) {
+                        try { await pc.addIceCandidate(new RTCIceCandidate(earlySignalsQueue.current.shift().candidate)); } catch(e) {}
+                    }
+                } else if (signal.type === 'answer') {
+                    const pc = peerConnectionRef.current;
+                    if (!pc) return;
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                    
+                    // Process stored ICE Candidates that arrived before the Answer
+                    while (candidateQueue.current.length > 0) {
+                        try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
+                    }
+                } else if (signal.type === 'candidate') {
+                    const pc = peerConnectionRef.current;
+                    if (!pc) {
+                        // Crucial fix: Safely hold early network routes until the PC finishes initializing
+                        earlySignalsQueue.current.push(signal);
+                        return;
+                    }
+                    if (pc.remoteDescription && pc.remoteDescription.type) {
+                        try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
+                    } else {
+                        candidateQueue.current.push(new RTCIceCandidate(signal.candidate));
+                    }
                 }
             };
 
             const handleCallUpdate = async (call) => {
                 setActiveCall(call);
 
-                // Caller logic: Initiate WebRTC ONLY when receiver has accepted (status is ACTIVE)
+                // Caller Logic: Initiate WebRTC ONLY when receiver has accepted (status is ACTIVE)
                 if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
                     let stream = localStreamRef.current;
                     if (!stream) {
@@ -291,7 +302,6 @@
                     const targetId = call.receiver;
                     const pc = initPeerConnection(stream, targetId, call.id);
                     try {
-                        // Added offerToReceiveAudio to ensure strict browsers don't block inbound audio
                         const offer = await pc.createOffer({ offerToReceiveAudio: true });
                         await pc.setLocalDescription(offer);
                         socketRef.current.emit('webrtc_signal', { 
@@ -306,6 +316,8 @@
             };
 
             const initiateCall = async (targetId) => {
+                // Immediate play trigger on button tap to unlock audio context in iOS Safari
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!stream) return;
                 setLocalStream(stream);
@@ -314,14 +326,15 @@
             };
 
             const acceptCall = async (callObj) => {
+                // Immediate play trigger on button tap to unlock audio context in iOS Safari
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!stream || !callObj) return;
                 
                 setLocalStream(stream);
                 localStreamRef.current = stream;
                 
-                // Initialize PC synchronously before accepting to eliminate race conditions
-                initPeerConnection(stream, callObj.caller, callObj.id); 
+                // Do NOT initialize PC here. We wait for the caller's "Offer" to arrive via handleReceiveSignal.
                 socketRef.current.emit('accept_call', { call_id: callObj.id });
             };
 
