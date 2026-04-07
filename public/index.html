@@ -119,6 +119,7 @@
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
             const socketRef = useRef(null);
+            const candidateQueue = useRef([]);
 
             if (!tgId) {
                 return (
@@ -217,12 +218,13 @@
                         { urls: 'stun:stun1.l.google.com:19302' },
                         { urls: 'stun:stun2.l.google.com:19302' },
                         { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' },
-                        { urls: 'stun:stun.services.mozilla.com' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
+                        { urls: 'stun:stun4.l.google.com:19302' }
                     ] 
                 });
-                stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                }
                 
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
@@ -233,13 +235,9 @@
 
                 pc.ontrack = (e) => {
                     if (remoteAudioRef.current) {
-                        if (e.streams && e.streams[0]) {
-                            remoteAudioRef.current.srcObject = e.streams[0];
-                        } else {
-                            let inboundStream = new MediaStream([e.track]);
-                            remoteAudioRef.current.srcObject = inboundStream;
-                        }
-                        remoteAudioRef.current.play().catch(console.error);
+                        remoteAudioRef.current.srcObject = e.streams[0];
+                        // Force play to bypass mobile restrictions
+                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
                     }
                 };
 
@@ -250,15 +248,35 @@
             const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
                 if (target_id !== tgId || !peerConnectionRef.current) return;
                 const pc = peerConnectionRef.current;
-                if (signal.type === 'offer') {
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
-                } else if (signal.type === 'answer') {
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-                } else if (signal.type === 'candidate') {
-                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                
+                try {
+                    if (signal.type === 'offer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                        
+                        // Flush any candidates that arrived early
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                        
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'candidate') {
+                        const candidate = new RTCIceCandidate(signal.candidate);
+                        // Store candidate in queue if remote description isn't ready yet
+                        if (pc.remoteDescription) {
+                            await pc.addIceCandidate(candidate);
+                        } else {
+                            candidateQueue.current.push(candidate);
+                        }
+                    }
+                } catch (e) {
+                    console.error("WebRTC Signal Error:", e);
                 }
             };
 
@@ -272,12 +290,14 @@
                 const stream = await requestMic();
                 if (!stream || !callObj) return;
                 socketRef.current.emit('accept_call', { call_id: callObj.id });
+                setLocalStream(stream);
                 initPeerConnection(stream, callObj);
             };
 
             const cleanupCall = () => {
                 if (peerConnectionRef.current) peerConnectionRef.current.close();
                 peerConnectionRef.current = null;
+                candidateQueue.current = [];
                 if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
@@ -693,20 +713,22 @@
                             
                             {activeCall && activeCall.status === 'ACTIVE' && (
                                 <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
-                                    <div className="d-flex align-items-center justify-content-between w-100 px-2">
+                                    <div className="d-flex align-items-center justify-content-center w-100 px-2">
                                         <div className="d-flex align-items-center gap-2">
                                             <i className="fas fa-phone-volume heartbeat text-success"></i>
-                                            <span className="fw-bold">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
+                                            <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
                                         </div>
-                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
                                     </div>
                                     
-                                    <div className="d-flex align-items-center gap-3 w-100 justify-content-center bg-secondary bg-opacity-25 p-2 rounded-pill">
-                                        <button className={`btn btn-sm ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow`} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
-                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                                    <div className="d-flex align-items-center gap-4 justify-content-center w-100 pb-2">
+                                        <button className={`btn ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
+                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'} fs-5`}></i>
                                         </button>
-                                        <button className={`btn btn-sm ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow`} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
-                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'}`}></i>
+                                        <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
+                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
+                                        </button>
+                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => socket.emit('end_call', {call_id: activeCall.id})} title="End Call">
+                                            <i className="fas fa-phone-slash fs-5"></i>
                                         </button>
                                     </div>
                                 </div>
@@ -726,8 +748,8 @@
                                                 <div className="d-flex flex-column">
                                                     <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
                                                     <div className="d-flex align-items-center gap-1">
-                                                        {m.is_ready && <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span>}
-                                                        {m.has_given_up && <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span>}
+                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : null}
+                                                        {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
                                                     </div>
                                                 </div>
                                             </div>
@@ -931,13 +953,15 @@
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
                     <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                         {chats.map(c => (
-                            <div key={c.id} className={`msg-box d-flex align-items-center gap-2 ${c.user_id === 'System' ? 'sys' : ''}`}>
+                            <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
                                 {c.user_id !== 'System' && (
-                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0"></i>
+                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
                                 )}
-                                <div>
-                                    <b>{c.user_id === 'System' ? 'System' : toHex(c.user_id)}: </b>
-                                    {c.message}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {c.user_id === 'System' ? 'System' : toHex(c.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{c.message}</span>
                                 </div>
                             </div>
                         ))}
@@ -980,9 +1004,9 @@
 
             useEffect(() => {
                 if (guesses.length > prevCount.current) {
-                    const lastGuess = guesses[guesses.length - 1];
-                    // Only play success sound if it's someone ELSE guessing correctly
-                    if (lastGuess.is_correct && lastGuess.user_id !== tgId) {
+                    const newGuesses = guesses.slice(prevCount.current);
+                    const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
+                    if (shouldPlaySound) {
                         guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                     }
                 }
@@ -994,11 +1018,13 @@
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
                     <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                         {guesses.map(g => (
-                            <div key={g.id} className={`msg-box d-flex align-items-center gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`}>
-                                {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0"></i>}
-                                <div>
-                                    <b>{toHex(g.user_id)}: </b>
-                                    {g.guess_text}
+                            <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                                {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {toHex(g.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{g.guess_text}</span>
                                 </div>
                             </div>
                         ))}
