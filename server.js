@@ -204,25 +204,36 @@ const broadcastRooms = async () => {
     });
 };
 
+const deleteRoom = async (roomId) => {
+    if (!roomId) return;
+    try {
+        await db.query("DELETE FROM rooms WHERE id = ?", [roomId]);
+        await db.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
+        await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
+        await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
+        await db.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
+        delete roomRedoStacks[roomId];
+    } catch (e) {
+        console.error("Error completely deleting room:", roomId, e);
+    }
+};
+
 // Auto Room Resetter and Deleter
 const checkRoomReset = async (roomId) => {
     if (!roomId) return;
     try {
-        const [roomRows] = await db.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
-        if (roomRows.length === 0) return;
-        const isPrivate = roomRows[0].is_private;
-
         const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
         if (members[0].c === 0) {
-            // Delete room if empty unless it's room 1 or 2 OR a private room (private rooms expire by time)
-            if (roomId !== 1 && roomId !== 2 && !isPrivate) {
-                await db.query("DELETE FROM rooms WHERE id = ?", [roomId]);
+            // Delete room completely if empty unless it's the fallback base rooms (1 or 2)
+            if (roomId !== 1 && roomId !== 2) {
+                await deleteRoom(roomId);
+            } else {
+                await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+                await db.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
                 await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
                 await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
                 await db.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
                 delete roomRedoStacks[roomId];
-            } else {
-                await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
             }
         } else if (members[0].c < 2) {
             await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
@@ -421,6 +432,10 @@ io.on('connection', (socket) => {
             let insertRes;
 
             if (is_private) {
+                if (!password || password.length < 6 || password.length > 10) {
+                    return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
+                }
+
                 const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
                 let timeCost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
                 let totalCost = limit + timeCost;
@@ -429,7 +444,7 @@ io.on('connection', (socket) => {
                 if (u[0].credits < totalCost) return socket.emit('create_error', `Not enough credits. Costs ${totalCost} credits.`);
                 await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
                 
-                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password || null, limit, currentUser, hours]);
+                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password, limit, currentUser, hours]);
             } else {
                 [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
             }
@@ -532,6 +547,21 @@ io.on('connection', (socket) => {
         } catch(err) { console.error('Extend room error:', err); }
     });
 
+    socket.on('change_password', async ({ password }) => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be 6-10 characters.');
+            
+            const [room] = await db.query('SELECT creator_id FROM rooms WHERE id = ? AND is_private = 1', [currentRoom]);
+            if (room.length === 0 || room[0].creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
+
+            await db.query('UPDATE rooms SET password = ? WHERE id = ?', [password, currentRoom]);
+            socket.emit('reward_success', 'Room password updated successfully!');
+            broadcastRooms();
+            syncRoom(currentRoom);
+        } catch (err) { console.error('Change password error:', err); }
+    });
+
     socket.on('kick_player', async ({ target_id }) => {
         try {
             if (!currentUser || !currentRoom) return;
@@ -558,14 +588,18 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom || !message.trim()) return;
             await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
             
-            await db.query(`
-                DELETE FROM chats 
-                WHERE room_id = ? AND id NOT IN (
-                    SELECT id FROM (
-                        SELECT id FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20
-                    ) t
-                )
-            `, [currentRoom, currentRoom]);
+            const [countRes] = await db.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
+            if (countRes[0].c >= 40) {
+                // Delete oldest ones ensuring only latest 20 remain
+                await db.query(`
+                    DELETE FROM chats 
+                    WHERE room_id = ? AND id NOT IN (
+                        SELECT id FROM (
+                            SELECT id FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20
+                        ) t
+                    )
+                `, [currentRoom, currentRoom]);
+            }
 
             syncRoom(currentRoom);
         } catch (err) {}
@@ -697,6 +731,8 @@ io.on('connection', (socket) => {
 
             await db.query("UPDATE rooms SET word_to_draw = ?, base_hints = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [wordClean, JSON.stringify(hints), currentRoom, currentUser]);
             await db.query("UPDATE room_members SET purchased_hints = '[]', has_given_up = 0 WHERE room_id = ?", [currentRoom]);
+            
+            // Clean up drawing traces and guesses for the new round
             await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
             roomRedoStacks[currentRoom] = [];
@@ -844,7 +880,10 @@ setInterval(async () => {
                 const nextDrawer = members[Math.floor(Math.random() * members.length)].user_id;
                 await db.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, r.id]);
                 await db.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [r.id]);
+                
+                // Clear drawings and guesses for the upcoming round automatically
                 await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
+                await db.query("DELETE FROM drawings WHERE room_id = ?", [r.id]);
                 roomRedoStacks[r.id] = [];
                 syncRoom(r.id);
             }
@@ -883,12 +922,7 @@ setInterval(async () => {
         const [expiredRooms] = await db.query("SELECT id FROM rooms WHERE is_private = 1 AND expire_at <= UTC_TIMESTAMP()");
         for (let r of expiredRooms) {
             io.to(`room_${r.id}`).emit('room_expired');
-            await db.query('DELETE FROM room_members WHERE room_id = ?', [r.id]);
-            await db.query("DELETE FROM rooms WHERE id = ?", [r.id]);
-            await db.query("DELETE FROM drawings WHERE room_id = ?", [r.id]);
-            await db.query("DELETE FROM chats WHERE room_id = ?", [r.id]);
-            await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
-            delete roomRedoStacks[r.id];
+            await deleteRoom(r.id); // Cascade Deletion handled safely
             
             const sockets = await io.in(`room_${r.id}`).fetchSockets();
             sockets.forEach(s => {
