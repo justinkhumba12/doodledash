@@ -274,6 +274,8 @@ io.on('connection', (socket) => {
             if (!tg_id) return;
             currentUser = tg_id;
             socket.currentUser = tg_id; 
+            
+            // CRITICAL for WebRTC signaling
             socket.join(`user_${tg_id}`);
             
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
@@ -646,7 +648,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-        socket.to(`room_${currentRoom}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
+        // CRITICAL FIX: Route direct to user's private socket room, not game room
+        socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
 
     socket.on('disconnect', async () => {
@@ -697,7 +700,7 @@ setInterval(async () => {
                             broadcastRooms();
                         });
                     });
-                    s.leave(`room_${s.currentRoom}`);
+                    s.leave(`room_${s.currentRoaom}`);
                     s.currentRoom = null;
                 } else if (idleTime > 50000 && !s.idleWarned) {
                     s.idleWarned = true;
