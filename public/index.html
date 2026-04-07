@@ -50,6 +50,7 @@
         
         .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
         .cursor-pointer { cursor: pointer; }
+        .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
     </style>
 </head>
 <body>
@@ -119,7 +120,7 @@
             const remoteAudioRef = useRef(null);
             const socketRef = useRef(null);
             const candidateQueue = useRef([]);
-            const earlySignalsQueue = useRef([]); // Critical fix for resolving one-way audio race conditions
+            const earlySignalsQueue = useRef([]); 
             const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
 
@@ -135,7 +136,6 @@
                 );
             }
 
-            // Audio Unlock Trick (Bypass Autoplay policies)
             useEffect(() => {
                 const unlockAudio = () => {
                     const audioEl = remoteAudioRef.current;
@@ -175,14 +175,7 @@
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' },
-                        { urls: 'stun:stun.cloudflare.com:3478' },
-                        { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
-                        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
-                        { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+                        { urls: 'stun:stun1.l.google.com:19302' }
                     ] 
                 });
                 
@@ -239,8 +232,6 @@
             const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
                 if (String(target_id) !== String(tgIdRef.current)) return;
                 
-                // Receiver Logic: Create PeerConnection ONLY when the Caller's Offer arrives.
-                // This eliminates the race condition where Receiver candidates drop because Caller isn't ready.
                 if (signal.type === 'offer') {
                     let stream = localStreamRef.current;
                     if (!stream) {
@@ -256,7 +247,6 @@
                     await pc.setLocalDescription(answer);
                     socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                     
-                    // Process any ICE Candidates that arrived slightly before the Offer
                     while (earlySignalsQueue.current.length > 0) {
                         try { await pc.addIceCandidate(new RTCIceCandidate(earlySignalsQueue.current.shift().candidate)); } catch(e) {}
                     }
@@ -265,14 +255,12 @@
                     if (!pc) return;
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
                     
-                    // Process stored ICE Candidates that arrived before the Answer
                     while (candidateQueue.current.length > 0) {
                         try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
                     }
                 } else if (signal.type === 'candidate') {
                     const pc = peerConnectionRef.current;
                     if (!pc) {
-                        // Crucial fix: Safely hold early network routes until the PC finishes initializing
                         earlySignalsQueue.current.push(signal);
                         return;
                     }
@@ -287,7 +275,6 @@
             const handleCallUpdate = async (call) => {
                 setActiveCall(call);
 
-                // Caller Logic: Initiate WebRTC ONLY when receiver has accepted (status is ACTIVE)
                 if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
                     let stream = localStreamRef.current;
                     if (!stream) {
@@ -309,14 +296,11 @@
                             target_id: targetId, 
                             signal: { type: 'offer', offer } 
                         });
-                    } catch(e) {
-                        console.error("WebRTC Offer Error:", e);
-                    }
+                    } catch(e) {}
                 }
             };
 
             const initiateCall = async (targetId) => {
-                // Immediate play trigger on button tap to unlock audio context in iOS Safari
                 if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!stream) return;
@@ -326,7 +310,6 @@
             };
 
             const acceptCall = async (callObj) => {
-                // Immediate play trigger on button tap to unlock audio context in iOS Safari
                 if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!stream || !callObj) return;
@@ -334,7 +317,6 @@
                 setLocalStream(stream);
                 localStreamRef.current = stream;
                 
-                // Do NOT initialize PC here. We wait for the caller's "Offer" to arrive via handleReceiveSignal.
                 socketRef.current.emit('accept_call', { call_id: callObj.id });
             };
 
@@ -385,7 +367,6 @@
                     }
                 });
 
-                // WebRTC WebSockets Callbacks
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
                 socket.on('call_update', handleCallUpdate);
                 socket.on('call_ended', cleanupCall);
@@ -404,7 +385,6 @@
                 }
             }, []); 
 
-            // Handle Mic Mute Update
             useEffect(() => {
                 if (localStreamRef.current) {
                     localStreamRef.current.getAudioTracks().forEach(track => {
@@ -467,6 +447,7 @@
                                 setIsMicMuted={setIsMicMuted}
                                 isSpeakerMuted={isSpeakerMuted}
                                 setIsSpeakerMuted={setIsSpeakerMuted}
+                                setModal={setModal}
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -506,7 +487,13 @@
                     {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
                         <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
                             <div className="call-toast text-center w-75" onClick={e => e.stopPropagation()}>
-                                <i className="fas fa-phone-volume heartbeat text-success fs-1 mb-3"></i>
+                                <div onClick={() => setProfileModal({ user_id: activeCall.caller, pic: roomData.profiles[activeCall.caller] })} className="cursor-pointer mb-3 d-inline-block position-relative">
+                                    {roomData.profiles[activeCall.caller] ? (
+                                        <img src={roomData.profiles[activeCall.caller]} className="rounded-circle shadow heartbeat" width="80" height="80" style={{objectFit: 'cover'}}/>
+                                    ) : (
+                                        <i className="fas fa-user-circle fs-1 text-secondary heartbeat" style={{fontSize: '80px'}}></i>
+                                    )}
+                                </div>
                                 <h4>Incoming Call</h4>
                                 <p className="text-muted">From {toHex(activeCall.caller)}</p>
                                 <div className="d-flex gap-2 mt-3">
@@ -609,8 +596,6 @@
                         </div>
                     </>
                 );
-            } else if (modal.type === 'idle_warning') {
-                content = <IdleWarningModal socket={socket} close={close} />;
             } else if (modal.type === 'confirm_guess_credit') {
                 content = (
                     <>
@@ -619,6 +604,17 @@
                         <div className="d-flex gap-2 mt-4">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_buy_hint') {
+                content = (
+                    <>
+                        <p className="text-muted">Reveal this hidden character for <b>1 Credit</b>?</p>
+                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 1 Credit</div>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
                         </div>
                     </>
                 );
@@ -768,7 +764,7 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted }) => {
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
             const { room, members, activeCalls } = roomData;
             const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
 
@@ -776,6 +772,28 @@
                 <div className="row">
                     <div className="col-12 col-lg-8 mx-auto">
                         <div className="whiteboard-wrapper">
+                            
+                            {/* Word Hint Bar Implementation */}
+                            {roomData.room.status === 'DRAWING' && roomData.masked_word && (
+                                <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
+                                    {roomData.masked_word.map((item, i) => (
+                                        <div 
+                                            key={i}
+                                            className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white' : 'bg-secondary text-white cursor-pointer'}`}
+                                            style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                            onClick={() => {
+                                                if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                                    setModal({ type: 'confirm_buy_hint', index: item.index });
+                                                }
+                                            }}
+                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (1 Credit)" : ""}
+                                        >
+                                            {item.revealed ? item.char : '?'}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
                             <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
                             
                             {activeCall && activeCall.status === 'ACTIVE' && (
@@ -952,8 +970,9 @@
                     {room.status === 'PRE_DRAW' && isDrawer && (
                         <div className="wb-overlay">
                             <h4 className="text-primary fw-bold">Your turn to draw!</h4>
-                            <input type="text" className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
-                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                            <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
+                            <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
                         </div>
                     )}
                     
