@@ -13,7 +13,6 @@
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
     <link rel="preload" href="/audio/call.mp3" as="audio">
-    <link rel="preload" href="/thememusic/themesongdefault.mp3" as="audio">
     
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -139,15 +138,18 @@
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
-            // Volumes & Background Music settings
+            // Volumes & Background Music settings (Defaults to loud notifications, quiet BGM)
             const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
             const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
             const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
-            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.5'));
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15')); // Quiet BGM
             
             const defaultBGM = 'themesongdefault.mp3';
-            const [currentBgm, setCurrentBgm] = useState(() => localStorage.getItem('currentBgm') || defaultBGM);
-            const availableMusics = [defaultBGM, 'chill_theme.mp3', 'upbeat_theme.mp3', 'lofi_theme.mp3'];
+            const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
+            
+            // Mode can be 'random' or a specific filename
+            const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
+            const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
             const [policyAccepted, setPolicyAccepted] = useState(() => localStorage.getItem('audioPolicy') === 'true');
 
@@ -196,20 +198,32 @@
                 localStorage.setItem('bgmVol', bgmVol);
             }, [bgmVol]);
 
+            // Set active track based on mode and room join
+            useEffect(() => {
+                if (currentRoomId) {
+                    if (currentBgmMode === 'random') {
+                        const randomIndex = Math.floor(Math.random() * availableMusics.length);
+                        setActiveTrack(availableMusics[randomIndex]);
+                    } else {
+                        setActiveTrack(currentBgmMode);
+                    }
+                }
+            }, [currentRoomId, currentBgmMode]);
+
             // BGM Player logic
             useEffect(() => {
                 const bgm = document.getElementById('bgmSound');
                 if (!bgm) return;
                 if (currentRoomId && policyAccepted) {
-                    const expectedSrc = window.location.origin + '/thememusic/' + currentBgm;
-                    if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== '/thememusic/' + currentBgm) {
-                        bgm.src = '/thememusic/' + currentBgm;
+                    const expectedSrc = window.location.origin + encodeURI('/thememusic/' + activeTrack);
+                    if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== encodeURI('/thememusic/' + activeTrack)) {
+                        bgm.src = encodeURI('/thememusic/' + activeTrack);
                     }
                     bgm.play().catch(e => console.log('BGM Autoplay Blocked:', e));
                 } else {
                     bgm.pause();
                 }
-            }, [currentRoomId, policyAccepted, currentBgm]);
+            }, [currentRoomId, policyAccepted, activeTrack]);
 
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
@@ -526,21 +540,29 @@
                 }
             }, [isMicMuted, localStream]);
 
-            const [touchStart, setTouchStart] = useState(null);
-            const onTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+            // Track touch position safely preventing diagonal collision
+            const [touchStartPos, setTouchStartPos] = useState(null);
+            const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
             const onTouchEnd = (e) => {
-                if (!touchStart) return;
-                const touchEndX = e.changedTouches[0].clientX;
-                const diff = touchStart - touchEndX;
-                if (diff > 50) {
+                if (!touchStartPos) return;
+                const diffX = touchStartPos.x - e.changedTouches[0].clientX;
+                const diffY = touchStartPos.y - e.changedTouches[0].clientY;
+                
+                // If the user scrolled vertically more than horizontally, DO NOT swap tabs.
+                if (Math.abs(diffY) > Math.abs(diffX)) {
+                    setTouchStartPos(null);
+                    return;
+                }
+
+                if (diffX > 50) {
                     if (activeTab === 'guess') setActiveTab('chat');
                     else if (activeTab === 'chat') setActiveTab('sounds');
-                } else if (diff < -50) { 
+                } else if (diffX < -50) { 
                     if (activeTab === 'sounds') setActiveTab('chat');
                     else if (activeTab === 'chat') setActiveTab('guess');
                     else if (activeTab === 'guess') setPanelOpen(false);
                 }
-                setTouchStart(null);
+                setTouchStartPos(null);
             };
 
             if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
@@ -694,17 +716,28 @@
                                                 </div>
 
                                                 <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-music text-primary"></i> Theme Music</h6>
+                                                
+                                                <button 
+                                                    className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
+                                                    onClick={() => {
+                                                        setCurrentBgmMode('random');
+                                                        localStorage.setItem('currentBgmMode', 'random');
+                                                    }}
+                                                >
+                                                    <i className="fas fa-random"></i> {currentBgmMode === 'random' ? 'Random Mode Active' : 'Use Randomly'}
+                                                </button>
+
                                                 {availableMusics.map(music => (
                                                     <div key={music} className="d-flex justify-content-between align-items-center bg-white p-2 rounded shadow-sm mb-2 border">
                                                         <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
-                                                        <button className={`btn btn-sm ${currentBgm === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
-                                                            setCurrentBgm(music);
-                                                            localStorage.setItem('currentBgm', music);
+                                                        <button className={`btn btn-sm ${currentBgmMode === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
+                                                            setCurrentBgmMode(music);
+                                                            localStorage.setItem('currentBgmMode', music);
                                                             if ('caches' in window) {
-                                                                caches.open('doodledash-cache-v1').then(cache => cache.add('/thememusic/' + music)).catch(()=>{});
+                                                                caches.open('doodledash-cache-v2').then(cache => cache.add(encodeURI('/thememusic/' + music))).catch(()=>{});
                                                             }
                                                         }}>
-                                                            {currentBgm === music ? 'Active' : 'Use'}
+                                                            {currentBgmMode === music ? 'Active' : 'Use'}
                                                         </button>
                                                     </div>
                                                 ))}
@@ -1019,20 +1052,28 @@
             const [searchId, setSearchId] = useState('');
             const [adState, setAdState] = useState({ show: false });
             const [activeTab, setActiveTab] = useState('public');
-            const [touchStart, setTouchStart] = useState(null);
+            
+            const [touchStartPos, setTouchStartPos] = useState(null);
 
-            const handleTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+            const handleTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
             const handleTouchEnd = (e) => {
-                if (!touchStart) return;
-                const diff = touchStart - e.changedTouches[0].clientX;
-                if (diff > 50) {
+                if (!touchStartPos) return;
+                const diffX = touchStartPos.x - e.changedTouches[0].clientX;
+                const diffY = touchStartPos.y - e.changedTouches[0].clientY;
+
+                if (Math.abs(diffY) > Math.abs(diffX)) {
+                    setTouchStartPos(null);
+                    return;
+                }
+
+                if (diffX > 50) {
                     if (activeTab === 'public') setActiveTab('private');
                     else if (activeTab === 'private') setActiveTab('my_rooms');
-                } else if (diff < -50) {
+                } else if (diffX < -50) {
                     if (activeTab === 'my_rooms') setActiveTab('private');
                     else if (activeTab === 'private') setActiveTab('public');
                 }
-                setTouchStart(null);
+                setTouchStartPos(null);
             };
 
             const triggerAd = (adNum, prefix) => {
