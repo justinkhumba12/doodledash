@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>DoodleDash - React Clone</title>
     
-    <!-- Dependencies -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,7 +12,6 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     
-    <!-- React & Babel -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -29,13 +27,13 @@
         
         .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
         
-        /* STRICT Fixed Square Whiteboard Constraints */
-        .whiteboard-container { width: 350px !important; height: 350px !important; min-width: 350px; min-height: 350px; max-width: 350px; max-height: 350px; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
-        canvas { cursor: crosshair; width: 350px !important; height: 350px !important; display: block; }
+        /* Fully Responsive Square Constraints */
+        .whiteboard-container { width: 100% !important; max-width: 500px !important; aspect-ratio: 1/1; height: auto !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
+        canvas { cursor: crosshair; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
         
         .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
         
-        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; }
+        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; touch-action: pan-y; }
         .interaction-panel.open { right: 0; }
         .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); }
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
@@ -50,6 +48,9 @@
         .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
         @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
         .heartbeat { animation: heartbeat 1s infinite; }
+        
+        .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
+        .cursor-pointer { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -62,13 +63,13 @@
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
         
-        // Audio Effects setup
         const mgsSound = new Audio('/audio/mgs_notification.mp3');
         const guessSound = new Audio('/audio/guess_notification.mp3');
 
-        // Requirement 1: Cannot use without valid user_id from parameter
         const tgId = urlParams.get('user_id');
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
+
+        const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
         const App = () => {
             const [user, setUser] = useState(null);
@@ -78,6 +79,7 @@
             const [activeTab, setActiveTab] = useState('chat');
             const [panelOpen, setPanelOpen] = useState(false);
             const [modal, setModal] = useState(null);
+            const [profileModal, setProfileModal] = useState(null);
             
             const [activeCall, setActiveCall] = useState(null);
             const [localStream, setLocalStream] = useState(null);
@@ -98,14 +100,9 @@
             }
 
             useEffect(() => {
-                // FIX: Force WebSocket transport to prevent 400 Bad Request errors on Railway proxy
-                const socket = io({
-                    transports: ['websocket'],
-                    upgrade: false
-                });
+                const socket = io({ transports: ['websocket'], upgrade: false });
                 socketRef.current = socket;
 
-                // FIX: Re-emit auth every time socket connects/reconnects so server remembers the user
                 socket.on('connect', () => {
                     socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
                 });
@@ -113,16 +110,17 @@
                 socket.on('lobby_data', (data) => {
                     setUser(data.user);
                     setRooms(data.rooms);
-                    if (data.currentRoom) {
-                        setCurrentRoomId(data.currentRoom);
-                    } else {
-                        setCurrentRoomId(null);
-                        setRoomData(null);
-                    }
+                    setCurrentRoomId(data.currentRoom || null);
+                    if(!data.currentRoom) setRoomData(null);
                 });
-
+                
+                socket.on('lobby_rooms_update', (data) => setRooms(data));
                 socket.on('user_update', (userData) => setUser(userData));
                 socket.on('room_sync', (data) => setRoomData(data));
+                socket.on('kick_idle', () => {
+                    setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
+                    setCurrentRoomId(null);
+                });
 
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Reward Claimed!', content: msg }));
                 socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
@@ -146,12 +144,17 @@
                     }
                 });
 
-                // WebRTC Signaling
-                socket.on('call_update', (call) => setActiveCall(call));
-                socket.on('call_ended', () => cleanupCall());
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
+                
+                const resetIdle = () => socket.emit('active_event');
+                window.addEventListener('mousemove', resetIdle);
+                window.addEventListener('touchstart', resetIdle);
 
-                return () => socket.disconnect();
+                return () => {
+                    window.removeEventListener('mousemove', resetIdle);
+                    window.removeEventListener('touchstart', resetIdle);
+                    socket.disconnect();
+                }
             }, []); 
 
             const requestMic = async () => {
@@ -208,12 +211,31 @@
                 socketRef.current.emit('initiate_call', { receiver_id: targetId });
             };
 
-            const acceptCall = async () => {
+            const acceptCall = async (callObj) => {
                 const stream = await requestMic();
-                if (!stream || !activeCall) return;
-                socketRef.current.emit('accept_call', { call_id: activeCall.id });
-                initPeerConnection(stream, activeCall);
+                if (!stream || !callObj) return;
+                socketRef.current.emit('accept_call', { call_id: callObj.id });
+                initPeerConnection(stream, callObj);
             };
+
+            const cleanupCall = () => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                setActiveCall(null);
+            };
+
+            useEffect(() => {
+                const handleCallUpdate = (call) => setActiveCall(call);
+                const handleCallEnded = () => cleanupCall();
+                
+                socketRef.current.on('call_update', handleCallUpdate);
+                socketRef.current.on('call_ended', handleCallEnded);
+                return () => {
+                    socketRef.current.off('call_update', handleCallUpdate);
+                    socketRef.current.off('call_ended', handleCallEnded);
+                }
+            }, []);
 
             useEffect(() => {
                 if (activeCall?.status === 'ACTIVE' && activeCall.caller === tgId && !peerConnectionRef.current) {
@@ -230,11 +252,19 @@
                 }
             }, [activeCall]);
 
-            const cleanupCall = () => {
-                if (peerConnectionRef.current) peerConnectionRef.current.close();
-                peerConnectionRef.current = null;
-                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-                setActiveCall(null);
+            // Touch Swipe Handler
+            const [touchStart, setTouchStart] = useState(null);
+            const onTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+            const onTouchEnd = (e) => {
+                if (!touchStart) return;
+                const touchEndX = e.changedTouches[0].clientX;
+                const diff = touchStart - touchEndX;
+                if (diff > 50) { // Swiped Left
+                    setActiveTab(prev => prev === 'chat' ? 'guess' : 'chat');
+                } else if (diff < -50) { // Swiped Right
+                    setPanelOpen(false);
+                }
+                setTouchStart(null);
             };
 
             if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
@@ -244,7 +274,7 @@
                     <audio ref={remoteAudioRef} autoPlay playsInline hidden></audio>
                     <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill">
+                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm">
                             <i className="fas fa-coins text-warning me-1"></i> <b>{user.credits}</b>
                         </div>
                     </div>
@@ -252,16 +282,27 @@
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
                     ) : roomData ? (
-                        <div className="container-fluid">
+                        <div className="container-fluid pt-3">
+                            <div className="col-12 col-lg-8 mx-auto room-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <span className="badge bg-primary rounded-pill px-3 py-2 fs-6 mb-1 d-inline-block">Room {roomData.room.id} {roomData.room.is_private ? '(Priv)' : ''}</span>
+                                    <div className="text-muted small"><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                                </div>
+                                <div className="text-center">
+                                    <strong className="text-primary fs-5">{roomData.room.status} Phase</strong>
+                                </div>
+                                <button className="btn btn-outline-danger btn-sm rounded-pill px-3 shadow-sm" onClick={() => { socketRef.current.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
+                            </div>
+                        
                             <GameRoom 
                                 roomData={roomData} 
                                 tgId={tgId} 
-                                onLeave={() => { socketRef.current.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }} 
-                                onCall={initiateCall}
+                                onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
                                 socket={socketRef.current}
+                                setProfileModal={setProfileModal}
                             />
                             
-                            <div className={`interaction-panel ${panelOpen ? 'open' : ''}`}>
+                            <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
                                 <div className="floating-toggle" onClick={() => setPanelOpen(!panelOpen)}>
                                     <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                 </div>
@@ -276,17 +317,29 @@
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} />
+                    
+                    {profileModal && (
+                        <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.6)', position: 'fixed'}} onClick={() => setProfileModal(null)}>
+                            <div className="call-toast text-center" onClick={e=>e.stopPropagation()}>
+                                <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow" width="100" height="100" />
+                                <h3>{toHex(profileModal.user_id)}</h3>
+                                <p className="text-muted">Player Profile</p>
+                                <button className="btn btn-primary w-100 mt-2 rounded-pill" onClick={() => setProfileModal(null)}>Close</button>
+                            </div>
+                        </div>
+                    )}
 
                     {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
-                        <div className="wb-overlay" style={{ zIndex: 3000 }}>
+                        <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
                             <div className="call-toast text-center w-75">
                                 <i className="fas fa-phone-volume heartbeat text-success fs-1 mb-3"></i>
                                 <h4>Incoming Call</h4>
-                                <p className="text-muted">From {activeCall.caller.substring(0,6)}</p>
+                                <p className="text-muted">From {toHex(activeCall.caller)}</p>
+                                <p className="small text-danger">Cost: 1 Credit/Minute</p>
                                 <div className="d-flex gap-2 mt-3">
                                     <button className="btn btn-danger w-50" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
-                                    <button className="btn btn-success w-50" onClick={acceptCall}><i className="fas fa-phone"></i> Accept</button>
+                                    <button className="btn btn-success w-50" onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i> Accept</button>
                                 </div>
                             </div>
                         </div>
@@ -294,7 +347,7 @@
                     {activeCall && activeCall.status === 'ACTIVE' && (
                         <div className="position-fixed bottom-0 start-50 translate-middle-x mb-3 p-3 bg-dark text-white rounded-pill shadow-lg d-flex align-items-center gap-3" style={{ zIndex: 2000 }}>
                             <i className="fas fa-phone-volume heartbeat text-success"></i>
-                            <span>Call Active with {activeCall.caller === tgId ? activeCall.receiver.substring(0,6) : activeCall.caller.substring(0,6)}</span>
+                            <span>In Call: {activeCall.caller === tgId ? toHex(activeCall.receiver) : toHex(activeCall.caller)}</span>
                             <button className="btn btn-sm btn-danger rounded-circle" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
                         </div>
                     )}
@@ -302,7 +355,7 @@
             );
         };
 
-        const ModalManager = ({ modal, setModal, socket }) => {
+        const ModalManager = ({ modal, setModal, socket, initiateCall }) => {
             if (!modal) return null;
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
@@ -315,7 +368,7 @@
                 content = (
                     <>
                         <div className="mb-4 text-muted">{modal.content}</div>
-                        <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100`} onClick={close}>Close</button>
+                        <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
                     </>
                 );
             } else if (modal.type === 'create_room') {
@@ -342,8 +395,8 @@
                             </>
                         )}
                         <div className="d-flex gap-2">
-                            <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers }); close(); }}>Create</button>
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers }); close(); }}>Create</button>
                         </div>
                     </>
                 );
@@ -353,8 +406,8 @@
                         <p className="text-muted">Enter password to join Room {modal.room_id}</p>
                         <input type="password" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
                         <div className="d-flex gap-2">
-                            <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
                         </div>
                     </>
                 );
@@ -363,8 +416,21 @@
                     <>
                         <p className="text-muted">{modal.content}</p>
                         <div className="d-flex gap-2">
-                            <button className="btn btn-secondary w-50" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm Join</button>
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm Join</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'call_warn') {
+                content = (
+                    <>
+                        <div className="alert alert-warning mb-3">
+                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit per minute</b> for both users.
+                        </div>
+                        <p className="text-muted text-center mb-4">Do you want to continue?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { initiateCall(modal.target_id); close(); }}><i className="fas fa-phone"></i> Call Now</button>
                         </div>
                     </>
                 );
@@ -385,11 +451,19 @@
 
         const LobbyView = ({ user, rooms, setModal, socket }) => {
             const [searchId, setSearchId] = useState('');
+            const [adState, setAdState] = useState({ show: false, timer: 0, type: '' });
             
-            const handleSearch = () => {
-                if (!searchId) return;
-                socket.emit('search_room', { room_id: searchId });
-            };
+            const handleSearch = () => { if (searchId) socket.emit('search_room', { room_id: searchId }); };
+
+            useEffect(() => {
+                if (adState.show && adState.timer > 0) {
+                    const t = setTimeout(() => setAdState(prev => ({ ...prev, timer: prev.timer - 1 })), 1000);
+                    return () => clearTimeout(t);
+                } else if (adState.show && adState.timer === 0) {
+                    setAdState(prev => ({ ...prev, show: false }));
+                    socket.emit('claim_reward', { type: adState.type });
+                }
+            }, [adState.show, adState.timer]);
 
             const renderAdBtn = (adNum, title) => {
                 const prefix = adNum === 1 ? 'ad' : 'ad2';
@@ -402,34 +476,12 @@
 
                 if (!isAvailable) {
                     disabled = true;
-                    if (claims >= 2) {
-                        btnText = `Max 2/2 Reached`;
-                    } else {
-                        const hrs = Math.floor(waitMins / 60);
-                        const mins = waitMins % 60;
-                        btnText = `Wait ${hrs}h ${mins}m`;
-                    }
+                    if (claims >= 2) { btnText = `Max 2/2 Reached`; } 
+                    else { btnText = `Wait ${Math.floor(waitMins / 60)}h ${waitMins % 60}m`; }
                 }
 
-                // Requirement 6: Specific Ad code implementations
-                const runAd = () => {
-                    // Safety check if ad lib isn't injected yet
-                    if (typeof window.show_10812134 !== 'function') {
-                        window.show_10812134 = () => new Promise(res => setTimeout(res, 1500)); 
-                    }
-
-                    // Trigger specific Ads
-                    const adPromise = adNum === 1 ? window.show_10812134('pop') : window.show_10812134();
-
-                    adPromise.then(() => {
-                        socket.emit('claim_reward', { type: prefix });
-                    }).catch(e => {
-                        setModal({ type: 'error', title: 'Ad Failed', content: 'Ad could not be loaded.' });
-                    });
-                };
-
                 return (
-                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={runAd}>
+                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={() => setAdState({ show: true, timer: 5, type: prefix })}>
                         {btnText} ({claims}/2)
                     </button>
                 );
@@ -450,14 +502,14 @@
                         <div className="col-md-4 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'}}>
                                 <h5><i className="fas fa-tv"></i> Ad Bonus 1</h5>
-                                <p className="small mb-2">Get 2 Free Credits!</p>
+                                <p className="small mb-2">Watch to earn 2 Credits!</p>
                                 {renderAdBtn(1, 'Watch Ad 1')}
                             </div>
                         </div>
                         <div className="col-md-4 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f43f5e 0%, #fb7185 100%)'}}>
                                 <h5><i className="fas fa-tv"></i> Ad Bonus 2</h5>
-                                <p className="small mb-2">Get 2 Free Credits!</p>
+                                <p className="small mb-2">Watch to earn 2 Credits!</p>
                                 {renderAdBtn(2, 'Watch Ad 2')}
                             </div>
                         </div>
@@ -465,13 +517,13 @@
                     
                     <div className="d-flex justify-content-between align-items-center mb-3">
                         <h3 className="fw-bold m-0">Game Lobbies</h3>
-                        <button className="btn btn-primary shadow-sm" onClick={() => setModal({ type: 'create_room' })}>
-                            <i className="fas fa-plus"></i> Create Room
+                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room' })}>
+                            <i className="fas fa-plus"></i> Create
                         </button>
                     </div>
 
-                    <div className="input-group mb-4 shadow-sm rounded overflow-hidden">
-                        <input type="text" className="form-control border-0 px-3" placeholder="Search Room ID..." value={searchId} onChange={e => setSearchId(e.target.value)} />
+                    <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border">
+                        <input type="text" className="form-control border-0 px-4" placeholder="Search Room ID..." value={searchId} onChange={e => setSearchId(e.target.value)} />
                         <button className="btn btn-dark px-4" onClick={handleSearch}><i className="fas fa-search"></i> Search</button>
                     </div>
 
@@ -485,7 +537,7 @@
                                             <h5 className="fw-bold m-0">Room {r.id}</h5>
                                             <span className={`badge ${isFull ? 'bg-danger' : 'bg-success'}`}>{isFull ? 'Full' : 'Open'}</span>
                                         </div>
-                                        <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members}</p>
+                                        <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members} Players</p>
                                         <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={isFull} 
                                             onClick={() => setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${r.id}? This costs 1 Credit.`, room_id: r.id })}>
                                             Join (1 Credit)
@@ -495,40 +547,63 @@
                             );
                         })}
                     </div>
+
+                    {adState.show && (
+                        <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                            <h2 className="text-white mb-4 fw-bold">Advertisement</h2>
+                            <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                            <h4 className="text-light">Reward in <span className="text-warning fw-bold">{adState.timer}</span> seconds...</h4>
+                            <p className="text-muted mt-5 small">Please wait, do not close.</p>
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onLeave, onCall, socket }) => {
-            const { room, members } = roomData;
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal }) => {
+            const { room, members, activeCalls } = roomData;
 
             return (
-                <div className="row mt-3">
+                <div className="row">
                     <div className="col-12 col-lg-8 mx-auto">
                         <div className="whiteboard-wrapper">
-                            <div className="d-flex justify-content-between w-100 mb-2 px-1">
-                                <button className="btn btn-sm btn-outline-danger" onClick={onLeave}><i className="fas fa-sign-out-alt"></i> Leave</button>
-                                <strong className="text-primary">{room.status} Phase</strong>
-                                <span className="badge bg-danger">Room {room.id} {room.is_private ? '(Private)' : ''}</span>
-                            </div>
-
                             <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
                             
-                            {/* Member List */}
                             <div className="mt-4 w-100">
-                                <h6>Players ({members.length}/{room.max_members}):</h6>
-                                {members.map(m => (
-                                    <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
-                                        <div>
-                                            {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="30" height="30"/> : <i className="fas fa-user-circle fs-3 text-secondary me-2"></i>}
-                                            <span className="fw-bold">{m.user_id.substring(0,6)} {m.user_id === tgId && '(You)'}</span>
-                                            {m.is_ready ? <i className="fas fa-check text-success ms-2"></i> : ''}
+                                <h6 className="fw-bold text-secondary mb-3">Player List</h6>
+                                {members.map(m => {
+                                    const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
+                                    
+                                    return (
+                                        <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                            <div className="d-flex align-items-center">
+                                                <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
+                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35"/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                                </div>
+                                                <div className="d-flex flex-column">
+                                                    <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
+                                                    <div>
+                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : ''}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="d-flex align-items-center gap-2">
+                                                {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
+                                                
+                                                {mCall && mCall.status === 'RINGING' && mCall.caller === m.user_id && <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing</span>}
+                                                
+                                                {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
+                                                    <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
+                                                )}
+
+                                                {m.user_id !== tgId && !mCall && (
+                                                    <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
+                                                )}
+                                            </div>
                                         </div>
-                                        {m.user_id !== tgId && (
-                                            <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
-                                        )}
-                                    </div>
-                                ))}
+                                    )
+                                })}
                             </div>
                         </div>
                     </div>
@@ -538,9 +613,12 @@
 
         const Whiteboard = ({ roomData, tgId, socket }) => {
             const canvasRef = useRef(null);
-            const { room, drawings } = roomData;
+            const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
             const isDrawingPhase = room.status === 'DRAWING';
+            
+            const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
+            const readyCount = members.filter(m => m.is_ready).length;
             
             const [wordInput, setWordInput] = useState('');
             let drawing = false;
@@ -554,7 +632,7 @@
                 ctx.clearRect(0,0, canvas.width, canvas.height);
                 ctx.strokeStyle = '#334155';
                 ctx.lineCap = 'round';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = 5;
                 
                 drawings.forEach(jsonStr => {
                     try {
@@ -577,7 +655,7 @@
                     const ctx = canvas.getContext('2d');
                     ctx.strokeStyle = '#334155';
                     ctx.lineCap = 'round';
-                    ctx.lineWidth = 4;
+                    ctx.lineWidth = 5;
                     lines.forEach(l => {
                         ctx.beginPath();
                         ctx.moveTo(l.x0, l.y0);
@@ -593,11 +671,10 @@
                 const rect = canvasRef.current.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                // strict width validation calculation
-                return {
-                    x: (clientX - rect.left) * (canvasRef.current.width / rect.width),
-                    y: (clientY - rect.top) * (canvasRef.current.height / rect.height)
-                };
+                // Scale native 500x500 to dynamic CSS dimensions
+                const scaleX = 500 / rect.width;
+                const scaleY = 500 / rect.height;
+                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
             };
 
             const startDraw = (e) => {
@@ -634,7 +711,7 @@
             return (
                 <div className="whiteboard-container">
                     <canvas 
-                        ref={canvasRef} width="350" height="350"
+                        ref={canvasRef} width="500" height="500"
                         onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
                         onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
                     />
@@ -642,8 +719,8 @@
                     {room.status === 'PRE_DRAW' && isDrawer && (
                         <div className="wb-overlay">
                             <h4 className="text-primary fw-bold">Your turn to draw!</h4>
-                            <input type="text" className="form-control text-center my-3 w-75" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
-                            <button className="btn btn-primary w-75 rounded-pill" onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                            <input type="text" className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
                         </div>
                     )}
                     
@@ -653,19 +730,28 @@
 
                     {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
                         <div className="wb-overlay">
-                            {room.status === 'WAITING' && <h4>Waiting for players...</h4>}
                             {room.status !== 'WAITING' && (
                                 <>
                                     <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h4>
-                                    {room.last_winner_id ? <div className="alert alert-success mt-2">{room.last_winner_id.substring(0,6)} guessed it!</div> : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
+                                    {room.last_winner_id ? <div className="alert alert-success mt-2">{toHex(room.last_winner_id)} guessed it!</div> : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
                                 </>
                             )}
-                            <button className="btn btn-success rounded-pill px-4 mt-3 shadow" onClick={() => socket.emit('set_ready')}>I'm Ready!</button>
+                            
+                            {isMeReady ? (
+                                <h5 className="mt-4 text-muted fw-bold">
+                                    {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                                </h5>
+                            ) : (
+                                <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                            )}
                         </div>
                     )}
 
                     {isDrawer && isDrawingPhase && (
-                        <button className="btn btn-sm btn-light position-absolute bottom-0 end-0 m-2 shadow" onClick={() => socket.emit('undo')}><i className="fas fa-undo"></i></button>
+                        <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
+                        </div>
                     )}
                 </div>
             );
@@ -675,7 +761,6 @@
             const [input, setInput] = useState('');
             const prevCount = useRef(chats.length);
             
-            // Audio trigger on new chat message
             useEffect(() => {
                 if (chats.length > prevCount.current) {
                     mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
@@ -685,10 +770,10 @@
 
             return (
                 <div className="d-flex flex-column h-100">
-                    <div className="panel-body">
+                    <div className="panel-body d-flex flex-column-reverse">
                         {chats.map(c => (
                             <div key={c.id} className={`msg-box ${c.user_id === 'System' ? 'sys' : ''}`}>
-                                <b>{c.user_id === 'System' ? 'System' : c.user_id.substring(0,6)}: </b>
+                                <b>{c.user_id === 'System' ? 'System' : toHex(c.user_id)}: </b>
                                 {c.message}
                             </div>
                         ))}
@@ -708,7 +793,6 @@
             
             const prevCount = useRef(guesses.length);
 
-            // Audio trigger on correct guess
             useEffect(() => {
                 if (guesses.length > prevCount.current) {
                     const lastGuess = guesses[guesses.length - 1];
@@ -721,10 +805,10 @@
 
             return (
                 <div className="d-flex flex-column h-100">
-                    <div className="panel-body">
+                    <div className="panel-body d-flex flex-column">
                         {guesses.map(g => (
                             <div key={g.id} className={`msg-box ${g.is_correct ? 'guess-correct' : 'bg-light'}`}>
-                                <b>{g.user_id.substring(0,6)}: </b>
+                                <b>{toHex(g.user_id)}: </b>
                                 {revealState || g.user_id === tgId || isDrawer ? g.guess_text : '••••••••'}
                             </div>
                         ))}
