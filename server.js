@@ -433,6 +433,17 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom || !message.trim()) return;
             await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
+            
+            // Keep only the last 20 messages per room to prevent overflow
+            await db.query(`
+                DELETE FROM chats 
+                WHERE room_id = ? AND id NOT IN (
+                    SELECT id FROM (
+                        SELECT id FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20
+                    ) t
+                )
+            `, [currentRoom, currentRoom]);
+
             syncRoom(currentRoom);
         } catch (err) {}
     });
