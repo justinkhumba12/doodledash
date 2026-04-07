@@ -247,8 +247,11 @@ const checkRoomReset = async (roomId) => {
     try {
         const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
         if (members[0].c === 0) {
-            // Delete room completely if empty unless it's the fallback base rooms (1 or 2)
-            if (roomId !== 1 && roomId !== 2) {
+            const [roomInfo] = await db.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
+            const isPrivate = roomInfo.length > 0 && roomInfo[0].is_private;
+
+            // Delete room completely if empty unless it's the fallback base rooms (1 or 2) OR it's a private room (let expire_at handle it)
+            if (roomId !== 1 && roomId !== 2 && !isPrivate) {
                 await deleteRoom(roomId);
             } else {
                 await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
@@ -359,6 +362,55 @@ io.on('connection', (socket) => {
     socket.lastActiveEvent = Date.now();
     socket.idleWarned = false;
 
+    // Extracted robust helper logic for joining rooms gracefully behind the scenes (for standard & Auto-Join)
+    const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
+        const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
+        if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
+        const room = roomData[0];
+
+        const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
+        if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
+
+        const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [userId]);
+        if (existing.length > 0 && existing[0].room_id === roomIdNum) {
+            currentRoom = roomIdNum;
+            socket.join(`room_${roomIdNum}`);
+            socket.emit('join_success', roomIdNum);
+            return syncRoom(roomIdNum);
+        }
+
+        if (!bypassCost) {
+            if (room.is_private) {
+                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
+            } else if (roomIdNum !== 1 && roomIdNum !== 2) {
+                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
+                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]);
+            }
+        }
+
+        const oldRoom = currentRoom;
+        if (oldRoom) {
+            terminateCallsForUser(userId); 
+            socket.leave(`room_${oldRoom}`);
+            await db.query('DELETE FROM room_members WHERE user_id = ?', [userId]); 
+            await checkRoomReset(oldRoom);
+        }
+
+        await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, userId]);
+        currentRoom = roomIdNum;
+        socket.join(`room_${currentRoom}`);
+        
+        socket.emit('join_success', currentRoom);
+        
+        if (oldRoom) syncRoom(oldRoom);
+        syncRoom(currentRoom);
+        broadcastRooms();
+
+        const userState = await getUserState(userId);
+        if (userState) socket.emit('user_update', userState);
+    };
+
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         try {
             if (!tg_id) return;
@@ -448,12 +500,13 @@ io.on('connection', (socket) => {
         } catch (err) {}
     });
 
-    socket.on('create_room', async ({ is_private, password, max_members, expire_hours }) => {
+    socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
         try {
             if (!currentUser) return;
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
             let insertRes;
-
+            let cost = auto_join ? 1 : 0; // Baseline cost of extra functionality
+            
             if (is_private) {
                 if (!password || password.length < 6 || password.length > 10) {
                     return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
@@ -461,18 +514,30 @@ io.on('connection', (socket) => {
 
                 const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
                 let timeCost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
-                let totalCost = limit + timeCost;
+                cost += limit + timeCost;
+            }
 
+            if (cost > 0) {
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < totalCost) return socket.emit('create_error', `Not enough credits. Costs ${totalCost} credits.`);
-                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
-                
+                if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+            }
+
+            if (is_private) {
+                const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
                 [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password, limit, currentUser, hours]);
             } else {
                 [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
             }
 
-            socket.emit('room_created', { room_id: insertRes.insertId });
+            const newRoomId = insertRes.insertId;
+
+            if (auto_join) {
+                // Immediately transport user inside explicitly bypassing regular Join Checks
+                await performJoinRoom(currentUser, newRoomId, password, true);
+            } else {
+                socket.emit('room_created', { room_id: newRoomId });
+            }
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
@@ -491,51 +556,7 @@ io.on('connection', (socket) => {
     socket.on('join_room', async ({ room_id, password }) => {
         try {
             if (!currentUser) return;
-            const roomIdNum = Number(room_id);
-
-            const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
-            if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
-            const room = roomData[0];
-
-            const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
-            if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
-
-            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
-            if (existing.length > 0 && existing[0].room_id === roomIdNum) {
-                currentRoom = roomIdNum;
-                socket.join(`room_${currentRoom}`);
-                socket.emit('join_success', currentRoom);
-                return syncRoom(currentRoom);
-            }
-
-            if (room.is_private) {
-                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
-            } else if (roomIdNum !== 1 && roomIdNum !== 2) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-            }
-
-            const oldRoom = currentRoom;
-            if (oldRoom) {
-                terminateCallsForUser(currentUser); 
-                socket.leave(`room_${oldRoom}`);
-                await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-                await checkRoomReset(oldRoom);
-            }
-
-            await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
-            currentRoom = roomIdNum;
-            socket.join(`room_${currentRoom}`);
-            
-            socket.emit('join_success', currentRoom);
-            
-            if (oldRoom) syncRoom(oldRoom);
-            syncRoom(currentRoom);
-            broadcastRooms();
-
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
+            await performJoinRoom(currentUser, Number(room_id), password, false);
         } catch (err) {}
     });
 
