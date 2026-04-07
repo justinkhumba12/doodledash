@@ -180,6 +180,17 @@ async function getUserState(tg_id) {
 const activeCalls = new Map(); 
 const roomRedoStacks = {}; 
 
+// Helper to end a user's calls if they leave or disconnect
+const endUserCalls = (userId, roomId) => {
+    for (const [callId, call] of activeCalls.entries()) {
+        if (call.caller === userId || call.receiver === userId) {
+            if (call.interval) clearInterval(call.interval);
+            activeCalls.delete(callId);
+            if (roomId) io.to(`room_${roomId}`).emit('call_ended', callId);
+        }
+    }
+};
+
 const broadcastRooms = async () => {
     const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
     io.emit('lobby_rooms_update', rooms);
@@ -277,6 +288,7 @@ io.on('connection', (socket) => {
             const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
             if (existing.length > 0) {
                 currentRoom = existing[0].room_id;
+                socket.currentRoom = currentRoom; // Bind to socket for idle tracker
                 socket.join(`room_${currentRoom}`);
                 syncRoom(currentRoom);
             }
@@ -382,6 +394,7 @@ io.on('connection', (socket) => {
             const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
             if (existing.length > 0 && existing[0].room_id === roomIdNum) {
                 currentRoom = roomIdNum;
+                socket.currentRoom = currentRoom;
                 socket.join(`room_${currentRoom}`);
                 socket.emit('join_success', currentRoom);
                 return syncRoom(currentRoom);
@@ -398,12 +411,14 @@ io.on('connection', (socket) => {
             const oldRoom = currentRoom;
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
             if (oldRoom) {
+                endUserCalls(currentUser, oldRoom); // End calls if moving rooms
                 socket.leave(`room_${oldRoom}`);
                 await checkRoomReset(oldRoom);
             }
 
             await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
             currentRoom = roomIdNum;
+            socket.currentRoom = currentRoom;
             socket.join(`room_${currentRoom}`);
             
             socket.emit('join_success', currentRoom);
@@ -420,11 +435,13 @@ io.on('connection', (socket) => {
     socket.on('leave_room', async () => {
         try {
             if (!currentUser || !currentRoom) return;
+            endUserCalls(currentUser, currentRoom); // End calls immediately upon leaving
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
             await checkRoomReset(currentRoom);
             socket.leave(`room_${currentRoom}`);
             syncRoom(currentRoom);
             currentRoom = null;
+            socket.currentRoom = null;
             broadcastRooms();
         } catch (err) {}
     });
@@ -637,6 +654,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', async () => {
         if (currentUser && currentRoom) {
+            endUserCalls(currentUser, currentRoom); // End call automatically on disconnect
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
             await checkRoomReset(currentRoom);
             syncRoom(currentRoom);
@@ -674,6 +692,7 @@ setInterval(async () => {
                 const idleTime = now - (s.lastActiveEvent || now);
                 if (idleTime > 60000) {
                     s.emit('kick_idle');
+                    endUserCalls(s.currentUser, s.currentRoom); // Terminate call if kicked for idle
                     db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
                         checkRoomReset(s.currentRoom).then(() => {
                             syncRoom(s.currentRoom);
