@@ -63,7 +63,8 @@ async function initDB() {
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
             "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
-            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE" 
+            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE"
         ];
         
         for (let query of migrations) {
@@ -77,6 +78,7 @@ async function initDB() {
                 is_ready BOOLEAN DEFAULT FALSE,
                 consecutive_turns INT DEFAULT 0,
                 total_turns INT DEFAULT 0,
+                has_given_up BOOLEAN DEFAULT FALSE,
                 PRIMARY KEY(room_id, user_id)
             )
         `);
@@ -188,6 +190,7 @@ const checkRoomReset = async (roomId) => {
     const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
     if (members[0].c < 2) {
         await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+        await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
     }
 };
 
@@ -437,7 +440,29 @@ io.on('connection', (socket) => {
     socket.on('give_up', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, 'System', `${toHex(currentUser)} gave up this round.`]);
+            const [room] = await db.query('SELECT current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
+            if (room.length === 0 || room[0].status !== 'DRAWING') return;
+
+            const isDrawer = room[0].current_drawer_id === currentUser;
+
+            if (isDrawer) {
+                // Drawer giving up reveals immediately
+                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
+                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
+            } else {
+                // Guesser voting to give up
+                await db.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
+
+                const [members] = await db.query('SELECT user_id, has_given_up FROM room_members WHERE room_id = ?', [currentRoom]);
+                const guessers = members.filter(m => m.user_id !== room[0].current_drawer_id);
+                const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
+
+                if (allGivenUp) {
+                    await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
+                    await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'All guessers gave up.']);
+                }
+            }
             syncRoom(currentRoom);
         } catch (err) {
             console.error('Give Up Error:', err);
@@ -485,6 +510,7 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom) return;
             await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
+            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
             roomRedoStacks[currentRoom] = [];
@@ -613,6 +639,7 @@ setInterval(async () => {
         const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
         for (let r of revealRooms) {
             await db.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [r.id]);
+            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [r.id]);
             syncRoom(r.id);
         }
 
