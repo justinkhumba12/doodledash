@@ -23,7 +23,6 @@ async function initDB() {
         db = await mysql.createConnection({ uri: dbUrl, timezone: 'Z' });
         console.log('Connected to MySQL Database.');
 
-        // Users Table
         await db.query(`
             CREATE TABLE IF NOT EXISTS users (
                 tg_id VARCHAR(50) PRIMARY KEY,
@@ -40,7 +39,6 @@ async function initDB() {
             )
         `);
 
-        // Rooms Table
         await db.query(`
             CREATE TABLE IF NOT EXISTS rooms (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -58,7 +56,6 @@ async function initDB() {
             )
         `);
 
-        // FIX: Auto-add missing columns for databases that were created before these columns existed
         const migrations = [
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
@@ -66,11 +63,7 @@ async function initDB() {
         ];
         
         for (let query of migrations) {
-            try { 
-                await db.query(query); 
-            } catch (e) { 
-                // Silently ignore if column already exists (Error 1060)
-            }
+            try { await db.query(query); } catch (e) { }
         }
 
         await db.query(`
@@ -113,7 +106,6 @@ async function initDB() {
             )
         `);
 
-        // Ensure at least a few empty public rooms exist
         const [rooms] = await db.query('SELECT COUNT(*) as count FROM rooms');
         if (rooms[0].count === 0) {
             for (let i = 0; i < 5; i++) {
@@ -126,14 +118,12 @@ async function initDB() {
 }
 initDB();
 
-// --- TELEGRAM WEBHOOK ENDPOINT ---
 app.post('/webhook', async (req, res) => {
     const update = req.body;
     if (update?.message?.text === '/start') {
         const chatId = update.message.chat.id;
         const tgId = update.message.from.id;
         
-        // Auto-register user using UTC global time
         try {
             await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
         } catch (e) {
@@ -144,7 +134,6 @@ app.post('/webhook', async (req, res) => {
         const webAppUrl = process.env.WEBAPP_URL; 
         
         if (token && webAppUrl) {
-            // Requirement 1: Include parameter as user_id of telegram
             const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
             fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
                 method: 'POST',
@@ -162,41 +151,39 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
 });
 
-// Helper to fetch user with calculated UTC limits
 async function getUserState(tg_id) {
     const [rows] = await db.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        
         (last_ad_claim_date IS NULL OR DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        
         (last_ad2_claim_date IS NULL OR DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
-        
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
-        
         (DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
         (DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
-        
         FROM users WHERE tg_id = ?
     `, [tg_id]);
 
     if (rows.length === 0) return null;
     let u = rows[0];
-    
     if (!u.ad1_is_today) u.ad_claims_today = 0;
     if (!u.ad2_is_today) u.ad2_claims_today = 0;
-
     return u;
 }
 
 const activeCalls = new Map(); 
+const roomRedoStacks = {}; // Memory for redo functionality
+
+const broadcastRooms = async () => {
+    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
+    io.emit('lobby_rooms_update', rooms);
+};
 
 const syncRoom = async (roomId) => {
     if (!roomId) return;
     try {
         const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
-        if (roomData.length === 0) return; // safeguard
+        if (roomData.length === 0) return; 
 
         const [members] = await db.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
         const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20', [roomId]);
@@ -210,6 +197,8 @@ const syncRoom = async (roomId) => {
             users.forEach(u => profiles[u.tg_id] = u.profile_pic);
         }
 
+        const activeCallsList = Array.from(activeCalls.values()).filter(c => c.room_id === roomId);
+
         io.to(`room_${roomId}`).emit('room_sync', {
             room: roomData[0],
             members,
@@ -217,6 +206,7 @@ const syncRoom = async (roomId) => {
             guesses,
             drawings: drawings.map(d => d.line_data),
             profiles,
+            activeCalls: activeCallsList,
             server_time: new Date()
         });
     } catch (error) {
@@ -227,11 +217,13 @@ const syncRoom = async (roomId) => {
 io.on('connection', (socket) => {
     let currentUser = null;
     let currentRoom = null;
+    socket.lastActiveEvent = Date.now();
 
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         try {
             if (!tg_id) return;
             currentUser = tg_id;
+            socket.join(`user_${tg_id}`);
             
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
             if (profile_pic) {
@@ -254,6 +246,10 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error('Auth Error:', err);
         }
+    });
+
+    socket.on('active_event', () => {
+        socket.lastActiveEvent = Date.now();
     });
 
     socket.on('claim_reward', async ({ type }) => {
@@ -323,9 +319,8 @@ io.on('connection', (socket) => {
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
-        } catch (err) {
-            console.error('Create Room Error:', err);
-        }
+            broadcastRooms();
+        } catch (err) {}
     });
 
     socket.on('search_room', async ({ room_id }) => {
@@ -333,15 +328,13 @@ io.on('connection', (socket) => {
             const [rows] = await db.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
             if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
             socket.emit('search_result', rows[0]);
-        } catch (err) {
-            console.error('Search Room Error:', err);
-        }
+        } catch (err) {}
     });
 
     socket.on('join_room', async ({ room_id, password }) => {
         try {
             if (!currentUser) return;
-            const roomIdNum = Number(room_id); // Convert to number to ensure MySQL types match correctly
+            const roomIdNum = Number(room_id);
 
             const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
             if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
@@ -350,7 +343,6 @@ io.on('connection', (socket) => {
             const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
             if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
-            // Verify if user is already inside
             const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
             if (existing.length > 0 && existing[0].room_id === roomIdNum) {
                 currentRoom = roomIdNum;
@@ -362,7 +354,6 @@ io.on('connection', (socket) => {
             if (room.is_private) {
                 if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
             } else {
-                // Requirement 2: Deduct 1 credit for public rooms
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
@@ -370,9 +361,7 @@ io.on('connection', (socket) => {
 
             const oldRoom = currentRoom;
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-            if (oldRoom) {
-                socket.leave(`room_${oldRoom}`);
-            }
+            if (oldRoom) socket.leave(`room_${oldRoom}`);
 
             await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
             currentRoom = roomIdNum;
@@ -380,16 +369,13 @@ io.on('connection', (socket) => {
             
             socket.emit('join_success', currentRoom);
             
-            // Sync both rooms immediately
             if (oldRoom) syncRoom(oldRoom);
             syncRoom(currentRoom);
+            broadcastRooms();
 
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
-        } catch (err) {
-            console.error('Join Room Error:', err);
-            socket.emit('join_error', 'An error occurred while joining the room.');
-        }
+        } catch (err) {}
     });
 
     socket.on('leave_room', async () => {
@@ -399,9 +385,8 @@ io.on('connection', (socket) => {
             socket.leave(`room_${currentRoom}`);
             syncRoom(currentRoom);
             currentRoom = null;
-        } catch (err) {
-            console.error('Leave Room Error:', err);
-        }
+            broadcastRooms();
+        } catch (err) {}
     });
 
     socket.on('chat', async ({ message }) => {
@@ -432,6 +417,7 @@ io.on('connection', (socket) => {
             await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
             await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
+            roomRedoStacks[currentRoom] = [];
             syncRoom(currentRoom);
         } catch (err) {}
     });
@@ -447,6 +433,7 @@ io.on('connection', (socket) => {
     socket.on('draw', async ({ lines }) => {
         try {
             if (!currentUser || !currentRoom) return;
+            roomRedoStacks[currentRoom] = []; // clear redo logic on new draw
             await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
             socket.to(`room_${currentRoom}`).emit('live_draw', lines);
         } catch (err) {}
@@ -455,35 +442,73 @@ io.on('connection', (socket) => {
     socket.on('undo', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            const [last] = await db.query('SELECT id FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
+            const [last] = await db.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
             if (last.length > 0) {
+                if(!roomRedoStacks[currentRoom]) roomRedoStacks[currentRoom] = [];
+                roomRedoStacks[currentRoom].push(last[0]);
                 await db.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
                 syncRoom(currentRoom);
             }
         } catch (err) {}
     });
 
-    socket.on('initiate_call', async ({ receiver_id }) => {
-        if (!currentUser) return;
-        const callId = `call_${Date.now()}_${Math.random()}`;
-        activeCalls.set(callId, { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING' });
-        io.to(`room_${currentRoom}`).emit('call_update', activeCalls.get(callId));
+    socket.on('redo', async () => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            if(roomRedoStacks[currentRoom] && roomRedoStacks[currentRoom].length > 0) {
+                const toRestore = roomRedoStacks[currentRoom].pop();
+                await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
+                syncRoom(currentRoom);
+            }
+        } catch (err) {}
     });
 
-    socket.on('accept_call', ({ call_id }) => {
+    socket.on('initiate_call', async ({ receiver_id }) => {
+        if (!currentUser || !currentRoom) return;
+        const callId = `call_${Date.now()}_${Math.random()}`;
+        activeCalls.set(callId, { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom });
+        syncRoom(currentRoom);
+    });
+
+    socket.on('accept_call', async ({ call_id }) => {
         const call = activeCalls.get(call_id);
         if (call && call.receiver === currentUser) {
             call.status = 'ACTIVE';
             call.startTime = Date.now();
             activeCalls.set(call_id, call);
-            io.to(`room_${currentRoom}`).emit('call_update', call);
+            
+            call.interval = setInterval(async () => {
+                const c = activeCalls.get(call_id);
+                if(!c) return clearInterval(call.interval);
+                
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id IN (?, ?) AND credits > 0', [c.caller, c.receiver]);
+                const [u1] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
+                const [u2] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.receiver]);
+                
+                if (u1[0].credits <= 0 || u2[0].credits <= 0) {
+                    clearInterval(call.interval);
+                    activeCalls.delete(call_id);
+                    io.to(`room_${c.room_id}`).emit('call_ended', call_id);
+                    syncRoom(c.room_id);
+                } else {
+                    const uState1 = await getUserState(c.caller);
+                    const uState2 = await getUserState(c.receiver);
+                    if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
+                    if(uState2) io.to(`user_${c.receiver}`).emit('user_update', uState2);
+                }
+            }, 60000);
+
+            syncRoom(currentRoom);
         }
     });
 
     socket.on('end_call', ({ call_id }) => {
-        if (activeCalls.has(call_id)) {
+        const call = activeCalls.get(call_id);
+        if (call) {
+            if(call.interval) clearInterval(call.interval);
             activeCalls.delete(call_id);
             io.to(`room_${currentRoom}`).emit('call_ended', call_id);
+            syncRoom(currentRoom);
         }
     });
 
@@ -495,19 +520,14 @@ io.on('connection', (socket) => {
         if (currentUser && currentRoom) {
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
             syncRoom(currentRoom);
+            broadcastRooms();
         }
     });
 });
 
+// Main Game Timers (Drawing timeout removed)
 setInterval(async () => {
     try {
-        const [drawingRooms] = await db.query("SELECT id FROM rooms WHERE status = 'DRAWING' AND round_end_time <= UTC_TIMESTAMP()");
-        for (let r of drawingRooms) {
-            await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND) WHERE id = ?", [r.id]);
-            // FIX: Removed trigger_sync requirement. The server directly syncs the room.
-            syncRoom(r.id);
-        }
-
         const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
         for (let r of revealRooms) {
             await db.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [r.id]);
@@ -525,6 +545,20 @@ setInterval(async () => {
                 syncRoom(r.id);
             }
         }
+        
+        // Idle Tracker - 60 sec inactivity remove logic
+        const now = Date.now();
+        io.sockets.sockets.forEach(s => {
+            if (s.currentRoom && now - (s.lastActiveEvent || now) > 60000) {
+                s.emit('kick_idle');
+                db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
+                    syncRoom(s.currentRoom);
+                    broadcastRooms();
+                });
+                s.leave(`room_${s.currentRoom}`);
+                s.currentRoom = null;
+            }
+        });
     } catch (e) { console.error("Game Loop Error:", e); }
 }, 1000);
 
