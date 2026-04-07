@@ -49,8 +49,8 @@
         .toggle-glow { background-color: #f59e0b !important; box-shadow: 0 0 20px #f59e0b !important; animation: pulseGlow 1s infinite alternate; }
         @keyframes pulseGlow { 0% { transform: translateY(-50%) scale(1); } 100% { transform: translateY(-50%) scale(1.15); } }
         
-        .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
-        .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
+        .panel-header { display: flex; padding: 10px; gap: 8px; flex-shrink: 0; }
+        .panel-tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; font-weight: 600; font-size: 0.9rem; color: #64748b; border-radius: 12px; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
         .panel-tab.active { background: var(--primary); color: white; }
         .panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 15px; display: flex; flex-direction: column; }
         .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
@@ -69,16 +69,20 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        /* Modified Responsive Lobby Tabs */
-        .lobby-tabs-wrapper { background: #fff; padding: 6px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; overflow: hidden; }
-        .lobby-tab { flex: 1; text-align: center; padding: 10px 5px; border-radius: 50px; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
-        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 1.05rem; padding: 12px 10px; flex: 1.2; }
+        /* Responsive Lobby Tabs with Fixed Height */
+        .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
+        .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
+        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
         .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
         .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
         .swipe-container { transition: transform 0.3s ease-out; }
     </style>
 </head>
 <body>
+    <audio id="mgsSound" src="/audio/mgs_notification.mp3" preload="auto"></audio>
+    <audio id="guessSound" src="/audio/guess_notification.mp3" preload="auto"></audio>
+    <audio id="callSound" src="/audio/call.mp3" loop preload="auto"></audio>
+
     <div id="root"></div>
 
     <script type="text/babel">
@@ -87,11 +91,6 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
-        
-        const mgsSound = new Audio('/audio/mgs_notification.mp3');
-        const guessSound = new Audio('/audio/guess_notification.mp3');
-        const callSound = new Audio('/audio/call.mp3');
-        callSound.loop = true;
 
         const tgId = urlParams.get('user_id');
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
@@ -114,7 +113,7 @@
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
             const [roomData, setRoomData] = useState(null);
-            const [activeTab, setActiveTab] = useState('chat');
+            const [activeTab, setActiveTab] = useState('guess'); // Guess tab is now default
             const [panelOpen, setPanelOpen] = useState(false);
             const [glowToggle, setGlowToggle] = useState(false);
             const [modal, setModal] = useState(null);
@@ -125,6 +124,15 @@
             
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+
+            const [msgVol, setMsgVol] = useState(() => {
+                const saved = localStorage.getItem('msgVol');
+                return saved !== null ? parseFloat(saved) : 1.0;
+            });
+            const [guessVol, setGuessVol] = useState(() => {
+                const saved = localStorage.getItem('guessVol');
+                return saved !== null ? parseFloat(saved) : 1.0;
+            });
 
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
@@ -146,6 +154,19 @@
                 );
             }
 
+            // Sync audio volume to HTML elements and local storage cache
+            useEffect(() => {
+                const s = document.getElementById('mgsSound');
+                if (s) s.volume = msgVol;
+                localStorage.setItem('msgVol', msgVol);
+            }, [msgVol]);
+
+            useEffect(() => {
+                const s = document.getElementById('guessSound');
+                if (s) s.volume = guessVol;
+                localStorage.setItem('guessVol', guessVol);
+            }, [guessVol]);
+
             // Global interaction listener to explicitly enable Audio Autoplay Mobile Safaris
             const handleGlobalInteraction = () => {
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
@@ -154,34 +175,50 @@
 
                 if (!audioUnlocked.current) {
                     audioUnlocked.current = true;
-                    const sounds = [mgsSound, guessSound, callSound];
-                    sounds.forEach(s => {
-                        s.volume = 0;
-                        const p = s.play();
-                        if (p !== undefined) {
-                            p.then(() => {
-                                s.pause();
-                                s.currentTime = 0;
-                                s.volume = 1;
-                            }).catch(() => {});
+                    ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
+                        const s = document.getElementById(id);
+                        if (s) {
+                            const originalVol = s.volume;
+                            s.volume = 0;
+                            const p = s.play();
+                            if (p !== undefined) {
+                                p.then(() => {
+                                    s.pause();
+                                    s.currentTime = 0;
+                                    s.volume = id === 'callSound' ? 1 : (id === 'mgsSound' ? msgVol : guessVol);
+                                }).catch(() => {});
+                            }
                         }
                     });
                 }
             };
 
+            // Call receiving logic with vibration fallback
             useEffect(() => {
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
-                    callSound.play().catch(() => {});
+                    const s = document.getElementById('callSound');
+                    if(s) s.play().catch(() => {
+                        if (window.Telegram?.WebApp?.HapticFeedback) {
+                            window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
+                        }
+                    });
                 } else {
-                    callSound.pause();
-                    callSound.currentTime = 0;
+                    const s = document.getElementById('callSound');
+                    if(s) {
+                        s.pause();
+                        s.currentTime = 0;
+                    }
                 }
             }, [activeCall, tgId]);
 
             const requestMic = async () => {
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+                        audio: { 
+                            echoCancellation: { ideal: true }, 
+                            noiseSuppression: { ideal: true }, 
+                            autoGainControl: { ideal: true } 
+                        } 
                     });
                     return stream;
                 } catch (e) {
@@ -433,11 +470,12 @@
                 const touchEndX = e.changedTouches[0].clientX;
                 const diff = touchStart - touchEndX;
                 if (diff > 50) {
-                    if (activeTab === 'chat') setActiveTab('guess');
-                    else if (activeTab === 'guess') setActiveTab('chat');
-                } else if (diff < -50) { 
                     if (activeTab === 'guess') setActiveTab('chat');
-                    else if (activeTab === 'chat') setPanelOpen(false);
+                    else if (activeTab === 'chat') setActiveTab('sounds');
+                } else if (diff < -50) { 
+                    if (activeTab === 'sounds') setActiveTab('chat');
+                    else if (activeTab === 'chat') setActiveTab('guess');
+                    else if (activeTab === 'guess') setPanelOpen(false);
                 }
                 setTouchStart(null);
             };
@@ -485,11 +523,11 @@
                                     <div className="d-flex flex-column">
                                         <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
                                         <div className="d-flex align-items-center gap-2 mt-1">
-                                            {timeLeftText && <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span>}
-                                            {timeLeftText && <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button>}
-                                            {roomData.room.is_private && roomData.room.creator_id === tgId && (
+                                            {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
+                                            {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
+                                            {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
                                                 <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
-                                            )}
+                                            ) : null}
                                         </div>
                                     </div>
                                     <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
@@ -519,12 +557,46 @@
                                     <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                 </div>
                                 <div className="panel-header">
-                                    <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
                                     <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
+                                    <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                    <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                 </div>
                                 
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
                                 {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
+                                {activeTab === 'sounds' && (
+                                    <div className="panel-body">
+                                        <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
+                                        
+                                        <div className="mb-4 bg-light p-3 rounded-4 shadow-sm">
+                                            <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                <span>Message Volume</span>
+                                                <span className="text-primary">{Math.round(msgVol * 100)}%</span>
+                                            </label>
+                                            <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} onChange={e => {
+                                                const v = parseFloat(e.target.value);
+                                                setMsgVol(v);
+                                                const s = document.getElementById('mgsSound');
+                                                if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                            }} />
+                                        </div>
+                                        
+                                        <div className="mb-4 bg-light p-3 rounded-4 shadow-sm">
+                                            <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                <span>Guess Volume</span>
+                                                <span className="text-primary">{Math.round(guessVol * 100)}%</span>
+                                            </label>
+                                            <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} onChange={e => {
+                                                const v = parseFloat(e.target.value);
+                                                setGuessVol(v);
+                                                const s = document.getElementById('guessSound');
+                                                if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                            }} />
+                                        </div>
+
+                                        <p className="text-center text-muted small mt-2">Volumes are auto-saved to your device cache.</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
@@ -591,7 +663,8 @@
                 );
             } else if (modal.type === 'create_room') {
                 let baseRoomCost = isPriv ? (maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))) : 0;
-                let totalCostDisplay = baseRoomCost + (autoJoin ? 1 : 0);
+                let autoJoinCost = (autoJoin && !isPriv) ? 1 : 0;
+                let totalCostDisplay = baseRoomCost + autoJoinCost;
 
                 content = (
                     <>
@@ -641,13 +714,18 @@
                             <input className="form-check-input" type="checkbox" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} id="autoJoinCheck" />
                             <label className="form-check-label text-dark fw-bold" htmlFor="autoJoinCheck">Join Room After Creating</label>
                         </div>
-                        {autoJoin && (
+                        {autoJoin && !isPriv && (
                             <div className="alert alert-info py-2 small mb-3">
-                                <i className="fas fa-info-circle me-1"></i> Cost: 1 Credit to auto-join this room immediately.
+                                <i className="fas fa-info-circle me-1"></i> Cost: 1 Credit to auto-join this public room immediately.
+                            </div>
+                        )}
+                        {autoJoin && isPriv && (
+                            <div className="alert alert-success py-2 small mb-3">
+                                <i className="fas fa-info-circle me-1"></i> Auto-joining your private room is free!
                             </div>
                         )}
 
-                        {(isPriv || autoJoin) && (
+                        {(isPriv || (autoJoin && !isPriv)) && (
                             <div className="alert alert-warning py-2 small mb-3">
                                 <i className="fas fa-coins text-warning me-1"></i> Total Cost: {totalCostDisplay} Credits
                             </div>
@@ -1109,7 +1187,7 @@
                                             </div>
                                             
                                             <div className="d-flex align-items-center gap-2">
-                                                {(room.is_private && room.creator_id === tgId && m.user_id !== tgId) ? (
+                                                {(room.is_private === 1 && room.creator_id === tgId && m.user_id !== tgId) ? (
                                                     <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
                                                 ) : null}
 
@@ -1301,7 +1379,8 @@
                     const newChats = chats.slice(prevCount.current);
                     const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
                     if (isOthersMessage) {
-                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                        const s = document.getElementById('mgsSound');
+                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                         setGlowToggle(true);
                         setTimeout(() => setGlowToggle(false), 3000);
                     }
@@ -1368,7 +1447,8 @@
                     const newGuesses = guesses.slice(prevCount.current);
                     const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
                     if (shouldPlaySound) {
-                        guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                        const s = document.getElementById('guessSound');
+                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                         setGlowToggle(true);
                         setTimeout(() => setGlowToggle(false), 3000);
                     }
