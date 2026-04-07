@@ -505,7 +505,9 @@ io.on('connection', (socket) => {
             if (!currentUser) return;
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
             let insertRes;
-            let cost = auto_join ? 1 : 0; // Baseline cost of extra functionality
+            
+            // Only cost 1 extra credit for auto_join IF it's a public room.
+            let cost = (auto_join && !is_private) ? 1 : 0;
             
             if (is_private) {
                 if (!password || password.length < 6 || password.length > 10) {
