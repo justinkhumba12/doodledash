@@ -23,11 +23,8 @@
         .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
         .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
         .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 25px 20px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); }
-        .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s; overflow: hidden; }
-        .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); }
         
         .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
-        
         .whiteboard-container { width: 100% !important; max-width: 500px !important; aspect-ratio: 1/1; height: auto !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
         canvas { cursor: crosshair; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
         
@@ -55,6 +52,14 @@
         .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
+
+        /* Custom Styles for Tabs and Rooms */
+        .lobby-tabs-wrapper { background: #fff; padding: 6px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; }
+        .lobby-tab { flex: 1; text-align: center; padding: 10px 0; border-radius: 50px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; color: #64748b; user-select: none; }
+        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); }
+        .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
+        .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
+        .swipe-container { transition: transform 0.3s ease-out; }
     </style>
 </head>
 <body>
@@ -119,7 +124,6 @@
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
-            // WebRTC Stable Refs
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
             const socketRef = useRef(null);
@@ -367,7 +371,8 @@
                     if (room.is_private) {
                         setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
                     } else {
-                        setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${room.id} for 1 Credit?`, room_id: room.id });
+                        const isFree = room.id === 1 || room.id === 2;
+                        setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${room.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: room.id });
                     }
                 });
 
@@ -534,7 +539,7 @@
                             <input className="form-check-input" type="checkbox" checked={isPriv} onChange={e => setIsPriv(e.target.checked)} id="privCheck" />
                             <label className="form-check-label" htmlFor="privCheck">Make Room Private</label>
                         </div>
-                        {isPriv && (
+                        {isPriv ? (
                             <>
                                 <input type="text" className="form-control mb-3" placeholder="Set a Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
                                 <div className="mb-3">
@@ -547,6 +552,21 @@
                                 </div>
                                 <div className="alert alert-warning py-2 small mb-3">
                                     <i className="fas fa-coins text-warning me-1"></i> Cost: 4 Credits
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Max Players</label>
+                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
+                                        <option value={2}>2 Players</option>
+                                        <option value={3}>3 Players</option>
+                                        <option value={4}>4 Players</option>
+                                    </select>
+                                </div>
+                                <div className="alert alert-success py-2 small mb-3">
+                                    <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
+                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Joining costs 1 Credit</span>
                                 </div>
                             </>
                         )}
@@ -660,6 +680,17 @@
         const LobbyView = ({ user, rooms, setModal, socket }) => {
             const [searchId, setSearchId] = useState('');
             const [adState, setAdState] = useState({ show: false });
+            const [activeTab, setActiveTab] = useState('public');
+            const [touchStart, setTouchStart] = useState(null);
+
+            const handleTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+            const handleTouchEnd = (e) => {
+                if (!touchStart) return;
+                const diff = touchStart - e.changedTouches[0].clientX;
+                if (diff > 50 && activeTab === 'public') setActiveTab('private');
+                else if (diff < -50 && activeTab === 'private') setActiveTab('public');
+                setTouchStart(null);
+            };
             
             const handleSearch = () => { if (searchId) socket.emit('search_room', { room_id: searchId }); };
 
@@ -711,6 +742,8 @@
                 );
             };
 
+            const filteredRooms = rooms.filter(r => (activeTab === 'private') ? r.is_private : !r.is_private);
+
             return (
                 <div className="container mt-3">
                     <div className="row mb-4">
@@ -746,31 +779,71 @@
                         </button>
                     </div>
 
-                    <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border">
-                        <input type="text" className="form-control border-0 px-4" placeholder="Search Room ID..." value={searchId} onChange={e => setSearchId(e.target.value)} />
-                        <button className="btn btn-dark px-4" onClick={handleSearch}><i className="fas fa-search"></i> Search</button>
+                    <div className="lobby-tabs-wrapper">
+                        <div className={`lobby-tab ${activeTab === 'public' ? 'active' : ''}`} onClick={() => setActiveTab('public')}>
+                            <i className="fas fa-globe me-2"></i>Public
+                        </div>
+                        <div className={`lobby-tab ${activeTab === 'private' ? 'active' : ''}`} onClick={() => setActiveTab('private')}>
+                            <i className="fas fa-lock me-2"></i>Private
+                        </div>
                     </div>
 
-                    <div className="row">
-                        {rooms.map(r => {
-                            const isFull = r.member_count >= r.max_members;
-                            const isFree = r.id === 1 || r.id === 2;
-                            return (
-                                <div key={r.id} className="col-md-4 mb-3">
-                                    <div className="room-card card h-100 p-3">
-                                        <div className="d-flex justify-content-between align-items-center mb-2">
-                                            <h5 className="fw-bold m-0">Room {r.id} {isFree && <span className="badge bg-warning ms-1">FREE</span>}</h5>
-                                            <span className={`badge ${isFull ? 'bg-danger' : 'bg-success'}`}>{isFull ? 'Full' : 'Open'}</span>
+                    <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="swipe-container" style={{ minHeight: '300px' }}>
+                        <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
+                            <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab === 'public' ? 'Public' : 'Private'} Room ID...`} value={searchId} onChange={e => setSearchId(e.target.value)} />
+                            <button className="btn btn-dark px-4" onClick={handleSearch}><i className="fas fa-search"></i> Search</button>
+                        </div>
+
+                        <div className="row g-3">
+                            {filteredRooms.length > 0 ? filteredRooms.map(r => {
+                                const isFull = r.member_count >= r.max_members;
+                                const isFree = r.id === 1 || r.id === 2;
+                                return (
+                                    <div key={r.id} className="col-md-4 col-sm-6 mb-2">
+                                        <div className="room-card bg-white rounded-4 p-3 border shadow-sm h-100 position-relative overflow-hidden hover-up">
+                                            <div className={`position-absolute top-0 start-0 w-100`} style={{height: '4px', background: r.is_private ? '#f43f5e' : (isFree ? '#10b981' : '#6366f1')}}></div>
+                                            
+                                            <div className="d-flex justify-content-between align-items-center mb-2 mt-1">
+                                                <h5 className="fw-bold m-0 text-dark d-flex align-items-center">
+                                                    <i className={`fas fa-${r.is_private ? 'lock text-danger' : 'globe text-primary'} me-2 fs-5`}></i>
+                                                    Room {r.id}
+                                                </h5>
+                                                {isFull ? (
+                                                    <span className="badge bg-secondary rounded-pill">Full</span>
+                                                ) : (
+                                                    <span className={`badge ${isFree ? 'bg-success' : (r.is_private ? 'bg-danger' : 'bg-primary')} rounded-pill px-2 py-1`}>
+                                                        {isFree ? <><i className="fas fa-gift"></i> Free</> : (r.is_private ? <><i className="fas fa-key"></i> Password</> : <><i className="fas fa-coins"></i> -1 Credit</>)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            
+                                            <div className="d-flex align-items-center justify-content-between mt-4">
+                                                <div className="text-muted small fw-bold bg-light px-2 py-1 rounded">
+                                                    <i className="fas fa-users text-secondary"></i> {r.member_count} / {r.max_members}
+                                                </div>
+                                                <button className={`btn btn-sm ${isFull ? 'btn-light text-muted' : (isFree ? 'btn-success' : 'btn-primary')} rounded-pill px-4 fw-bold shadow-sm`} 
+                                                    disabled={isFull}
+                                                    onClick={() => {
+                                                        if (r.is_private) {
+                                                            setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
+                                                        } else {
+                                                            setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${r.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: r.id });
+                                                        }
+                                                    }}>
+                                                    {isFull ? 'Full' : 'Join'}
+                                                </button>
+                                            </div>
                                         </div>
-                                        <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members} Players</p>
-                                        <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={isFull} 
-                                            onClick={() => setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${r.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: r.id })}>
-                                            Join {isFree ? '(Free)' : '(1 Credit)'}
-                                        </button>
                                     </div>
+                                );
+                            }) : (
+                                <div className="col-12 text-center py-5 text-muted">
+                                    <i className={`fas fa-${activeTab === 'public' ? 'globe' : 'lock'} fs-1 mb-3 text-light`}></i>
+                                    <h5>No {activeTab} rooms found</h5>
+                                    <p className="small">Be the first to create one!</p>
                                 </div>
-                            );
-                        })}
+                            )}
+                        </div>
                     </div>
 
                     {adState.show && (
@@ -793,7 +866,6 @@
                     <div className="col-12 col-lg-8 mx-auto">
                         <div className="whiteboard-wrapper">
                             
-                            {/* Word Hint Bar Implementation */}
                             {roomData.room.status === 'DRAWING' && roomData.masked_word && (
                                 <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
                                     {roomData.masked_word.map((item, i) => (
