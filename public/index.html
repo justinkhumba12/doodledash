@@ -69,11 +69,10 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        /* Custom Styles for Tabs and Rooms */
-        .lobby-tabs-wrapper { background: #fff; padding: 6px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; gap: 8px; }
-        .lobby-tabs-wrapper::-webkit-scrollbar { display: none; }
-        .lobby-tab { flex: 0 0 auto; text-align: center; padding: 10px 24px; border-radius: 50px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; color: #64748b; user-select: none; }
-        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); }
+        /* Modified Responsive Lobby Tabs */
+        .lobby-tabs-wrapper { background: #fff; padding: 6px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; overflow: hidden; }
+        .lobby-tab { flex: 1; text-align: center; padding: 10px 5px; border-radius: 50px; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
+        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 1.05rem; padding: 12px 10px; flex: 1.2; }
         .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
         .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
         .swipe-container { transition: transform 0.3s ease-out; }
@@ -147,14 +146,12 @@
                 );
             }
 
-            // Global interaction listener to explicitly enable Audio Autoplay
+            // Global interaction listener to explicitly enable Audio Autoplay Mobile Safaris
             const handleGlobalInteraction = () => {
-                // Resume ongoing remote WebRTC audio if it got paused by browser policies
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
                     remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
                 }
 
-                // Pre-warm local notification sounds only once
                 if (!audioUnlocked.current) {
                     audioUnlocked.current = true;
                     const sounds = [mgsSound, guessSound, callSound];
@@ -189,7 +186,7 @@
                     return stream;
                 } catch (e) {
                     alert("Microphone permission required for calls. Please enable it in your browser/app settings.");
-                    return null; // Return null to still allow receiving audio
+                    return null; 
                 }
             };
 
@@ -220,10 +217,9 @@
 
                 pc.ontrack = (e) => {
                     if (remoteAudioRef.current) {
+                        // Crucial fix: Force reassignment of srcObject upon receiving tracks
                         const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        if (remoteAudioRef.current.srcObject !== inboundStream) {
-                            remoteAudioRef.current.srcObject = inboundStream;
-                        }
+                        remoteAudioRef.current.srcObject = inboundStream;
                         remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
                     }
                 };
@@ -286,7 +282,6 @@
                     if (pc && pc.remoteDescription && pc.remoteDescription.type) {
                         try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
                     } else {
-                        // Queue if remote description is not set yet to avoid dropping ICE candidates
                         candidateQueue.current.push(new RTCIceCandidate(signal.candidate));
                     }
                 }
@@ -330,6 +325,7 @@
             };
 
             const acceptCall = async (callObj) => {
+                // Instantly command play on interaction event to unlock browser restriction
                 if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!callObj) return;
@@ -451,13 +447,15 @@
             let timeLeftText = '';
             if (roomData && roomData.room.is_private && roomData.room.expire_at) {
                 const timeDiff = new Date(roomData.room.expire_at).getTime() - new Date(roomData.server_time).getTime();
-                const hoursLeft = Math.max(0, Math.floor(timeDiff / (1000 * 60 * 60)));
-                const minsLeft = Math.max(0, Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60)));
-                
-                if (hoursLeft === 0 && minsLeft === 0) {
-                    timeLeftText = '< 1m';
-                } else {
-                    timeLeftText = `${hoursLeft > 0 ? hoursLeft + 'h ' : ''}${minsLeft > 0 ? minsLeft + 'm' : ''}`.trim();
+                if (timeDiff > 0) {
+                    const hoursLeft = Math.floor(timeDiff / (1000 * 60 * 60));
+                    const minsLeft = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+                    
+                    if (hoursLeft === 0 && minsLeft === 0) {
+                        timeLeftText = '< 1m';
+                    } else {
+                        timeLeftText = `${hoursLeft > 0 ? hoursLeft + 'h ' : ''}${minsLeft > 0 ? minsLeft + 'm' : ''}`.trim();
+                    }
                 }
             }
 
@@ -579,8 +577,9 @@
             const [isPriv, setIsPriv] = useState(false);
             const [maxMembers, setMaxMembers] = useState(4);
             const [expireHours, setExpireHours] = useState(2);
+            const [autoJoin, setAutoJoin] = useState(false);
 
-            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
+            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); };
 
             let content = null;
             if (modal.type === 'success' || modal.type === 'error') {
@@ -591,6 +590,9 @@
                     </>
                 );
             } else if (modal.type === 'create_room') {
+                let baseRoomCost = isPriv ? (maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))) : 0;
+                let totalCostDisplay = baseRoomCost + (autoJoin ? 1 : 0);
+
                 content = (
                     <>
                         <div className="form-check mb-3">
@@ -616,9 +618,6 @@
                                         <option value={12}>12 Hours (10 Credits)</option>
                                     </select>
                                 </div>
-                                <div className="alert alert-warning py-2 small mb-3">
-                                    <i className="fas fa-coins text-warning me-1"></i> Total Cost: {maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))} Credits
-                                </div>
                             </>
                         ) : (
                             <>
@@ -632,13 +631,31 @@
                                 </div>
                                 <div className="alert alert-success py-2 small mb-3">
                                     <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
-                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Joining costs 1 Credit</span>
+                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Joining usually costs 1 Credit</span>
                                 </div>
                             </>
                         )}
+                        
+                        <hr className="my-2" />
+                        <div className="form-check mb-3">
+                            <input className="form-check-input" type="checkbox" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} id="autoJoinCheck" />
+                            <label className="form-check-label text-dark fw-bold" htmlFor="autoJoinCheck">Join Room After Creating</label>
+                        </div>
+                        {autoJoin && (
+                            <div className="alert alert-info py-2 small mb-3">
+                                <i className="fas fa-info-circle me-1"></i> Cost: 1 Credit to auto-join this room immediately.
+                            </div>
+                        )}
+
+                        {(isPriv || autoJoin) && (
+                            <div className="alert alert-warning py-2 small mb-3">
+                                <i className="fas fa-coins text-warning me-1"></i> Total Cost: {totalCostDisplay} Credits
+                            </div>
+                        )}
+
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers, expire_hours: expireHours }); close(); }}>Create</button>
+                            <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers, expire_hours: expireHours, auto_join: autoJoin }); close(); }}>Create</button>
                         </div>
                     </>
                 );
