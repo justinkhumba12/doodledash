@@ -584,13 +584,13 @@
                         </div>
                         {isPriv ? (
                             <>
-                                <input type="text" className="form-control mb-3" placeholder="Set a Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                                <input type="number" pattern="[0-9]*" inputMode="numeric" className="form-control mb-3" placeholder="Set a numeric Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
                                 <div className="mb-3">
-                                    <label className="form-label text-muted small mb-1">Max Players</label>
+                                    <label className="form-label text-muted small mb-1">Max Players (Cost Base)</label>
                                     <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
-                                        <option value={2}>2 Players</option>
-                                        <option value={3}>3 Players</option>
-                                        <option value={4}>4 Players</option>
+                                        <option value={2}>2 Players (2 Credits)</option>
+                                        <option value={3}>3 Players (3 Credits)</option>
+                                        <option value={4}>4 Players (4 Credits)</option>
                                     </select>
                                 </div>
                                 <div className="mb-3">
@@ -602,7 +602,7 @@
                                     </select>
                                 </div>
                                 <div className="alert alert-warning py-2 small mb-3">
-                                    <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4)} Credits
+                                    <i className="fas fa-coins text-warning me-1"></i> Total Cost: {maxMembers + (expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4))} Credits
                                 </div>
                             </>
                         ) : (
@@ -631,7 +631,7 @@
                 content = (
                     <>
                         <p className="text-muted">Enter password to join Room {modal.room_id}</p>
-                        <input type="password" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+                        <input type="number" pattern="[0-9]*" inputMode="numeric" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
@@ -717,11 +717,11 @@
             } else if (modal.type === 'confirm_buy_hint') {
                 content = (
                     <>
-                        <p className="text-muted">Reveal this hidden character for <b>1 Credit</b>?</p>
-                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 1 Credit</div>
+                        <p className="text-muted">Reveal this hidden character for <b>3 Credits</b>?</p>
+                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 3 Credits</div>
                         <div className="d-flex gap-2 mt-4">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (3 Cred)</button>
                         </div>
                     </>
                 );
@@ -770,12 +770,15 @@
             const handleTouchEnd = (e) => {
                 if (!touchStart) return;
                 const diff = touchStart - e.changedTouches[0].clientX;
-                if (diff > 50 && activeTab === 'public') setActiveTab('private');
-                else if (diff < -50 && activeTab === 'private') setActiveTab('public');
+                if (diff > 50) {
+                    if (activeTab === 'public') setActiveTab('private');
+                    else if (activeTab === 'private') setActiveTab('my_rooms');
+                } else if (diff < -50) {
+                    if (activeTab === 'my_rooms') setActiveTab('private');
+                    else if (activeTab === 'private') setActiveTab('public');
+                }
                 setTouchStart(null);
             };
-            
-            const handleSearch = () => { if (searchId) socket.emit('search_room', { room_id: searchId }); };
 
             const triggerAd = (adNum, prefix) => {
                 if (typeof window.show_10604686 !== 'function') {
@@ -814,18 +817,51 @@
 
                 if (!isAvailable) {
                     disabled = true;
-                    if (claims >= 2) { btnText = `Max 2/2 Reached`; } 
+                    if (claims >= 3) { btnText = `Max 3/3 Reached`; } 
                     else { btnText = `Wait ${Math.floor(waitMins / 60)}h ${waitMins % 60}m`; }
                 }
 
                 return (
-                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
-                        {btnText} ({claims}/2)
+                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
+                        {btnText} ({claims}/3)
                     </button>
                 );
             };
 
-            const filteredRooms = rooms.filter(r => (activeTab === 'private') ? r.is_private : !r.is_private);
+            let filteredRooms = rooms.filter(r => {
+                if (activeTab === 'my_rooms') return r.creator_id === user.tg_id;
+                return activeTab === 'private' ? r.is_private : !r.is_private;
+            });
+
+            if (searchId) {
+                const searchNum = searchId.replace(/\D/g, '');
+                if (searchNum) {
+                    filteredRooms.sort((a, b) => {
+                        const aStr = a.id.toString();
+                        const bStr = b.id.toString();
+                        const aExact = aStr === searchNum;
+                        const bExact = bStr === searchNum;
+                        const aPart = aStr.includes(searchNum);
+                        const bPart = bStr.includes(searchNum);
+                        
+                        if (aExact && !bExact) return -1;
+                        if (!aExact && bExact) return 1;
+                        if (aPart && !bPart) return -1;
+                        if (!aPart && bPart) return 1;
+                        return 0;
+                    });
+                }
+            }
+            
+            const copyPassword = (pwd) => {
+                const el = document.createElement('textarea');
+                el.value = pwd;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+                setModal({ type: 'success', title: 'Copied', content: 'Password copied!' });
+            };
 
             return (
                 <div className="container mt-3">
@@ -842,10 +878,10 @@
                         <div className="col-md-6 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
                                 <h5><i className="fas fa-tv"></i> Ad Bonuses</h5>
-                                <p className="small mb-2">Watch to earn up to 4 Credits!</p>
-                                <div className="d-flex gap-2">
-                                    {renderAdBtn(1, 'Ad 1')}
-                                    {renderAdBtn(2, 'Ad 2')}
+                                <p className="small mb-2">Watch to earn up to 12 Credits!</p>
+                                <div className="d-flex flex-column gap-2 mt-2">
+                                    {renderAdBtn(1, 'Watch Ad 1')}
+                                    {renderAdBtn(2, 'Watch Ad 2')}
                                 </div>
                             </div>
                         </div>
@@ -865,12 +901,14 @@
                         <div className={`lobby-tab ${activeTab === 'private' ? 'active' : ''}`} onClick={() => setActiveTab('private')}>
                             <i className="fas fa-lock me-2"></i>Private
                         </div>
+                        <div className={`lobby-tab ${activeTab === 'my_rooms' ? 'active' : ''}`} onClick={() => setActiveTab('my_rooms')}>
+                            <i className="fas fa-user me-2"></i>My Rooms
+                        </div>
                     </div>
 
                     <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="swipe-container" style={{ minHeight: '300px' }}>
                         <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
-                            <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab === 'public' ? 'Public' : 'Private'} Room ID...`} value={searchId} onChange={e => setSearchId(e.target.value)} />
-                            <button className="btn btn-dark px-4" onClick={handleSearch}><i className="fas fa-search"></i> Search</button>
+                            <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} />
                         </div>
 
                         <div className="row g-3">
@@ -896,15 +934,25 @@
                                                 )}
                                             </div>
                                             
-                                            <div className="d-flex align-items-center justify-content-between mt-4">
+                                            {activeTab === 'my_rooms' && r.password && (
+                                                <div className="mt-3 text-center">
+                                                    <span className="badge bg-light text-dark border p-2 cursor-pointer shadow-sm w-100" onClick={() => copyPassword(r.password)}>
+                                                        <i className="fas fa-copy text-primary me-1"></i> Pass: {r.password}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            
+                                            <div className="d-flex align-items-center justify-content-between mt-3">
                                                 <div className="text-muted small fw-bold bg-light px-2 py-1 rounded">
                                                     <i className="fas fa-users text-secondary"></i> {r.member_count} / {r.max_members}
                                                 </div>
                                                 <button className={`btn btn-sm ${isFull ? 'btn-light text-muted' : (isFree ? 'btn-success' : 'btn-primary')} rounded-pill px-4 fw-bold shadow-sm`} 
                                                     disabled={isFull}
                                                     onClick={() => {
-                                                        if (r.is_private) {
+                                                        if (r.is_private && activeTab !== 'my_rooms') {
                                                             setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
+                                                        } else if (r.is_private && activeTab === 'my_rooms') {
+                                                            socket.emit('join_room', { room_id: r.id, password: r.password });
                                                         } else if (isFree) {
                                                             socket.emit('join_room', { room_id: r.id });
                                                         } else {
@@ -919,8 +967,8 @@
                                 );
                             }) : (
                                 <div className="col-12 text-center py-5 text-muted">
-                                    <i className={`fas fa-${activeTab === 'public' ? 'globe' : 'lock'} fs-1 mb-3 text-light`}></i>
-                                    <h5>No {activeTab} rooms found</h5>
+                                    <i className={`fas fa-${activeTab === 'public' ? 'globe' : (activeTab === 'private' ? 'lock' : 'user')} fs-1 mb-3 text-light`}></i>
+                                    <h5>No {activeTab.replace('_', ' ')} rooms found</h5>
                                     <p className="small">Be the first to create one!</p>
                                 </div>
                             )}
@@ -947,7 +995,7 @@
                     <div className="col-12 col-lg-8 mx-auto">
                         <div className="whiteboard-wrapper">
                             
-                            {roomData.room.status === 'DRAWING' && roomData.masked_word && (
+                            {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
                                 <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
                                     {roomData.masked_word.map((item, i) => (
                                         <div 
@@ -959,38 +1007,25 @@
                                                     setModal({ type: 'confirm_buy_hint', index: item.index });
                                                 }
                                             }}
-                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (1 Credit)" : ""}
+                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (3 Credits)" : ""}
                                         >
                                             {item.revealed ? item.char : '?'}
                                         </div>
                                     ))}
                                 </div>
-                            )}
+                            ) : null}
 
                             <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
                             
-                            {activeCall && activeCall.status === 'ACTIVE' && (
-                                <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
-                                    <div className="d-flex align-items-center justify-content-center w-100 px-2">
-                                        <div className="d-flex align-items-center gap-2">
-                                            <i className="fas fa-phone-volume heartbeat text-success"></i>
-                                            <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="d-flex align-items-center gap-4 justify-content-center w-100 pb-2">
-                                        <button className={`btn ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
-                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'} fs-5`}></i>
-                                        </button>
-                                        <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
-                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
-                                        </button>
-                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => socket.emit('end_call', {call_id: activeCall.id})} title="End Call">
-                                            <i className="fas fa-phone-slash fs-5"></i>
-                                        </button>
-                                    </div>
+                            {(activeCall && activeCall.status === 'ACTIVE') ? (
+                                                
+                                                {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
+                                                    <div className="d-flex align-items-center gap-2">
+                                                        <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
+                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
+                                                    </div>
                                 </div>
-                            )}
+                            ) : null}
 
                             <div className="mt-4 w-100">
                                 <h6 className="fw-bold text-secondary mb-3">Player List</h6>
@@ -1004,7 +1039,7 @@
                                                     {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
                                                 </div>
                                                 <div className="d-flex flex-column">
-                                                    <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
+                                                    <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
                                                     <div className="d-flex align-items-center gap-1">
                                                         {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : null}
                                                         {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
@@ -1013,22 +1048,22 @@
                                             </div>
                                             
                                             <div className="d-flex align-items-center gap-2">
-                                                {room.is_private && room.creator_id === tgId && m.user_id !== tgId && (
+                                                {(room.is_private && room.creator_id === tgId && m.user_id !== tgId) ? (
                                                     <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
-                                                )}
+                                                ) : null}
 
-                                                {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
+                                                {(mCall && mCall.status === 'ACTIVE') ? <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span> : null}
                                                 
-                                                {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
+                                                {(mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id) ? (
                                                     <div className="d-flex align-items-center gap-2">
                                                         <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
                                                         <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
                                                     </div>
-                                                )}
+                                                ) : null}
 
-                                                {m.user_id !== tgId && !mCall && !myCall && (
+                                                {(m.user_id !== tgId && !mCall && !myCall) ? (
                                                     <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
-                                                )}
+                                                ) : null}
                                             </div>
                                         </div>
                                     )
@@ -1294,7 +1329,7 @@
                         <div ref={messagesEndRef} />
                     </div>
                     
-                    {roomData.room.status === 'DRAWING' && (
+                    {roomData.room.status === 'DRAWING' ? (
                         <div className="chat-input-wrapper d-flex flex-column mt-auto">
                             <button 
                                 className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
@@ -1307,7 +1342,7 @@
                                 {isDrawer ? 'Give Up Drawing' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
                             </button>
 
-                            {!isDrawer && !hasGivenUp && (
+                            {(!isDrawer && !hasGivenUp) ? (
                                 <div className="d-flex w-100">
                                     <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
                                         value={input} onChange={e=>setInput(e.target.value)} 
@@ -1317,21 +1352,21 @@
                                         <i className="fas fa-check"></i>
                                     </button>
                                 </div>
-                            )}
+                            ) : null}
 
-                            {!isDrawer && hasGivenUp && (
+                            {(!isDrawer && hasGivenUp) ? (
                                 <div className="text-center text-muted p-2 fst-italic small fw-bold">
                                     You've given up. Waiting for others ({givenUpCount}/{totalGuessers})
                                 </div>
-                            )}
+                            ) : null}
 
-                            {isDrawer && (
+                            {isDrawer ? (
                                 <div className="text-center text-muted p-2 fst-italic small fw-bold">
                                     You are the drawer. Use tools to draw!
                                 </div>
-                            )}
+                            ) : null}
                         </div>
-                    )}
+                    ) : null}
                 </div>
             );
         };
