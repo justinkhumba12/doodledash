@@ -114,8 +114,8 @@
                 <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
                     <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
                     <h4 className="fw-bold">Enable Notifications</h4>
-                    <p className="text-muted small">To ensure you hear incoming calls and game alerts, please accept our audio policy.</p>
-                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Enter Room</button>
+                    <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically, please accept our audio policy.</p>
+                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Continue</button>
                 </div>
             </div>
         );
@@ -599,12 +599,12 @@
                         </div>
                     </div>
 
+                    {!policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
+
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
                     ) : (
                         <>
-                            {!policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
-                            
                             {roomData ? (
                                 <div className="container-fluid pt-3">
                                     <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
@@ -769,7 +769,9 @@
                                                <option value={500}>500 Credits</option>
                                                <option value={1000}>1000 Credits</option>
                                            </select>
-                                           <p className="small text-danger mb-3" style={{fontSize: '0.75rem'}}>*2 Credits transaction fee applies</p>
+                                           <p className="small text-danger mb-1" style={{fontSize: '0.75rem'}}>*2 Credits transaction fee applies</p>
+                                           <p className="small text-muted mb-0" style={{fontSize: '0.7rem'}}>- Receiver will get message with your telegram username for all credit.</p>
+                                           <p className="small text-muted mb-3" style={{fontSize: '0.7rem'}}>- You will get message with receiver's telegram username only when the credit is 200 or more.</p>
                                            <button className="btn btn-warning w-100 rounded-pill shadow fw-bold text-dark border border-warning" onClick={() => {
                                                socketRef.current.emit('transfer_credits', {target_id: profileModal.user_id, amount: sendAmount});
                                                setProfileModal(null);
