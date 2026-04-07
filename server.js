@@ -434,7 +434,7 @@ io.on('connection', (socket) => {
 
             if (room.is_private) {
                 if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
-            } else {
+            } else if (roomIdNum !== 1 && roomIdNum !== 2) {
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
