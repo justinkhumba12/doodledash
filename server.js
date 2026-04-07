@@ -173,7 +173,31 @@ app.post('/webhook', async (req, res) => {
         }).catch(console.error);
     };
 
-    if (update?.message?.text === '/start') {
+    if (update?.pre_checkout_query) {
+        fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true })
+        });
+        return;
+    }
+
+    if (update?.message?.successful_payment) {
+        try {
+            const payload = JSON.parse(update.message.successful_payment.invoice_payload);
+            const addedCredits = payload.amount;
+            const buyerId = payload.tgId;
+            
+            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
+            sendMsg(update.message.chat.id, `✅ Successfully purchased ${addedCredits} Credits! Your balance has been updated.`);
+            
+            const userState = await getUserState(buyerId);
+            if (userState) io.to(`user_${buyerId}`).emit('user_update', userState);
+        } catch(e) { console.error('Payment processing error:', e); }
+        return;
+    }
+
+    if (update?.message?.text && update.message.text.startsWith('/start')) {
         const chatId = update.message.chat.id;
         const tgId = update.message.from.id;
         const username = update.message.from.username;
@@ -182,6 +206,19 @@ app.post('/webhook', async (req, res) => {
             await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
         } catch (e) {
             console.error('Webhook DB Error:', e);
+        }
+
+        if (update.message.text === '/start load_balance') {
+            sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1000 Credits = 500 Telegram Stars*", {
+                inline_keyboard: [
+                    [{ text: '50 Credits (25 ⭐️)', callback_data: 'buy_50' }],
+                    [{ text: '100 Credits (50 ⭐️)', callback_data: 'buy_100' }],
+                    [{ text: '200 Credits (100 ⭐️)', callback_data: 'buy_200' }],
+                    [{ text: '500 Credits (250 ⭐️)', callback_data: 'buy_500' }],
+                    [{ text: '1000 Credits (500 ⭐️)', callback_data: 'buy_1000' }]
+                ]
+            });
+            return;
         }
 
         if (!username) {
@@ -201,7 +238,33 @@ app.post('/webhook', async (req, res) => {
         const username = query.from.username;
         const messageId = query.message.message_id;
 
-        if (query.data === 'check_username') {
+        if (query.data.startsWith('buy_')) {
+            const amount = parseInt(query.data.split('_')[1]);
+            const stars = amount / 2; // 1000 creds = 500 stars
+            
+            const payload = JSON.stringify({ tgId: tgId.toString(), amount: amount });
+            const invoice = {
+                chat_id: chatId,
+                title: `${amount} DoodleDash Credits`,
+                description: `Top up your account with ${amount} credits.`,
+                payload: payload,
+                provider_token: "", // Empty for Telegram Stars
+                currency: "XTR",
+                prices: [{ label: `${amount} Credits`, amount: stars }]
+            };
+            
+            fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(invoice)
+            }).catch(console.error);
+            
+            fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ callback_query_id: query.id })
+            });
+        } else if (query.data === 'check_username') {
             if (!username) {
                 fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
                     method: 'POST',
