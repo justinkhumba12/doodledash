@@ -19,13 +19,16 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/sw.js', (req, res) => {
     res.setHeader('Content-Type', 'application/javascript');
     res.send(`
-        const CACHE_NAME = 'doodledash-cache-v1';
+        const CACHE_NAME = 'doodledash-cache-v2';
         const urlsToCache = [
             '/',
             '/audio/mgs_notification.mp3',
             '/audio/guess_notification.mp3',
             '/audio/call.mp3',
             '/thememusic/themesongdefault.mp3',
+            '/thememusic/Pencils%20Down.mp3',
+            '/thememusic/Pencils%20Down%202.mp3',
+            '/thememusic/Quick%20Draw%20Frenzy.mp3',
             'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
             'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
             'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
@@ -59,7 +62,8 @@ async function initDB() {
                 ad2_claims_today INT DEFAULT 0,
                 last_ad2_claim_time DATETIME,
                 profile_pic VARCHAR(255),
-                last_active DATETIME
+                last_active DATETIME,
+                tg_username VARCHAR(100)
             )
         `);
 
@@ -91,7 +95,8 @@ async function initDB() {
             "ALTER TABLE rooms ADD COLUMN expire_at DATETIME",
             "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
             "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE room_members ADD COLUMN purchased_hints VARCHAR(255) DEFAULT '[]'"
+            "ALTER TABLE room_members ADD COLUMN purchased_hints VARCHAR(255) DEFAULT '[]'",
+            "ALTER TABLE users ADD COLUMN tg_username VARCHAR(100)"
         ];
         
         for (let query of migrations) {
@@ -154,35 +159,76 @@ initDB();
 
 app.post('/webhook', async (req, res) => {
     const update = req.body;
+    res.sendStatus(200); // Acknowledge early
+
+    const token = process.env.BOT_TOKEN; 
+    const webAppUrl = process.env.WEBAPP_URL; 
+    if (!token || !webAppUrl) return;
+
+    const sendMsg = (chatId, text, replyMarkup) => {
+        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
+        }).catch(console.error);
+    };
+
     if (update?.message?.text === '/start') {
         const chatId = update.message.chat.id;
         const tgId = update.message.from.id;
+        const username = update.message.from.username;
         
         try {
-            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
+            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
         } catch (e) {
             console.error('Webhook DB Error:', e);
         }
 
-        const token = process.env.BOT_TOKEN; 
-        const webAppUrl = process.env.WEBAPP_URL; 
-        
-        if (token && webAppUrl) {
+        if (!username) {
+            sendMsg(chatId, "⚠️ You need a Telegram username to play and receive credits!\n\nPlease set a username in your Telegram profile Settings, then click 'Check' below.", {
+                inline_keyboard: [[{ text: '🔄 Check', callback_data: 'check_username' }]]
+            });
+        } else {
             const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-            fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: chatId,
-                    text: 'Welcome to DoodleDash! Click below to play.',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-                    }
-                })
-            }).catch(console.error);
+            sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
+                inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
+            });
+        }
+    } else if (update?.callback_query) {
+        const query = update.callback_query;
+        const chatId = query.message.chat.id;
+        const tgId = query.from.id;
+        const username = query.from.username;
+        const messageId = query.message.message_id;
+
+        if (query.data === 'check_username') {
+            if (!username) {
+                fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ callback_query_id: query.id, text: "Username not set yet! Please set it in Settings.", show_alert: true })
+                });
+            } else {
+                try {
+                    await db.query('UPDATE users SET tg_username = ? WHERE tg_id = ?', [username, tgId.toString()]);
+                } catch(e) {}
+                
+                const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
+                fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        message_id: messageId,
+                        text: "Awesome! Your username is verified.\n\nWelcome to DoodleDash! Click below to play.",
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
+                        }
+                    })
+                });
+            }
         }
     }
-    res.sendStatus(200);
 });
 
 async function getUserState(tg_id) {
@@ -363,7 +409,7 @@ io.on('connection', (socket) => {
     socket.lastActiveEvent = Date.now();
     socket.idleWarned = false;
 
-    // Extracted robust helper logic for joining rooms gracefully behind the scenes (for standard & Auto-Join)
+    // Extracted robust helper logic for joining rooms gracefully behind the scenes
     const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
         const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
         if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
@@ -520,12 +566,37 @@ io.on('connection', (socket) => {
 
             socket.emit('reward_success', `Successfully sent ${amt} credits to ${toHex(target_id)}!`);
             
-            // Notify receiver if they are online
+            // Notification Logic via Bot API
+            const token = process.env.BOT_TOKEN;
+            const sendMsg = (chatId, text, replyMarkup) => {
+                if (!token) return;
+                fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
+                }).catch(console.error);
+            };
+
             const [targetUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
+            const [senderUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [currentUser]);
+            
+            const targetUsername = targetUser.length > 0 ? targetUser[0].tg_username : null;
+            const senderUsername = senderUser.length > 0 ? senderUser[0].tg_username : null;
+
+            // Notify sender if amount >= 200
+            if (amt >= 200) {
+                let sMarkup = targetUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${targetUsername}` }]] } : {};
+                sendMsg(currentUser, `You successfully sent ${amt} credits to ${targetUsername ? '@' + targetUsername : toHex(target_id)}.`, sMarkup);
+            }
+
+            // Notify receiver
             if (targetUser.length > 0) {
+                let rMarkup = senderUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${senderUsername}` }]] } : {};
+                sendMsg(target_id, `🎁 You received a gift of ${amt} credits from ${senderUsername ? '@' + senderUsername : toHex(currentUser)}!`, rMarkup);
+                
                 const targetState = await getUserState(target_id);
                 io.to(`user_${target_id}`).emit('user_update', targetState);
-                io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits from ${toHex(currentUser)}!`);
+                io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits!`);
             }
             
             // Update sender's balance
@@ -543,7 +614,6 @@ io.on('connection', (socket) => {
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
             let insertRes;
             
-            // Only cost 1 extra credit for auto_join IF it's a public room.
             let cost = (auto_join && !is_private) ? 1 : 0;
             
             if (is_private) {
@@ -572,7 +642,6 @@ io.on('connection', (socket) => {
             const newRoomId = insertRes.insertId;
 
             if (auto_join) {
-                // Immediately transport user inside explicitly bypassing regular Join Checks
                 await performJoinRoom(currentUser, newRoomId, password, true);
             } else {
                 socket.emit('room_created', { room_id: newRoomId });
@@ -673,7 +742,6 @@ io.on('connection', (socket) => {
             
             const [countRes] = await db.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
             if (countRes[0].c >= 40) {
-                // Delete oldest ones ensuring only latest 20 remain
                 await db.query(`
                     DELETE FROM chats 
                     WHERE room_id = ? AND id NOT IN (
@@ -1005,7 +1073,7 @@ setInterval(async () => {
         const [expiredRooms] = await db.query("SELECT id FROM rooms WHERE is_private = 1 AND expire_at <= UTC_TIMESTAMP()");
         for (let r of expiredRooms) {
             io.to(`room_${r.id}`).emit('room_expired');
-            await deleteRoom(r.id); // Cascade Deletion handled safely
+            await deleteRoom(r.id); 
             
             const sockets = await io.in(`room_${r.id}`).fetchSockets();
             sockets.forEach(s => {
