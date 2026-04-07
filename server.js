@@ -15,6 +15,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
+
 // Database Connection
 let db;
 async function initDB() {
@@ -61,7 +63,7 @@ async function initDB() {
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
             "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
-            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE" // Fix for the missing column error
+            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE" 
         ];
         
         for (let query of migrations) {
@@ -207,7 +209,6 @@ const syncRoom = async (roomId) => {
             users.forEach(u => profiles[u.tg_id] = u.profile_pic);
         }
 
-        // FIX: Strip interval/NodeJS timer objects to prevent Call Stack Exceeded on binary parser
         const activeCallsList = Array.from(activeCalls.values())
             .filter(c => c.room_id === roomId)
             .map(c => ({
@@ -433,6 +434,16 @@ io.on('connection', (socket) => {
         } catch (err) {}
     });
 
+    socket.on('give_up', async () => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, 'System', `${toHex(currentUser)} gave up this round.`]);
+            syncRoom(currentRoom);
+        } catch (err) {
+            console.error('Give Up Error:', err);
+        }
+    });
+
     socket.on('guess', async ({ guess }) => {
         try {
             if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
@@ -443,18 +454,16 @@ io.on('connection', (socket) => {
             if (room[0].status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
             if (room[0].current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
             
-            // Validate Max 5 Guesses
             const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            if (guessCount[0].count >= 5) {
-                return socket.emit('create_error', 'Maximum of 5 guesses reached for this round.');
-            }
             
-            // Deduct 1 Credit for guessing
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 1) {
-                return socket.emit('create_error', 'Not enough credits to guess! (Cost: 1 Credit)');
+            // Allow the first 5 free. Beyond that, charge 1 credit.
+            if (guessCount[0].count >= 5) {
+                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (u[0].credits < 1) {
+                    return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
+                }
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
             }
-            await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
             
             const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.trim().toLowerCase();
             
