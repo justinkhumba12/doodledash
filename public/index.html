@@ -9,10 +9,23 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     
+    <!-- Preload Assets -->
+    <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
+    <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
+    <link rel="preload" href="/audio/call.mp3" as="audio">
+
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW Registration failed: ', err));
+            });
+        }
+    </script>
+
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -32,7 +45,9 @@
         
         .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; touch-action: pan-y; }
         .interaction-panel.open { right: 0; }
-        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); }
+        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); transition: 0.3s; }
+        .toggle-glow { background-color: #f59e0b !important; box-shadow: 0 0 20px #f59e0b !important; animation: pulseGlow 1s infinite alternate; }
+        @keyframes pulseGlow { 0% { transform: translateY(-50%) scale(1); } 100% { transform: translateY(-50%) scale(1.15); } }
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
         .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
         .panel-tab.active { background: var(--primary); color: white; }
@@ -118,6 +133,7 @@
             const [roomData, setRoomData] = useState(null);
             const [activeTab, setActiveTab] = useState('chat');
             const [panelOpen, setPanelOpen] = useState(false);
+            const [glowToggle, setGlowToggle] = useState(false);
             const [modal, setModal] = useState(null);
             const [profileModal, setProfileModal] = useState(null);
             
@@ -149,6 +165,19 @@
 
             useEffect(() => {
                 const unlockAudio = () => {
+                    const sounds = [mgsSound, guessSound, callSound];
+                    sounds.forEach(s => {
+                        s.volume = 0;
+                        const p = s.play();
+                        if (p !== undefined) {
+                            p.then(() => {
+                                s.pause();
+                                s.currentTime = 0;
+                                s.volume = 1;
+                            }).catch(() => {});
+                        }
+                    });
+
                     const audioEl = remoteAudioRef.current;
                     if (audioEl) {
                         const playPromise = audioEl.play();
@@ -159,23 +188,15 @@
                         }
                     }
                     
-                    // Unlock other sounds
-                    callSound.play().then(() => {
-                        callSound.pause();
-                        callSound.currentTime = 0;
-                    }).catch(() => {});
-                    mgsSound.play().then(() => mgsSound.pause()).catch(() => {});
-                    guessSound.play().then(() => guessSound.pause()).catch(() => {});
-
-                    window.removeEventListener('click', unlockAudio);
-                    window.removeEventListener('touchstart', unlockAudio);
+                    window.removeEventListener('pointerdown', unlockAudio);
+                    window.removeEventListener('keydown', unlockAudio);
                 };
-                window.addEventListener('click', unlockAudio);
-                window.addEventListener('touchstart', unlockAudio);
+                window.addEventListener('pointerdown', unlockAudio);
+                window.addEventListener('keydown', unlockAudio);
                 
                 return () => {
-                    window.removeEventListener('click', unlockAudio);
-                    window.removeEventListener('touchstart', unlockAudio);
+                    window.removeEventListener('pointerdown', unlockAudio);
+                    window.removeEventListener('keydown', unlockAudio);
                 };
             }, []);
 
@@ -455,21 +476,34 @@
 
             if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
 
-            let timeLeft = null;
+            let timeLeftText = '';
             if (roomData && roomData.room.is_private && roomData.room.expire_at) {
                 const timeDiff = new Date(roomData.room.expire_at).getTime() - new Date(roomData.server_time).getTime();
                 const hoursLeft = Math.max(0, Math.floor(timeDiff / (1000 * 60 * 60)));
                 const minsLeft = Math.max(0, Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60)));
-                timeLeft = `${hoursLeft}h ${minsLeft}m`;
+                
+                if (hoursLeft === 0 && minsLeft === 0) {
+                    timeLeftText = '< 1m';
+                } else {
+                    timeLeftText = `${hoursLeft > 0 ? hoursLeft + 'h ' : ''}${minsLeft > 0 ? minsLeft + 'm' : (hoursLeft > 0 ? '' : '0m')}`.trim();
+                }
             }
+
+            const handleLoadBalance = () => {
+                // IMPORTANT: Replace 'YOUR_BOT_USERNAME' with your actual Telegram bot username
+                tg.openTelegramLink('https://t.me/YOUR_BOT_USERNAME?start=load_balance');
+            };
 
             return (
                 <div>
                     <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
                     <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm">
-                            <i className="fas fa-coins text-warning me-1"></i> <b>{user.credits}</b>
+                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
+                            <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{user.credits}</b>
+                            <button className="btn btn-sm btn-link p-0 text-success m-0 lh-1" onClick={handleLoadBalance} title="Load Balance">
+                                <i className="fas fa-plus-circle fs-5"></i>
+                            </button>
                         </div>
                     </div>
 
@@ -482,8 +516,8 @@
                                     <div className="d-flex flex-column">
                                         <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
                                         <div className="d-flex align-items-center gap-2 mt-1">
-                                            {timeLeft && <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeft}</span>}
-                                            {timeLeft && <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button>}
+                                            {timeLeftText && <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span>}
+                                            {timeLeftText && <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button>}
                                             {roomData.room.is_private && roomData.room.creator_id === tgId && (
                                                 <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
                                             )}
@@ -512,7 +546,7 @@
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-                                <div className="floating-toggle" onClick={() => setPanelOpen(!panelOpen)}>
+                                <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
                                     <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                 </div>
                                 <div className="panel-header">
@@ -520,8 +554,8 @@
                                     <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
                                 </div>
                                 
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
-                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
                             </div>
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
@@ -606,13 +640,13 @@
                                 <div className="mb-3">
                                     <label className="form-label text-muted small mb-1">Room Duration</label>
                                     <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                                        <option value={2}>2 Hours (4 Credits)</option>
-                                        <option value={4}>4 Hours (8 Credits)</option>
-                                        <option value={12}>12 Hours (20 Credits)</option>
+                                        <option value={2}>2 Hours (2 Credits)</option>
+                                        <option value={4}>4 Hours (4 Credits)</option>
+                                        <option value={12}>12 Hours (10 Credits)</option>
                                     </select>
                                 </div>
                                 <div className="alert alert-warning py-2 small mb-3">
-                                    <i className="fas fa-coins text-warning me-1"></i> Total Cost: {maxMembers + (expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4))} Credits
+                                    <i className="fas fa-coins text-warning me-1"></i> Total Cost: {maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))} Credits
                                 </div>
                             </>
                         ) : (
@@ -677,13 +711,13 @@
                         <div className="mb-3">
                             <label className="form-label text-muted small mb-1">Add Duration</label>
                             <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                                <option value={2}>+2 Hours (4 Credits)</option>
-                                <option value={4}>+4 Hours (8 Credits)</option>
-                                <option value={12}>+12 Hours (20 Credits)</option>
+                                <option value={2}>+2 Hours (2 Credits)</option>
+                                <option value={4}>+4 Hours (4 Credits)</option>
+                                <option value={12}>+12 Hours (10 Credits)</option>
                             </select>
                         </div>
                         <div className="alert alert-warning py-2 small mb-3">
-                            <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4)} Credits
+                            <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2)} Credits
                         </div>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
@@ -738,11 +772,11 @@
             } else if (modal.type === 'confirm_buy_hint') {
                 content = (
                     <>
-                        <p className="text-muted">Reveal this hidden character for <b>3 Credits</b>?</p>
-                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 3 Credits</div>
+                        <p className="text-muted">Reveal this hidden character for <b>2 Credits</b>?</p>
+                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 2 Credits</div>
                         <div className="d-flex gap-2 mt-4">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (3 Cred)</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (2 Cred)</button>
                         </div>
                     </>
                 );
@@ -1028,7 +1062,7 @@
                                                     setModal({ type: 'confirm_buy_hint', index: item.index });
                                                 }
                                             }}
-                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (3 Credits)" : ""}
+                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (2 Credits)" : ""}
                                         >
                                             {item.revealed ? item.char : '?'}
                                         </div>
@@ -1109,101 +1143,24 @@
             );
         };
 
-        const Whiteboard = ({ roomData, tgId, socket }) => {
-            const canvasRef = useRef(null);
-            const { room, drawings, members } = roomData;
-            const isDrawer = room.current_drawer_id === tgId;
-            const isDrawingPhase = room.status === 'DRAWING';
+        const ChatBox = ({ chats, profiles, socket, tgId, setGlowToggle }) => {
+            const [input, setInput] = useState('');
+            const prevCount = useRef(chats.length);
+            const messagesEndRef = useRef(null);
             
-            const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
-            const readyCount = members.filter(m => m.is_ready).length;
-            
-            const [wordInput, setWordInput] = useState('');
-            let drawing = false;
-            let currentLine = [];
-            let lastPos = {x: 0, y: 0};
-
-            const redraw = useCallback(() => {
-                const canvas = canvasRef.current;
-                if(!canvas) return;
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0,0, canvas.width, canvas.height);
-                ctx.strokeStyle = '#334155';
-                ctx.lineCap = 'round';
-                ctx.lineWidth = 5;
-                
-                drawings.forEach(jsonStr => {
-                    try {
-                        const lines = JSON.parse(jsonStr);
-                        lines.forEach(l => {
-                            ctx.beginPath();
-                            ctx.moveTo(l.x0, l.y0);
-                            ctx.lineTo(l.x1, l.y1);
-                            ctx.stroke();
-                        });
-                    } catch(e){}
-                });
-            }, [drawings]);
-
-            useEffect(() => { redraw(); }, [redraw]);
-
             useEffect(() => {
-                const handleLiveDraw = (lines) => {
-                    const canvas = canvasRef.current;
-                    const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = '#334155';
-                    ctx.lineCap = 'round';
-                    ctx.lineWidth = 5;
-                    lines.forEach(l => {
-                        ctx.beginPath();
-                        ctx.moveTo(l.x0, l.y0);
-                        ctx.lineTo(l.x1, l.y1);
-                        ctx.stroke();
-                    });
-                };
-                socket.on('live_draw', handleLiveDraw);
-                return () => socket.off('live_draw', handleLiveDraw);
-            }, [socket]);
-
-            const getMousePos = (e) => {
-                const rect = canvasRef.current.getBoundingClientRect();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                const scaleX = 500 / rect.width;
-                const scaleY = 500 / rect.height;
-                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
-            };
-
-            const startDraw = (e) => {
-                if (!isDrawer || !isDrawingPhase) return;
-                e.preventDefault();
-                drawing = true;
-                currentLine = [];
-                lastPos = getMousePos(e);
-            };
-
-            const moveDraw = (e) => {
-                if (!drawing) return;
-                e.preventDefault();
-                const newPos = getMousePos(e);
-                
-                const ctx = canvasRef.current.getContext('2d');
-                ctx.beginPath();
-                ctx.moveTo(lastPos.x, lastPos.y);
-                ctx.lineTo(newPos.x, newPos.y);
-                ctx.stroke();
-
-                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
-                lastPos = newPos;
-            };
-
-            const stopDraw = () => {
-                if(!drawing) return;
-                drawing = false;
-                if(currentLine.length > 0) {
-                    socket.emit('draw', { lines: currentLine });
+                if (chats.length > prevCount.current) {
+                    const newChats = chats.slice(prevCount.current);
+                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
+                    if (isOthersMessage) {
+                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                        setGlowToggle(true);
+                        setTimeout(() => setGlowToggle(false), 3000);
+                    }
                 }
-            };
+                prevCount.current = chats.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [chats, tgId, setGlowToggle]);
 
             return (
                 <div className="whiteboard-container">
@@ -1264,50 +1221,7 @@
             );
         };
 
-        const ChatBox = ({ chats, profiles, socket, tgId }) => {
-            const [input, setInput] = useState('');
-            const prevCount = useRef(chats.length);
-            const messagesEndRef = useRef(null);
-            
-            useEffect(() => {
-                if (chats.length > prevCount.current) {
-                    const newChats = chats.slice(prevCount.current);
-                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
-                    if (isOthersMessage) {
-                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                    }
-                }
-                prevCount.current = chats.length;
-                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [chats, tgId]);
-
-            return (
-                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
-                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
-                        {chats.map(c => (
-                            <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
-                                {c.user_id !== 'System' && (
-                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
-                                )}
-                                <div className="d-flex flex-column w-100">
-                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                        {c.user_id === 'System' ? 'System' : toHex(c.user_id)}
-                                    </small>
-                                    <span style={{marginTop: '2px'}}>{c.message}</span>
-                                </div>
-                            </div>
-                        ))}
-                        <div ref={messagesEndRef} />
-                    </div>
-                    <div className="chat-input-wrapper d-flex mt-auto">
-                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
-                        <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
-                    </div>
-                </div>
-            );
-        };
-
-        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal, setGlowToggle }) => {
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
@@ -1340,11 +1254,13 @@
                     const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
                     if (shouldPlaySound) {
                         guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                        setGlowToggle(true);
+                        setTimeout(() => setGlowToggle(false), 3000);
                     }
                 }
                 prevCount.current = guesses.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [guesses, tgId]);
+            }, [guesses, tgId, setGlowToggle]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
