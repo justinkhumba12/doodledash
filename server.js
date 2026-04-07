@@ -181,20 +181,37 @@ async function getUserState(tg_id) {
 
 const activeCalls = new Map(); 
 const roomRedoStacks = {}; 
-const disconnectTimeouts = new Map(); // Tracks 10-second offline grace periods
-let lastCleanupDay = new Date().getUTCDate(); // Tracks the last day for chat cleanup
+const disconnectTimeouts = new Map(); 
+let lastCleanupDay = new Date().getUTCDate(); 
 
 const broadcastRooms = async () => {
-    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
+    // Send both Private and Public Rooms
+    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
     io.emit('lobby_rooms_update', rooms);
 };
 
-// Auto Room Resetter
+// Auto Room Resetter and Deleter
 const checkRoomReset = async (roomId) => {
-    const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
-    if (members[0].c < 2) {
-        await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-        await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
+    if (!roomId) return;
+    try {
+        const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
+        if (members[0].c === 0) {
+            // Delete room if empty unless it's room 1 or 2
+            if (roomId !== 1 && roomId !== 2) {
+                await db.query("DELETE FROM rooms WHERE id = ?", [roomId]);
+                await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
+                await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
+                await db.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
+                delete roomRedoStacks[roomId];
+            } else {
+                await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+            }
+        } else if (members[0].c < 2) {
+            await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
+        }
+    } catch(err) {
+        console.error("Auto delete room error:", err);
     }
 };
 
@@ -237,7 +254,6 @@ const syncRoom = async (roomId) => {
                         return { ...g, guess_text: '••••••••' };
                     });
 
-                    // Build masked word based on shared hints & locally purchased hints
                     let masked_word = null;
                     if (['DRAWING', 'REVEAL', 'BREAK'].includes(roomData[0].status)) {
                         const base_hints = JSON.parse(roomData[0].base_hints || '[]');
@@ -274,7 +290,6 @@ const syncRoom = async (roomId) => {
     }
 };
 
-// End active calls if a user disconnects or leaves room to prevent orphaned calls
 const terminateCallsForUser = (userId) => {
     for (const [callId, call] of activeCalls.entries()) {
         if (call.caller === userId || call.receiver === userId) {
@@ -298,13 +313,11 @@ io.on('connection', (socket) => {
             currentUser = tg_id;
             socket.currentUser = tg_id; 
             
-            // Reconnection check logic (Cancel Grace Period Drop)
             if (disconnectTimeouts.has(tg_id)) {
                 clearTimeout(disconnectTimeouts.get(tg_id));
                 disconnectTimeouts.delete(tg_id);
             }
 
-            // CRITICAL for WebRTC signaling
             socket.join(`user_${tg_id}`);
             
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
@@ -315,7 +328,7 @@ io.on('connection', (socket) => {
             }
 
             const userState = await getUserState(tg_id);
-            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
+            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
             
             const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
             if (existing.length > 0) {
@@ -440,7 +453,7 @@ io.on('connection', (socket) => {
 
             const oldRoom = currentRoom;
             if (oldRoom) {
-                terminateCallsForUser(currentUser); // End calls in old room
+                terminateCallsForUser(currentUser); 
                 socket.leave(`room_${oldRoom}`);
                 await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
                 await checkRoomReset(oldRoom);
@@ -464,7 +477,7 @@ io.on('connection', (socket) => {
     socket.on('leave_room', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            terminateCallsForUser(currentUser); // Auto disconnect active calls
+            terminateCallsForUser(currentUser); 
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
             await checkRoomReset(currentRoom);
             socket.leave(`room_${currentRoom}`);
@@ -479,7 +492,6 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom || !message.trim()) return;
             await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
             
-            // Keep only the last 20 messages per room to prevent overflow
             await db.query(`
                 DELETE FROM chats 
                 WHERE room_id = ? AND id NOT IN (
@@ -502,11 +514,9 @@ io.on('connection', (socket) => {
             const isDrawer = room[0].current_drawer_id === currentUser;
 
             if (isDrawer) {
-                // Drawer giving up reveals immediately
                 await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
                 await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
             } else {
-                // Guesser voting to give up
                 await db.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
                 await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
 
@@ -537,7 +547,6 @@ io.on('connection', (socket) => {
             
             const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             
-            // Allow the first 5 free. Beyond that, charge 1 credit.
             if (guessCount[0].count >= 5) {
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < 1) {
@@ -578,7 +587,6 @@ io.on('connection', (socket) => {
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                 await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
                 
-                // NOTIFY EVERYONE THAT THIS USER USED A HINT
                 await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 1 Credit!`]);
                 
                 const userState = await getUserState(currentUser);
@@ -599,7 +607,6 @@ io.on('connection', (socket) => {
                 return socket.emit('create_error', 'Word must be between 3 and 10 characters.');
             }
 
-            // Calculate Random Hints mapped on server
             let hints = [];
             let validIndices = [];
             for (let i = 0; i < wordClean.length; i++) {
@@ -618,7 +625,7 @@ io.on('connection', (socket) => {
                 while (hints.length < count && validIndices.length > 0) {
                     let randIdx = Math.floor(Math.random() * validIndices.length);
                     hints.push(validIndices[randIdx]);
-                    validIndices.splice(randIdx, 1); // remove picked index
+                    validIndices.splice(randIdx, 1); 
                 }
             }
 
@@ -677,7 +684,6 @@ io.on('connection', (socket) => {
     socket.on('initiate_call', async ({ receiver_id }) => {
         if (!currentUser || !currentRoom) return;
         
-        // Prevent calling if either user is already in an active call
         const isInCall = Array.from(activeCalls.values()).some(
             c => c.caller === currentUser || c.receiver === currentUser ||
                  c.caller === receiver_id || c.receiver === receiver_id
@@ -702,7 +708,6 @@ io.on('connection', (socket) => {
             activeCalls.set(call_id, call);
             io.to(`room_${call.room_id}`).emit('call_update', call);
             
-            // Charge ONLY the caller for the call
             call.interval = setInterval(async () => {
                 const c = activeCalls.get(call_id);
                 if(!c) return clearInterval(call.interval);
@@ -736,13 +741,11 @@ io.on('connection', (socket) => {
     });
 
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-        // CRITICAL FIX: Route direct to user's private socket room, not game room
         socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
 
     socket.on('disconnect', () => {
         if (currentUser) {
-            // Apply Grace Period 10-second Disconnect Timeout
             const timeoutId = setTimeout(async () => {
                 terminateCallsForUser(currentUser); 
                 if (currentRoom) {
@@ -781,7 +784,6 @@ setInterval(async () => {
             }
         }
         
-        // Idle Tracker - 60 sec inactivity remove logic & 50s Warning
         const now = Date.now();
         io.sockets.sockets.forEach(s => {
             if (s.currentRoom) {
@@ -805,7 +807,6 @@ setInterval(async () => {
             }
         });
 
-        // Daily Chat Cleanup (Deletes last day's messages when next day comes)
         const currentDay = new Date().getUTCDate();
         if (currentDay !== lastCleanupDay) {
             lastCleanupDay = currentDay;
