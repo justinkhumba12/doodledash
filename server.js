@@ -31,10 +31,8 @@ async function initDB() {
                 credits INT DEFAULT 0,
                 last_daily_claim DATE,
                 ad_claims_today INT DEFAULT 0,
-                last_ad_claim_date DATE,
                 last_ad_claim_time DATETIME,
                 ad2_claims_today INT DEFAULT 0,
-                last_ad2_claim_date DATE,
                 last_ad2_claim_time DATETIME,
                 profile_pic VARCHAR(255),
                 last_active DATETIME
@@ -165,12 +163,12 @@ async function getUserState(tg_id) {
     const [rows] = await db.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_date IS NULL OR DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        (last_ad2_claim_date IS NULL OR DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
+        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
+        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
         GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
-        (DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
-        (DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
+        (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
+        (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
         FROM users WHERE tg_id = ?
     `, [tg_id]);
 
@@ -353,7 +351,7 @@ io.on('connection', (socket) => {
                 const prefix = type === 'ad' ? 'ad' : 'ad2';
                 const [u] = await db.query(`SELECT
                     ${prefix}_claims_today as claims,
-                    DATE_FORMAT(last_${prefix}_claim_date, '%Y-%m-%d') as last_date,
+                    DATE_FORMAT(last_${prefix}_claim_time, '%Y-%m-%d') as last_date,
                     DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
                     TIMESTAMPDIFF(MINUTE, last_${prefix}_claim_time, UTC_TIMESTAMP()) as mins_passed
                     FROM users WHERE tg_id = ?`, [currentUser]);
@@ -363,10 +361,10 @@ io.on('connection', (socket) => {
                     const isToday = user.last_date === user.today;
 
                     if (!user.last_date || !isToday) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
                     } else if (user.claims < 2 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
                     } else {
                         msg = 'Ad reward not available yet. Max 2 per day, 3 hours apart.';
