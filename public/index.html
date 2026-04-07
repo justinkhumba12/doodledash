@@ -200,7 +200,16 @@
             };
 
             const initPeerConnection = (stream, callObj) => {
-                const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+                // Expanded ICE Servers configuration using public Google STUN for reliable NAT traversal and IPv4/IPv6 support
+                const pc = new RTCPeerConnection({ 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' }
+                    ] 
+                });
                 stream.getTracks().forEach(track => pc.addTrack(track, stream));
                 
                 pc.onicecandidate = (e) => {
@@ -641,6 +650,7 @@
 
         const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, callVolume, setCallVolume }) => {
             const { room, members, activeCalls } = roomData;
+            const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
 
             return (
                 <div className="row">
@@ -700,7 +710,8 @@
                                                     </div>
                                                 )}
 
-                                                {m.user_id !== tgId && !mCall && (
+                                                {/* Only show call button if neither the viewer nor the target is currently in an active/ringing call */}
+                                                {m.user_id !== tgId && !mCall && !myCall && (
                                                     <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
                                                 )}
                                             </div>
