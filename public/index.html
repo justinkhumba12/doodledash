@@ -74,6 +74,8 @@
         
         const mgsSound = new Audio('/audio/mgs_notification.mp3');
         const guessSound = new Audio('/audio/guess_notification.mp3');
+        const callSound = new Audio('/audio/call.mp3');
+        callSound.loop = true;
 
         const tgId = urlParams.get('user_id');
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
@@ -155,6 +157,7 @@
                             }).catch(() => console.log("Audio unlock interaction needed."));
                         }
                     }
+                    callSound.load();
                     window.removeEventListener('click', unlockAudio);
                     window.removeEventListener('touchstart', unlockAudio);
                 };
@@ -166,6 +169,15 @@
                     window.removeEventListener('touchstart', unlockAudio);
                 };
             }, []);
+
+            useEffect(() => {
+                if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
+                    callSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                } else {
+                    callSound.pause();
+                    callSound.currentTime = 0;
+                }
+            }, [activeCall, tgId]);
 
             const requestMic = async () => {
                 try {
@@ -506,8 +518,8 @@
                                 <h4>Incoming Call</h4>
                                 <p className="text-muted">From {toHex(activeCall.caller)}</p>
                                 <div className="d-flex gap-2 mt-3">
-                                    <button className="btn btn-danger w-50" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
-                                    <button className="btn btn-success w-50" onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i> Accept</button>
+                                    <button className="btn btn-danger w-50 py-2 fs-5" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                                    <button className="btn btn-success w-50 py-2 fs-5" onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i></button>
                                 </div>
                             </div>
                         </div>
@@ -616,7 +628,7 @@
                         <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave Room</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
                         </div>
                     </>
                 );
@@ -724,7 +736,7 @@
                 const prefix = adNum === 1 ? 'ad' : 'ad2';
                 const claims = user[`${prefix}_claims_today`] || 0;
                 const isAvailable = user[`${prefix}_available`];
-                const waitMins = user[`${prefix}_wait_mins`];
+                const waitMins = Number(user[`${prefix}_wait_mins`]) || 0;
 
                 let btnText = title;
                 let disabled = false;
@@ -747,7 +759,7 @@
             return (
                 <div className="container mt-3">
                     <div className="row mb-4">
-                        <div className="col-md-4 mb-3">
+                        <div className="col-md-6 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
                                 <h5><i className="fas fa-calendar-check"></i> Daily Claim</h5>
                                 <p className="small mb-2">Get 1 Free Credit everyday!</p>
@@ -756,18 +768,14 @@
                                 </button>
                             </div>
                         </div>
-                        <div className="col-md-4 mb-3">
-                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'}}>
-                                <h5><i className="fas fa-tv"></i> Ad Bonus 1</h5>
-                                <p className="small mb-2">Watch to earn 2 Credits!</p>
-                                {renderAdBtn(1, 'Watch Ad 1')}
-                            </div>
-                        </div>
-                        <div className="col-md-4 mb-3">
-                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f43f5e 0%, #fb7185 100%)'}}>
-                                <h5><i className="fas fa-tv"></i> Ad Bonus 2</h5>
-                                <p className="small mb-2">Watch to earn 2 Credits!</p>
-                                {renderAdBtn(2, 'Watch Ad 2')}
+                        <div className="col-md-6 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
+                                <h5><i className="fas fa-tv"></i> Ad Bonuses</h5>
+                                <p className="small mb-2">Watch to earn up to 4 Credits!</p>
+                                <div className="d-flex gap-2">
+                                    {renderAdBtn(1, 'Ad 1')}
+                                    {renderAdBtn(2, 'Ad 2')}
+                                </div>
                             </div>
                         </div>
                     </div>
