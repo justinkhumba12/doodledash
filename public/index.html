@@ -211,15 +211,15 @@
             };
 
             const initPeerConnection = (stream, callObj) => {
-                // Robust ICE Servers configuration for IPv4/IPv6 NAT Traversal without TURN.
+                // Highly robust NAT Traversal config without TURN (using Cloudflare and Google STUN for IPv4/IPv6 Bridging)
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
-                    ] 
+                        { urls: 'stun:stun.cloudflare.com:3478' },     // Effective NAT64/IPv6 translation
+                        { urls: 'stun:stun.miwifi.com:3478' }          // Solid fallback behavior in mixed regions
+                    ],
+                    iceCandidatePoolSize: 10 // Pre-gather candidates deeply for better NAT piercing across connections
                 });
                 
                 if (stream) {
@@ -256,21 +256,23 @@
                         await pc.setLocalDescription(answer);
                         socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                         
-                        // Flush any candidates that arrived early
+                        // Flush any candidates that arrived early safely
                         while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
+                            const c = candidateQueue.current.shift();
+                            pc.addIceCandidate(c).catch(e => console.error("Failed adding queued candidate after offer:", e));
                         }
                     } else if (signal.type === 'answer') {
                         await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
                         
                         while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
+                            const c = candidateQueue.current.shift();
+                            pc.addIceCandidate(c).catch(e => console.error("Failed adding queued candidate after answer:", e));
                         }
                     } else if (signal.type === 'candidate') {
                         const candidate = new RTCIceCandidate(signal.candidate);
                         // Store candidate in queue if remote description isn't ready yet
-                        if (pc.remoteDescription) {
-                            await pc.addIceCandidate(candidate);
+                        if (pc.remoteDescription && pc.remoteDescription.type) {
+                            pc.addIceCandidate(candidate).catch(e => console.error("Failed adding active candidate:", e));
                         } else {
                             candidateQueue.current.push(candidate);
                         }
@@ -310,7 +312,7 @@
 
             useEffect(() => {
                 const handleCallUpdate = (call) => setActiveCall(call);
-                const handleCallEnded = () => cleanupCall();
+                const handleCallEnded = () => cleanupCall(); // Automatically triggers local cleanup when another user disconnects/leaves
                 
                 socketRef.current.on('call_update', handleCallUpdate);
                 socketRef.current.on('call_ended', handleCallEnded);
