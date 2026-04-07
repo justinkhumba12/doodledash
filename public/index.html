@@ -675,8 +675,8 @@
                         socket.emit('claim_reward', { type: prefix });
                         setAdState({ show: false });
                     }).catch(e => {
-                        socket.emit('claim_reward', { type: prefix });
                         setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'Failed to show ad. Try again later.' });
                     });
                 } else {
                     window.show_10604686('pop').then(() => {
