@@ -374,6 +374,16 @@
                     setModal(null);
                 });
 
+                socket.on('kicked_by_admin', () => {
+                    setModal({ type: 'error', title: 'Kicked', content: 'You were removed from the private room by the creator.' });
+                    setCurrentRoomId(null);
+                });
+
+                socket.on('room_expired', () => {
+                    setModal({ type: 'error', title: 'Room Expired', content: 'The private room has expired and is now closed.' });
+                    setCurrentRoomId(null);
+                });
+
                 socket.on('room_created', ({ room_id }) => {
                     setModal(null);
                     socket.emit('search_room', { room_id }); 
@@ -384,7 +394,11 @@
                         setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
                     } else {
                         const isFree = room.id === 1 || room.id === 2;
-                        setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${room.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: room.id });
+                        if (isFree) {
+                            socket.emit('join_room', { room_id: room.id });
+                        } else {
+                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: room.id });
+                        }
                     }
                 });
 
@@ -432,6 +446,14 @@
 
             if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
 
+            let timeLeft = null;
+            if (roomData && roomData.room.is_private && roomData.room.expire_at) {
+                const timeDiff = new Date(roomData.room.expire_at).getTime() - new Date(roomData.server_time).getTime();
+                const hoursLeft = Math.max(0, Math.floor(timeDiff / (1000 * 60 * 60)));
+                const minsLeft = Math.max(0, Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60)));
+                timeLeft = `${hoursLeft}h ${minsLeft}m`;
+            }
+
             return (
                 <div>
                     <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
@@ -448,7 +470,15 @@
                         <div className="container-fluid pt-3">
                             <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
                                 <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
-                                    <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                    <div className="d-flex flex-column">
+                                        <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                        {timeLeft && (
+                                            <div className="d-flex align-items-center gap-2 mt-1">
+                                                <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> Expires in {timeLeft}</span>
+                                                <button className="btn btn-sm btn-outline-success py-0 px-2 rounded-pill shadow-none fw-bold" style={{fontSize: '0.7rem'}} onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}>Extend</button>
+                                            </div>
+                                        )}
+                                    </div>
                                     <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
                                 </div>
                                 <div className="text-center w-100">
@@ -533,8 +563,9 @@
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
             const [maxMembers, setMaxMembers] = useState(4);
+            const [expireHours, setExpireHours] = useState(2);
 
-            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); };
+            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
 
             let content = null;
             if (modal.type === 'success' || modal.type === 'error') {
@@ -562,8 +593,16 @@
                                         <option value={4}>4 Players</option>
                                     </select>
                                 </div>
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Room Duration</label>
+                                    <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
+                                        <option value={2}>2 Hours (4 Credits)</option>
+                                        <option value={4}>4 Hours (8 Credits)</option>
+                                        <option value={12}>12 Hours (20 Credits)</option>
+                                    </select>
+                                </div>
                                 <div className="alert alert-warning py-2 small mb-3">
-                                    <i className="fas fa-coins text-warning me-1"></i> Cost: 4 Credits
+                                    <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4)} Credits
                                 </div>
                             </>
                         ) : (
@@ -584,7 +623,7 @@
                         )}
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers }); close(); }}>Create</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers, expire_hours: expireHours }); close(); }}>Create</button>
                         </div>
                     </>
                 );
@@ -602,10 +641,42 @@
             } else if (modal.type === 'confirm_join') {
                 content = (
                     <>
-                        <p className="text-muted">{modal.content}</p>
+                        <div className="text-center py-3">
+                            <span className="badge bg-warning text-dark fs-6 px-3 py-2 rounded-pill shadow-sm"><i className="fas fa-coins"></i> {modal.content}</span>
+                        </div>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm Join</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'extend_room') {
+                content = (
+                    <>
+                        <div className="mb-3">
+                            <label className="form-label text-muted small mb-1">Add Duration</label>
+                            <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
+                                <option value={2}>+2 Hours (4 Credits)</option>
+                                <option value={4}>+4 Hours (8 Credits)</option>
+                                <option value={12}>+12 Hours (20 Credits)</option>
+                            </select>
+                        </div>
+                        <div className="alert alert-warning py-2 small mb-3">
+                            <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 20 : (expireHours === 4 ? 8 : 4)} Credits
+                        </div>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}><i className="fas fa-clock"></i> Extend</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'kick_player') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to remove this player from your room?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}><i className="fas fa-user-times"></i> Remove</button>
                         </div>
                     </>
                 );
@@ -734,9 +805,9 @@
 
             const renderAdBtn = (adNum, title) => {
                 const prefix = adNum === 1 ? 'ad' : 'ad2';
-                const claims = user[`${prefix}_claims_today`] || 0;
-                const isAvailable = user[`${prefix}_available`];
-                const waitMins = Number(user[`${prefix}_wait_mins`]) || 0;
+                const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
+                const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
+                const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
 
                 let btnText = title;
                 let disabled = false;
@@ -834,8 +905,10 @@
                                                     onClick={() => {
                                                         if (r.is_private) {
                                                             setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
+                                                        } else if (isFree) {
+                                                            socket.emit('join_room', { room_id: r.id });
                                                         } else {
-                                                            setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${r.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: r.id });
+                                                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: r.id });
                                                         }
                                                     }}>
                                                     {isFull ? 'Full' : 'Join'}
@@ -940,6 +1013,10 @@
                                             </div>
                                             
                                             <div className="d-flex align-items-center gap-2">
+                                                {room.is_private && room.creator_id === tgId && m.user_id !== tgId && (
+                                                    <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
+                                                )}
+
                                                 {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
                                                 
                                                 {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
