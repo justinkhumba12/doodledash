@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io'); 
+const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
@@ -177,7 +177,6 @@ async function getUserState(tg_id) {
 
 const activeCalls = new Map(); 
 
-// FIX: Lifted syncRoom outside the socket connection scope so the game loop can independently update rooms
 const syncRoom = async (roomId) => {
     if (!roomId) return;
     try {
@@ -215,201 +214,238 @@ io.on('connection', (socket) => {
     let currentRoom = null;
 
     socket.on('auth', async ({ tg_id, profile_pic }) => {
-        if (!tg_id) return;
-        currentUser = tg_id;
-        
-        await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
-        if (profile_pic) {
-            await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
-        } else {
-            await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
-        }
+        try {
+            if (!tg_id) return;
+            currentUser = tg_id;
+            
+            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
+            if (profile_pic) {
+                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
+            } else {
+                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
+            }
 
-        const userState = await getUserState(tg_id);
-        const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
-        
-        const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
-        if (existing.length > 0) {
-            currentRoom = existing[0].room_id;
-            socket.join(`room_${currentRoom}`);
-            syncRoom(currentRoom);
-        }
+            const userState = await getUserState(tg_id);
+            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
+            
+            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
+            if (existing.length > 0) {
+                currentRoom = existing[0].room_id;
+                socket.join(`room_${currentRoom}`);
+                syncRoom(currentRoom);
+            }
 
-        socket.emit('lobby_data', { user: userState, rooms, currentRoom });
+            socket.emit('lobby_data', { user: userState, rooms, currentRoom });
+        } catch (err) {
+            console.error('Auth Error:', err);
+        }
     });
 
     socket.on('claim_reward', async ({ type }) => {
-        if (!currentUser) return;
-        let success = false;
-        let msg = '';
+        try {
+            if (!currentUser) return;
+            let success = false;
+            let msg = '';
 
-        if (type === 'daily') {
-            const [res] = await db.query(`
-                UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
-                WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
-            `, [currentUser]);
-            if (res.affectedRows > 0) { success = true; msg = 'Daily reward claimed! +1 Credit'; }
-            else { msg = 'Daily reward already claimed today.'; }
-        } 
-        else if (type === 'ad' || type === 'ad2') {
-            const prefix = type === 'ad' ? 'ad' : 'ad2';
-            const [u] = await db.query(`SELECT
-                ${prefix}_claims_today as claims,
-                DATE_FORMAT(last_${prefix}_claim_date, '%Y-%m-%d') as last_date,
-                DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
-                TIMESTAMPDIFF(MINUTE, last_${prefix}_claim_time, UTC_TIMESTAMP()) as mins_passed
-                FROM users WHERE tg_id = ?`, [currentUser]);
+            if (type === 'daily') {
+                const [res] = await db.query(`
+                    UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
+                    WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
+                `, [currentUser]);
+                if (res.affectedRows > 0) { success = true; msg = 'Daily reward claimed! +1 Credit'; }
+                else { msg = 'Daily reward already claimed today.'; }
+            } 
+            else if (type === 'ad' || type === 'ad2') {
+                const prefix = type === 'ad' ? 'ad' : 'ad2';
+                const [u] = await db.query(`SELECT
+                    ${prefix}_claims_today as claims,
+                    DATE_FORMAT(last_${prefix}_claim_date, '%Y-%m-%d') as last_date,
+                    DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
+                    TIMESTAMPDIFF(MINUTE, last_${prefix}_claim_time, UTC_TIMESTAMP()) as mins_passed
+                    FROM users WHERE tg_id = ?`, [currentUser]);
 
-            if (u.length > 0) {
-                const user = u[0];
-                const isToday = user.last_date === user.today;
+                if (u.length > 0) {
+                    const user = u[0];
+                    const isToday = user.last_date === user.today;
 
-                if (!user.last_date || !isToday) {
-                    await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                    success = true; msg = 'Reward claimed! +2 Credits';
-                } else if (user.claims < 2 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                    await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                    success = true; msg = 'Reward claimed! +2 Credits';
-                } else {
-                    msg = 'Ad reward not available yet. Max 2 per day, 3 hours apart.';
+                    if (!user.last_date || !isToday) {
+                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        success = true; msg = 'Reward claimed! +2 Credits';
+                    } else if (user.claims < 2 && (user.mins_passed === null || user.mins_passed >= 180)) {
+                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        success = true; msg = 'Reward claimed! +2 Credits';
+                    } else {
+                        msg = 'Ad reward not available yet. Max 2 per day, 3 hours apart.';
+                    }
                 }
             }
-        }
 
-        if (success) {
-            socket.emit('reward_success', msg);
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-        } else {
-            socket.emit('create_error', msg);
+            if (success) {
+                socket.emit('reward_success', msg);
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            } else {
+                socket.emit('create_error', msg);
+            }
+        } catch (err) {
+            console.error('Claim Reward Error:', err);
         }
     });
 
     socket.on('create_room', async ({ is_private, password, max_members }) => {
-        if (!currentUser) return;
-        const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
+        try {
+            if (!currentUser) return;
+            const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
 
-        if (is_private) {
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 4) return socket.emit('create_error', 'Not enough credits. Private rooms cost 4 credits.');
-            await db.query('UPDATE users SET credits = credits - 4 WHERE tg_id = ?', [currentUser]);
+            if (is_private) {
+                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (u[0].credits < 4) return socket.emit('create_error', 'Not enough credits. Private rooms cost 4 credits.');
+                await db.query('UPDATE users SET credits = credits - 4 WHERE tg_id = ?', [currentUser]);
+            }
+
+            const [res] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), ?, ?, ?)`, [is_private ? 1 : 0, password || null, limit]);
+            socket.emit('room_created', { room_id: res.insertId });
+            
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
+        } catch (err) {
+            console.error('Create Room Error:', err);
         }
-
-        const [res] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), ?, ?, ?)`, [is_private ? 1 : 0, password || null, limit]);
-        socket.emit('room_created', { room_id: res.insertId });
-        
-        const userState = await getUserState(currentUser);
-        if (userState) socket.emit('user_update', userState);
     });
 
     socket.on('search_room', async ({ room_id }) => {
-        const [rows] = await db.query('SELECT id, is_private FROM rooms WHERE id = ?', [room_id]);
-        if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
-        socket.emit('search_result', rows[0]);
+        try {
+            const [rows] = await db.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
+            if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
+            socket.emit('search_result', rows[0]);
+        } catch (err) {
+            console.error('Search Room Error:', err);
+        }
     });
 
     socket.on('join_room', async ({ room_id, password }) => {
-        if (!currentUser) return;
+        try {
+            if (!currentUser) return;
+            const roomIdNum = Number(room_id); // Convert to number to ensure MySQL types match correctly
 
-        const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [room_id]);
-        if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
-        const room = roomData[0];
+            const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
+            if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
+            const room = roomData[0];
 
-        const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [room_id]);
-        if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
+            const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
+            if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
-        // Verify if user is already inside
-        const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
-        if (existing.length > 0 && existing[0].room_id === room_id) {
-            currentRoom = room_id;
+            // Verify if user is already inside
+            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
+            if (existing.length > 0 && existing[0].room_id === roomIdNum) {
+                currentRoom = roomIdNum;
+                socket.join(`room_${currentRoom}`);
+                socket.emit('join_success', currentRoom);
+                return syncRoom(currentRoom);
+            }
+
+            if (room.is_private) {
+                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
+            } else {
+                // Requirement 2: Deduct 1 credit for public rooms
+                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+            }
+
+            const oldRoom = currentRoom;
+            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
+            if (oldRoom) {
+                socket.leave(`room_${oldRoom}`);
+            }
+
+            await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
+            currentRoom = roomIdNum;
             socket.join(`room_${currentRoom}`);
+            
             socket.emit('join_success', currentRoom);
-            return syncRoom(currentRoom);
+            
+            // Sync both rooms immediately
+            if (oldRoom) syncRoom(oldRoom);
+            syncRoom(currentRoom);
+
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
+        } catch (err) {
+            console.error('Join Room Error:', err);
+            socket.emit('join_error', 'An error occurred while joining the room.');
         }
-
-        if (room.is_private) {
-            if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
-        } else {
-            // Requirement 2: Deduct 1 credit for public rooms
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-            await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-        }
-
-        // FIX: Properly handle changing rooms (leave old room and sync the UI for it)
-        const oldRoom = currentRoom;
-        await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-        if (oldRoom) {
-            socket.leave(`room_${oldRoom}`);
-        }
-
-        await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [room_id, currentUser]);
-        currentRoom = room_id;
-        socket.join(`room_${currentRoom}`);
-        
-        socket.emit('join_success', currentRoom);
-        
-        // Sync both rooms immediately
-        if (oldRoom) syncRoom(oldRoom);
-        syncRoom(currentRoom);
-
-        const userState = await getUserState(currentUser);
-        if (userState) socket.emit('user_update', userState);
     });
 
     socket.on('leave_room', async () => {
-        if (!currentUser || !currentRoom) return;
-        await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-        socket.leave(`room_${currentRoom}`);
-        syncRoom(currentRoom);
-        currentRoom = null;
+        try {
+            if (!currentUser || !currentRoom) return;
+            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+            socket.leave(`room_${currentRoom}`);
+            syncRoom(currentRoom);
+            currentRoom = null;
+        } catch (err) {
+            console.error('Leave Room Error:', err);
+        }
     });
 
     socket.on('chat', async ({ message }) => {
-        if (!currentUser || !currentRoom || !message.trim()) return;
-        await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
-        syncRoom(currentRoom);
+        try {
+            if (!currentUser || !currentRoom || !message.trim()) return;
+            await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
+            syncRoom(currentRoom);
+        } catch (err) {}
     });
 
     socket.on('guess', async ({ guess }) => {
-        if (!currentUser || !currentRoom || !guess.trim()) return;
-        const [room] = await db.query('SELECT word_to_draw FROM rooms WHERE id = ?', [currentRoom]);
-        const isCorrect = room[0]?.word_to_draw?.toLowerCase() === guess.toLowerCase();
-        
-        await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess, isCorrect]);
-        if (isCorrect) {
-            await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
-        }
-        syncRoom(currentRoom);
+        try {
+            if (!currentUser || !currentRoom || !guess.trim()) return;
+            const [room] = await db.query('SELECT word_to_draw FROM rooms WHERE id = ?', [currentRoom]);
+            const isCorrect = room[0]?.word_to_draw?.toLowerCase() === guess.toLowerCase();
+            
+            await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess, isCorrect]);
+            if (isCorrect) {
+                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
+            }
+            syncRoom(currentRoom);
+        } catch (err) {}
     });
 
     socket.on('set_word', async ({ word }) => {
-        if (!currentUser || !currentRoom) return;
-        await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
-        await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
-        await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
-        syncRoom(currentRoom);
+        try {
+            if (!currentUser || !currentRoom) return;
+            await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
+            await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
+            await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
+            syncRoom(currentRoom);
+        } catch (err) {}
     });
 
     socket.on('set_ready', async () => {
-        if (!currentUser || !currentRoom) return;
-        await db.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-        syncRoom(currentRoom);
+        try {
+            if (!currentUser || !currentRoom) return;
+            await db.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            syncRoom(currentRoom);
+        } catch (err) {}
     });
 
     socket.on('draw', async ({ lines }) => {
-        if (!currentUser || !currentRoom) return;
-        await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
-        socket.to(`room_${currentRoom}`).emit('live_draw', lines);
+        try {
+            if (!currentUser || !currentRoom) return;
+            await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
+            socket.to(`room_${currentRoom}`).emit('live_draw', lines);
+        } catch (err) {}
     });
 
     socket.on('undo', async () => {
-        if (!currentUser || !currentRoom) return;
-        const [last] = await db.query('SELECT id FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
-        if (last.length > 0) {
-            await db.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
-            syncRoom(currentRoom);
-        }
+        try {
+            if (!currentUser || !currentRoom) return;
+            const [last] = await db.query('SELECT id FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
+            if (last.length > 0) {
+                await db.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
+                syncRoom(currentRoom);
+            }
+        } catch (err) {}
     });
 
     socket.on('initiate_call', async ({ receiver_id }) => {
