@@ -63,6 +63,8 @@ async function initDB() {
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
             "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
             "ALTER TABLE rooms ADD COLUMN base_hints VARCHAR(255) DEFAULT '[]'",
+            "ALTER TABLE rooms ADD COLUMN creator_id VARCHAR(50)",
+            "ALTER TABLE rooms ADD COLUMN expire_at DATETIME",
             "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
             "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE",
             "ALTER TABLE room_members ADD COLUMN purchased_hints VARCHAR(255) DEFAULT '[]'"
@@ -194,10 +196,14 @@ const broadcastRooms = async () => {
 const checkRoomReset = async (roomId) => {
     if (!roomId) return;
     try {
+        const [roomRows] = await db.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
+        if (roomRows.length === 0) return;
+        const isPrivate = roomRows[0].is_private;
+
         const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
         if (members[0].c === 0) {
-            // Delete room if empty unless it's room 1 or 2
-            if (roomId !== 1 && roomId !== 2) {
+            // Delete room if empty unless it's room 1 or 2 OR a private room (private rooms expire by time)
+            if (roomId !== 1 && roomId !== 2 && !isPrivate) {
                 await db.query("DELETE FROM rooms WHERE id = ?", [roomId]);
                 await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
                 await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
@@ -395,24 +401,31 @@ io.on('connection', (socket) => {
         } catch (err) {}
     });
 
-    socket.on('create_room', async ({ is_private, password, max_members }) => {
+    socket.on('create_room', async ({ is_private, password, max_members, expire_hours }) => {
         try {
             if (!currentUser) return;
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
+            let insertRes;
 
             if (is_private) {
+                const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
+                let cost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 4) return socket.emit('create_error', 'Not enough credits. Private rooms cost 4 credits.');
-                await db.query('UPDATE users SET credits = credits - 4 WHERE tg_id = ?', [currentUser]);
+                if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Private rooms cost ${cost} credits.`);
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                
+                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password || null, limit, currentUser, hours]);
+            } else {
+                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
             }
 
-            const [res] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), ?, ?, ?)`, [is_private ? 1 : 0, password || null, limit]);
-            socket.emit('room_created', { room_id: res.insertId });
+            socket.emit('room_created', { room_id: insertRes.insertId });
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
             broadcastRooms();
-        } catch (err) {}
+        } catch (err) { console.error('Create room error:', err); }
     });
 
     socket.on('search_room', async ({ room_id }) => {
@@ -485,6 +498,45 @@ io.on('connection', (socket) => {
             currentRoom = null;
             broadcastRooms();
         } catch (err) {}
+    });
+
+    socket.on('extend_room', async ({ expire_hours }) => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
+            let cost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+            
+            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
+            
+            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+            await db.query('UPDATE rooms SET expire_at = DATE_ADD(expire_at, INTERVAL ? HOUR) WHERE id = ?', [hours, currentRoom]);
+            
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
+            syncRoom(currentRoom);
+        } catch(err) { console.error('Extend room error:', err); }
+    });
+
+    socket.on('kick_player', async ({ target_id }) => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            const [roomRows] = await db.query('SELECT is_private, creator_id FROM rooms WHERE id = ?', [currentRoom]);
+            if (roomRows.length === 0 || !roomRows[0].is_private || roomRows[0].creator_id !== currentUser) return;
+
+            await db.query('DELETE FROM room_members WHERE user_id = ? AND room_id = ?', [target_id, currentRoom]);
+            
+            io.to(`user_${target_id}`).emit('kicked_by_admin');
+            
+            const sockets = await io.in(`user_${target_id}`).fetchSockets();
+            sockets.forEach(s => {
+                s.leave(`room_${currentRoom}`);
+                if (s.currentRoom === currentRoom) s.currentRoom = null;
+            });
+
+            syncRoom(currentRoom);
+            broadcastRooms();
+        } catch(err) { console.error('Kick player error:', err); }
     });
 
     socket.on('chat', async ({ message }) => {
@@ -811,6 +863,25 @@ setInterval(async () => {
         if (currentDay !== lastCleanupDay) {
             lastCleanupDay = currentDay;
             db.query("DELETE FROM chats WHERE DATE(created_at) < UTC_DATE()").catch(console.error);
+        }
+
+        // Expiration check for private rooms
+        const [expiredRooms] = await db.query("SELECT id FROM rooms WHERE is_private = 1 AND expire_at <= UTC_TIMESTAMP()");
+        for (let r of expiredRooms) {
+            io.to(`room_${r.id}`).emit('room_expired');
+            await db.query('DELETE FROM room_members WHERE room_id = ?', [r.id]);
+            await db.query("DELETE FROM rooms WHERE id = ?", [r.id]);
+            await db.query("DELETE FROM drawings WHERE room_id = ?", [r.id]);
+            await db.query("DELETE FROM chats WHERE room_id = ?", [r.id]);
+            await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
+            delete roomRedoStacks[r.id];
+            
+            const sockets = await io.in(`room_${r.id}`).fetchSockets();
+            sockets.forEach(s => {
+                s.leave(`room_${r.id}`);
+                s.currentRoom = null;
+            });
+            broadcastRooms();
         }
 
     } catch (e) { console.error("Game Loop Error:", e); }
