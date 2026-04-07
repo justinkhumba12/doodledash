@@ -27,7 +27,6 @@
         
         .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
         
-        /* Fully Responsive Square Constraints */
         .whiteboard-container { width: 100% !important; max-width: 500px !important; aspect-ratio: 1/1; height: auto !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
         canvas { cursor: crosshair; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
         
@@ -112,14 +111,16 @@
             const [activeCall, setActiveCall] = useState(null);
             const [localStream, setLocalStream] = useState(null);
             
-            // Audio Controls State
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
+            // WebRTC Stable Refs
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
             const socketRef = useRef(null);
             const candidateQueue = useRef([]);
+            const localStreamRef = useRef(null);
+            const tgIdRef = useRef(tgId);
 
             if (!tgId) {
                 return (
@@ -132,6 +133,184 @@
                     </div>
                 );
             }
+
+            // Audio Unlock Trick (Bypass Autoplay policies)
+            useEffect(() => {
+                const unlockAudio = () => {
+                    const audioEl = remoteAudioRef.current;
+                    if (audioEl) {
+                        const playPromise = audioEl.play();
+                        if (playPromise !== undefined) {
+                            playPromise.then(() => {
+                                if (!audioEl.srcObject) audioEl.pause();
+                            }).catch(() => console.log("Audio unlock interaction needed."));
+                        }
+                    }
+                    window.removeEventListener('click', unlockAudio);
+                    window.removeEventListener('touchstart', unlockAudio);
+                };
+                window.addEventListener('click', unlockAudio);
+                window.addEventListener('touchstart', unlockAudio);
+                
+                return () => {
+                    window.removeEventListener('click', unlockAudio);
+                    window.removeEventListener('touchstart', unlockAudio);
+                };
+            }, []);
+
+            const requestMic = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    return stream;
+                } catch (e) {
+                    alert("Microphone permission required for calls.");
+                    return null;
+                }
+            };
+
+            const initPeerConnection = (stream, targetId, callId) => {
+                const pc = new RTCPeerConnection({ 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' },
+                        { urls: 'stun:stun.cloudflare.com:3478' }
+                    ] 
+                });
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                }
+                
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        socketRef.current.emit('webrtc_signal', { 
+                            call_id: callId, 
+                            target_id: targetId, 
+                            signal: { type: 'candidate', candidate: e.candidate } 
+                        });
+                    }
+                };
+
+                pc.ontrack = (e) => {
+                    if (remoteAudioRef.current) {
+                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
+                        remoteAudioRef.current.srcObject = inboundStream;
+                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                    }
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                        socketRef.current.emit('end_call', { call_id: callId });
+                    }
+                };
+
+                peerConnectionRef.current = pc;
+                return pc;
+            };
+
+            const cleanupCall = () => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                candidateQueue.current = [];
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                if (localStreamRef.current) {
+                    localStreamRef.current.getTracks().forEach(track => track.stop());
+                    setLocalStream(null);
+                    localStreamRef.current = null;
+                }
+                setActiveCall(null);
+                setIsMicMuted(false);
+                setIsSpeakerMuted(false);
+            };
+
+            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
+                if (String(target_id) !== String(tgIdRef.current)) return;
+                
+                const pc = peerConnectionRef.current;
+                if (!pc) return; // Signal arrived before connection initialized, ignore/drop
+                
+                try {
+                    if (signal.type === 'offer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                        
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'candidate') {
+                        const candidate = new RTCIceCandidate(signal.candidate);
+                        if (pc.remoteDescription && pc.remoteDescription.type) {
+                            await pc.addIceCandidate(candidate);
+                        } else {
+                            candidateQueue.current.push(candidate);
+                        }
+                    }
+                } catch (e) {
+                    console.error("WebRTC Signal Error:", e);
+                }
+            };
+
+            const handleCallUpdate = async (call) => {
+                setActiveCall(call);
+
+                // Caller logic: Initiate WebRTC ONLY when receiver has accepted (status is ACTIVE)
+                if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
+                    let stream = localStreamRef.current;
+                    if (!stream) {
+                        stream = await requestMic();
+                        if (stream) {
+                            setLocalStream(stream);
+                            localStreamRef.current = stream;
+                        }
+                    }
+                    if (!stream) return; 
+
+                    const targetId = call.receiver;
+                    const pc = initPeerConnection(stream, targetId, call.id);
+                    try {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        socketRef.current.emit('webrtc_signal', { 
+                            call_id: call.id, 
+                            target_id: targetId, 
+                            signal: { type: 'offer', offer } 
+                        });
+                    } catch(e) {
+                        console.error("WebRTC Offer Error:", e);
+                    }
+                }
+            };
+
+            const initiateCall = async (targetId) => {
+                const stream = await requestMic();
+                if (!stream) return;
+                setLocalStream(stream);
+                localStreamRef.current = stream;
+                socketRef.current.emit('initiate_call', { receiver_id: targetId });
+            };
+
+            const acceptCall = async (callObj) => {
+                const stream = await requestMic();
+                if (!stream || !callObj) return;
+                
+                setLocalStream(stream);
+                localStreamRef.current = stream;
+                
+                // Initialize PC synchronously before accepting to eliminate race conditions
+                initPeerConnection(stream, callObj.caller, callObj.id); 
+                socketRef.current.emit('accept_call', { call_id: callObj.id });
+            };
 
             useEffect(() => {
                 const socket = io({ transports: ['websocket'], upgrade: false });
@@ -157,10 +336,7 @@
                     setCurrentRoomId(null);
                 });
 
-                socket.on('idle_warning', () => {
-                    setModal({ type: 'idle_warning', title: 'Are you still there?' });
-                });
-
+                socket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Reward Claimed!', content: msg }));
                 socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
                 socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
@@ -183,7 +359,10 @@
                     }
                 });
 
+                // WebRTC WebSockets Callbacks
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
+                socket.on('call_update', handleCallUpdate);
+                socket.on('call_ended', cleanupCall);
                 
                 const resetIdle = () => {
                     socketRef.current.emit('active_event');
@@ -199,191 +378,25 @@
                 }
             }, []); 
 
-            const requestMic = async () => {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    setLocalStream(stream);
-                    return stream;
-                } catch (e) {
-                    alert("Microphone permission required for calls.");
-                    return null;
-                }
-            };
-
-            const initPeerConnection = (stream, callObj) => {
-                // Expanding STUN servers for robust IPv4/IPv6 NAT Traversal without using TURN
-                const pc = new RTCPeerConnection({ 
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' },
-                        { urls: 'stun:stun.cloudflare.com:3478' }
-                    ] 
-                });
-                
-                if (stream) {
-                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
-                }
-                
-                pc.onicecandidate = (e) => {
-                    if (e.candidate) {
-                        const targetId = callObj.caller === tgId ? callObj.receiver : callObj.caller;
-                        socketRef.current.emit('webrtc_signal', { call_id: callObj.id, target_id: targetId, signal: { type: 'candidate', candidate: e.candidate } });
-                    }
-                };
-
-                pc.ontrack = (e) => {
-                    if (remoteAudioRef.current) {
-                        // CRITICAL FIX: Mobile browsers sometimes return an empty streams array. 
-                        // If it's missing, we manually wrap the track in a new MediaStream.
-                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        remoteAudioRef.current.srcObject = inboundStream;
-                        
-                        // Force play to bypass mobile restrictions
-                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
-                    }
-                };
-
-                // Safety: Automatically end the call if the connection fails or drops
-                pc.oniceconnectionstatechange = () => {
-                    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-                        socketRef.current.emit('end_call', { call_id: callObj.id });
-                    }
-                };
-
-                peerConnectionRef.current = pc;
-                return pc;
-            };
-
-            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
-                // CRITICAL FIX: Enforce String comparison to prevent Number vs String mismatches from dropping signals
-                if (String(target_id) !== String(tgId) || !peerConnectionRef.current) return;
-                
-                const pc = peerConnectionRef.current;
-                
-                try {
-                    if (signal.type === 'offer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
-                        
-                        // Flush any candidates that arrived early
-                        while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
-                        }
-                    } else if (signal.type === 'answer') {
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-                        
-                        while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
-                        }
-                    } else if (signal.type === 'candidate') {
-                        const candidate = new RTCIceCandidate(signal.candidate);
-                        // Store candidate in queue if remote description isn't ready yet
-                        if (pc.remoteDescription && pc.remoteDescription.type) {
-                            await pc.addIceCandidate(candidate);
-                        } else {
-                            candidateQueue.current.push(candidate);
-                        }
-                    }
-                } catch (e) {
-                    console.error("WebRTC Signal Error:", e);
-                }
-            };
-
-            const initiateCall = async (targetId) => {
-                const stream = await requestMic();
-                if (!stream) return;
-                socketRef.current.emit('initiate_call', { receiver_id: targetId });
-            };
-
-            const acceptCall = async (callObj) => {
-                const stream = await requestMic();
-                if (!stream || !callObj) return;
-                setLocalStream(stream);
-                
-                // CRITICAL FIX: Initialize PC *before* emitting accept_call to prevent Race Conditions 
-                // when Caller sends Offer too fast.
-                initPeerConnection(stream, callObj); 
-                socketRef.current.emit('accept_call', { call_id: callObj.id });
-            };
-
-            const cleanupCall = () => {
-                if (peerConnectionRef.current) peerConnectionRef.current.close();
-                peerConnectionRef.current = null;
-                candidateQueue.current = [];
-                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                    setLocalStream(null);
-                }
-                setActiveCall(null);
-                setIsMicMuted(false);
-                setIsSpeakerMuted(false);
-            };
-
-            useEffect(() => {
-                const handleCallUpdate = (call) => setActiveCall(call);
-                const handleCallEnded = () => cleanupCall();
-                
-                socketRef.current.on('call_update', handleCallUpdate);
-                socketRef.current.on('call_ended', handleCallEnded);
-                return () => {
-                    socketRef.current.off('call_update', handleCallUpdate);
-                    socketRef.current.off('call_ended', handleCallEnded);
-                }
-            }, []);
-
-            useEffect(() => {
-                // Wait until Caller status is Active and Call requires setup from Caller's End
-                if (activeCall?.status === 'ACTIVE' && activeCall.caller === tgId && !peerConnectionRef.current) {
-                    const startCall = async () => {
-                        let stream = localStream;
-                        if (!stream) {
-                            stream = await requestMic();
-                            if (stream) setLocalStream(stream);
-                        }
-                        if (!stream) return; // User denied mic
-
-                        const pc = initPeerConnection(stream, activeCall);
-                        try {
-                            const offer = await pc.createOffer();
-                            await pc.setLocalDescription(offer);
-                            socketRef.current.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
-                        } catch(e) {
-                            console.error("Error creating WebRTC Offer:", e);
-                        }
-                    };
-                    startCall();
-                }
-                // Receiver logic is handled synchronously in acceptCall
-            }, [activeCall, localStream]);
-
             // Handle Mic Mute Update
             useEffect(() => {
-                if (localStream) {
-                    localStream.getAudioTracks().forEach(track => {
+                if (localStreamRef.current) {
+                    localStreamRef.current.getAudioTracks().forEach(track => {
                         track.enabled = !isMicMuted;
                     });
                 }
             }, [isMicMuted, localStream]);
 
-            // Enhanced Touch Swipe Handler for Smart Switching
             const [touchStart, setTouchStart] = useState(null);
             const onTouchStart = (e) => setTouchStart(e.touches[0].clientX);
             const onTouchEnd = (e) => {
                 if (!touchStart) return;
                 const touchEndX = e.changedTouches[0].clientX;
                 const diff = touchStart - touchEndX;
-                
-                if (diff > 50) { // Swiped Left
+                if (diff > 50) {
                     if (activeTab === 'chat') setActiveTab('guess');
                     else if (activeTab === 'guess') setActiveTab('chat');
-                } else if (diff < -50) { // Swiped Right
+                } else if (diff < -50) { 
                     if (activeTab === 'guess') setActiveTab('chat');
                     else if (activeTab === 'chat') setPanelOpen(false);
                 }
