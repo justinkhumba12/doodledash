@@ -9,6 +9,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     
+    <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     
@@ -48,6 +49,9 @@
         @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
         .heartbeat { animation: heartbeat 1s infinite; }
         
+        @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        .hint-reveal { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
         .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
@@ -655,19 +659,35 @@
 
         const LobbyView = ({ user, rooms, setModal, socket }) => {
             const [searchId, setSearchId] = useState('');
-            const [adState, setAdState] = useState({ show: false, timer: 0, type: '' });
+            const [adState, setAdState] = useState({ show: false });
             
             const handleSearch = () => { if (searchId) socket.emit('search_room', { room_id: searchId }); };
 
-            useEffect(() => {
-                if (adState.show && adState.timer > 0) {
-                    const t = setTimeout(() => setAdState(prev => ({ ...prev, timer: prev.timer - 1 })), 1000);
-                    return () => clearTimeout(t);
-                } else if (adState.show && adState.timer === 0) {
-                    setAdState(prev => ({ ...prev, show: false }));
-                    socket.emit('claim_reward', { type: adState.type });
+            const triggerAd = (adNum, prefix) => {
+                if (typeof window.show_10604686 !== 'function') {
+                    setModal({ type: 'error', title: 'Ad Loading', content: 'Ad system is still loading. Please try again or disable adblockers.' });
+                    return;
                 }
-            }, [adState.show, adState.timer]);
+                setAdState({ show: true });
+
+                if (adNum === 1) {
+                    window.show_10604686().then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    });
+                } else {
+                    window.show_10604686('pop').then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now. Try again later.' });
+                    });
+                }
+            };
 
             const renderAdBtn = (adNum, title) => {
                 const prefix = adNum === 1 ? 'ad' : 'ad2';
@@ -685,7 +705,7 @@
                 }
 
                 return (
-                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={() => setAdState({ show: true, timer: 5, type: prefix })}>
+                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
                         {btnText} ({claims}/2)
                     </button>
                 );
@@ -734,17 +754,18 @@
                     <div className="row">
                         {rooms.map(r => {
                             const isFull = r.member_count >= r.max_members;
+                            const isFree = r.id === 1 || r.id === 2;
                             return (
                                 <div key={r.id} className="col-md-4 mb-3">
                                     <div className="room-card card h-100 p-3">
                                         <div className="d-flex justify-content-between align-items-center mb-2">
-                                            <h5 className="fw-bold m-0">Room {r.id}</h5>
+                                            <h5 className="fw-bold m-0">Room {r.id} {isFree && <span className="badge bg-warning ms-1">FREE</span>}</h5>
                                             <span className={`badge ${isFull ? 'bg-danger' : 'bg-success'}`}>{isFull ? 'Full' : 'Open'}</span>
                                         </div>
                                         <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members} Players</p>
                                         <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={isFull} 
-                                            onClick={() => setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${r.id}? This costs 1 Credit.`, room_id: r.id })}>
-                                            Join (1 Credit)
+                                            onClick={() => setModal({ type: 'confirm_join', title: isFree ? 'Join Free Room' : 'Join Public Room', content: `Join Room ${r.id}? ${isFree ? 'This room is completely free to join!' : 'This costs 1 Credit.'}`, room_id: r.id })}>
+                                            Join {isFree ? '(Free)' : '(1 Credit)'}
                                         </button>
                                     </div>
                                 </div>
@@ -754,9 +775,8 @@
 
                     {adState.show && (
                         <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
-                            <h2 className="text-white mb-4 fw-bold">Advertisement</h2>
+                            <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
                             <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
-                            <h4 className="text-light">Reward in <span className="text-warning fw-bold">{adState.timer}</span> seconds...</h4>
                             <p className="text-muted mt-5 small">Please wait, do not close.</p>
                         </div>
                     )}
@@ -779,7 +799,7 @@
                                     {roomData.masked_word.map((item, i) => (
                                         <div 
                                             key={i}
-                                            className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white' : 'bg-secondary text-white cursor-pointer'}`}
+                                            className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
                                             style={{ width: '35px', height: '35px', transition: '0.2s' }}
                                             onClick={() => {
                                                 if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
