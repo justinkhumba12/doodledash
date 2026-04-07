@@ -184,6 +184,7 @@ async function getUserState(tg_id) {
 const activeCalls = new Map(); 
 const roomRedoStacks = {}; 
 const disconnectTimeouts = new Map(); // Tracks 10-second offline grace periods
+let lastCleanupDay = new Date().getUTCDate(); // Tracks the last day for chat cleanup
 
 const broadcastRooms = async () => {
     const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
@@ -579,6 +580,9 @@ io.on('connection', (socket) => {
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                 await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
                 
+                // NOTIFY EVERYONE THAT THIS USER USED A HINT
+                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 1 Credit!`]);
+                
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
                 
@@ -802,6 +806,14 @@ setInterval(async () => {
                 }
             }
         });
+
+        // Daily Chat Cleanup (Deletes last day's messages when next day comes)
+        const currentDay = new Date().getUTCDate();
+        if (currentDay !== lastCleanupDay) {
+            lastCleanupDay = currentDay;
+            db.query("DELETE FROM chats WHERE DATE(created_at) < UTC_DATE()").catch(console.error);
+        }
+
     } catch (e) { console.error("Game Loop Error:", e); }
 }, 1000);
 
