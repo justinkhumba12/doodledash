@@ -39,9 +39,9 @@
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
         .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
         .panel-tab.active { background: var(--primary); color: white; }
-        .panel-body { flex: 1; overflow-y: auto; padding: 15px; }
+        .panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 15px; display: flex; flex-direction: column; }
         .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
-        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; }
+        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; word-wrap: break-word; }
         .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
         .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
         
@@ -117,6 +117,7 @@
                 socket.on('lobby_rooms_update', (data) => setRooms(data));
                 socket.on('user_update', (userData) => setUser(userData));
                 socket.on('room_sync', (data) => setRoomData(data));
+                
                 socket.on('kick_idle', () => {
                     setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
                     setCurrentRoomId(null);
@@ -252,17 +253,20 @@
                 }
             }, [activeCall]);
 
-            // Touch Swipe Handler
+            // Enhanced Touch Swipe Handler for Smart Switching
             const [touchStart, setTouchStart] = useState(null);
             const onTouchStart = (e) => setTouchStart(e.touches[0].clientX);
             const onTouchEnd = (e) => {
                 if (!touchStart) return;
                 const touchEndX = e.changedTouches[0].clientX;
                 const diff = touchStart - touchEndX;
+                
                 if (diff > 50) { // Swiped Left
-                    setActiveTab(prev => prev === 'chat' ? 'guess' : 'chat');
+                    if (activeTab === 'chat') setActiveTab('guess');
+                    else if (activeTab === 'guess') setActiveTab('chat');
                 } else if (diff < -50) { // Swiped Right
-                    setPanelOpen(false);
+                    if (activeTab === 'guess') setActiveTab('chat');
+                    else if (activeTab === 'chat') setPanelOpen(false);
                 }
                 setTouchStart(null);
             };
@@ -283,15 +287,15 @@
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
                     ) : roomData ? (
                         <div className="container-fluid pt-3">
-                            <div className="col-12 col-lg-8 mx-auto room-header d-flex justify-content-between align-items-center">
-                                <div>
-                                    <span className="badge bg-primary rounded-pill px-3 py-2 fs-6 mb-1 d-inline-block">Room {roomData.room.id} {roomData.room.is_private ? '(Priv)' : ''}</span>
-                                    <div className="text-muted small"><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                            <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
+                                <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
+                                    <span className="small text-muted fw-bold">Room {roomData.room.id} {roomData.room.is_private ? '(Priv)' : ''}</span>
+                                    <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
                                 </div>
-                                <div className="text-center">
-                                    <strong className="text-primary fs-5">{roomData.room.status} Phase</strong>
+                                <div className="text-center w-100">
+                                    <strong className="text-primary fs-6">{roomData.room.status} Phase</strong>
+                                    <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
                                 </div>
-                                <button className="btn btn-outline-danger btn-sm rounded-pill px-3 shadow-sm" onClick={() => { socketRef.current.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
                             </div>
                         
                             <GameRoom 
@@ -300,6 +304,7 @@
                                 onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
                                 socket={socketRef.current}
                                 setProfileModal={setProfileModal}
+                                activeCall={activeCall}
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -311,32 +316,37 @@
                                     <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
                                 </div>
                                 
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socketRef.current} />}
-                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={tgId} roomData={roomData} socket={socketRef.current} />}
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} />}
                             </div>
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
                     
                     {profileModal && (
-                        <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.6)', position: 'fixed'}} onClick={() => setProfileModal(null)}>
-                            <div className="call-toast text-center" onClick={e=>e.stopPropagation()}>
-                                <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow" width="100" height="100" />
-                                <h3>{toHex(profileModal.user_id)}</h3>
-                                <p className="text-muted">Player Profile</p>
-                                <button className="btn btn-primary w-100 mt-2 rounded-pill" onClick={() => setProfileModal(null)}>Close</button>
-                            </div>
+                        <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
+                           {!profileModal.full ? (
+                               <div className="call-toast text-center" onClick={e=>e.stopPropagation()}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
+                                   <h3>{toHex(profileModal.user_id)}</h3>
+                                   <p className="text-muted small">Tap photo to view full size</p>
+                                   <button className="btn btn-primary w-100 mt-2 rounded-pill" onClick={() => setProfileModal(null)}>Close</button>
+                               </div>
+                           ) : (
+                               <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} />
+                               </div>
+                           )}
                         </div>
                     )}
 
                     {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
                         <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
-                            <div className="call-toast text-center w-75">
+                            <div className="call-toast text-center w-75" onClick={e => e.stopPropagation()}>
                                 <i className="fas fa-phone-volume heartbeat text-success fs-1 mb-3"></i>
                                 <h4>Incoming Call</h4>
                                 <p className="text-muted">From {toHex(activeCall.caller)}</p>
-                                <p className="small text-danger">Cost: 1 Credit/Minute</p>
                                 <div className="d-flex gap-2 mt-3">
                                     <button className="btn btn-danger w-50" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
                                     <button className="btn btn-success w-50" onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i> Accept</button>
@@ -344,18 +354,11 @@
                             </div>
                         </div>
                     )}
-                    {activeCall && activeCall.status === 'ACTIVE' && (
-                        <div className="position-fixed bottom-0 start-50 translate-middle-x mb-3 p-3 bg-dark text-white rounded-pill shadow-lg d-flex align-items-center gap-3" style={{ zIndex: 2000 }}>
-                            <i className="fas fa-phone-volume heartbeat text-success"></i>
-                            <span>In Call: {activeCall.caller === tgId ? toHex(activeCall.receiver) : toHex(activeCall.caller)}</span>
-                            <button className="btn btn-sm btn-danger rounded-circle" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
-                        </div>
-                    )}
                 </div>
             );
         };
 
-        const ModalManager = ({ modal, setModal, socket, initiateCall }) => {
+        const ModalManager = ({ modal, setModal, socket, initiateCall, setCurrentRoomId, cleanupCall }) => {
             if (!modal) return null;
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
@@ -425,12 +428,22 @@
                 content = (
                     <>
                         <div className="alert alert-warning mb-3">
-                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit per minute</b> for both users.
+                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit per minute</b> for the Caller.
                         </div>
                         <p className="text-muted text-center mb-4">Do you want to continue?</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-success w-50 rounded-pill" onClick={() => { initiateCall(modal.target_id); close(); }}><i className="fas fa-phone"></i> Call Now</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_leave') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave Room</button>
                         </div>
                     </>
                 );
@@ -560,7 +573,7 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal }) => {
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall }) => {
             const { room, members, activeCalls } = roomData;
 
             return (
@@ -569,6 +582,14 @@
                         <div className="whiteboard-wrapper">
                             <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
                             
+                            {activeCall && activeCall.status === 'ACTIVE' && (
+                                <div className="mt-3 w-100 p-3 bg-dark text-white rounded-pill shadow-sm d-flex align-items-center justify-content-center gap-3">
+                                    <i className="fas fa-phone-volume heartbeat text-success"></i>
+                                    <span>In Call: {activeCall.caller === tgId ? toHex(activeCall.receiver) : toHex(activeCall.caller)}</span>
+                                    <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                                </div>
+                            )}
+
                             <div className="mt-4 w-100">
                                 <h6 className="fw-bold text-secondary mb-3">Player List</h6>
                                 {members.map(m => {
@@ -578,7 +599,7 @@
                                         <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                             <div className="d-flex align-items-center">
                                                 <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
-                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35"/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
                                                 </div>
                                                 <div className="d-flex flex-column">
                                                     <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
@@ -591,7 +612,8 @@
                                             <div className="d-flex align-items-center gap-2">
                                                 {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
                                                 
-                                                {mCall && mCall.status === 'RINGING' && mCall.caller === m.user_id && <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing</span>}
+                                                {mCall && mCall.status === 'RINGING' && mCall.caller === m.user_id && <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>}
+                                                {mCall && mCall.status === 'RINGING' && mCall.receiver === m.user_id && <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>}
                                                 
                                                 {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
                                                     <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
@@ -671,7 +693,6 @@
                 const rect = canvasRef.current.getBoundingClientRect();
                 const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                 const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-                // Scale native 500x500 to dynamic CSS dimensions
                 const scaleX = 500 / rect.width;
                 const scaleY = 500 / rect.height;
                 return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
@@ -757,28 +778,36 @@
             );
         };
 
-        const ChatBox = ({ chats, socket }) => {
+        const ChatBox = ({ chats, profiles, socket }) => {
             const [input, setInput] = useState('');
             const prevCount = useRef(chats.length);
+            const messagesEndRef = useRef(null);
             
             useEffect(() => {
                 if (chats.length > prevCount.current) {
                     mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                 }
                 prevCount.current = chats.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
             }, [chats]);
 
             return (
-                <div className="d-flex flex-column h-100">
-                    <div className="panel-body d-flex flex-column-reverse">
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                         {chats.map(c => (
-                            <div key={c.id} className={`msg-box ${c.user_id === 'System' ? 'sys' : ''}`}>
-                                <b>{c.user_id === 'System' ? 'System' : toHex(c.user_id)}: </b>
-                                {c.message}
+                            <div key={c.id} className={`msg-box d-flex align-items-center gap-2 ${c.user_id === 'System' ? 'sys' : ''}`}>
+                                {c.user_id !== 'System' && (
+                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0"></i>
+                                )}
+                                <div>
+                                    <b>{c.user_id === 'System' ? 'System' : toHex(c.user_id)}: </b>
+                                    {c.message}
+                                </div>
                             </div>
                         ))}
+                        <div ref={messagesEndRef} />
                     </div>
-                    <div className="chat-input-wrapper d-flex">
+                    <div className="chat-input-wrapper d-flex mt-auto">
                         <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
                         <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
                     </div>
@@ -786,12 +815,15 @@
             );
         };
 
-        const GuessBox = ({ guesses, tgId, roomData, socket }) => {
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket }) => {
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
-            const revealState = ['REVEAL', 'BREAK'].includes(roomData.room.status);
+            const messagesEndRef = useRef(null);
             
             const prevCount = useRef(guesses.length);
+
+            const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
+            const canGuess = myGuessesCount < 5;
 
             useEffect(() => {
                 if (guesses.length > prevCount.current) {
@@ -801,22 +833,30 @@
                     }
                 }
                 prevCount.current = guesses.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
             }, [guesses]);
 
             return (
-                <div className="d-flex flex-column h-100">
-                    <div className="panel-body d-flex flex-column">
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                         {guesses.map(g => (
-                            <div key={g.id} className={`msg-box ${g.is_correct ? 'guess-correct' : 'bg-light'}`}>
-                                <b>{toHex(g.user_id)}: </b>
-                                {revealState || g.user_id === tgId || isDrawer ? g.guess_text : '••••••••'}
+                            <div key={g.id} className={`msg-box d-flex align-items-center gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`}>
+                                {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0"></i>}
+                                <div>
+                                    <b>{toHex(g.user_id)}: </b>
+                                    {g.guess_text}
+                                </div>
                             </div>
                         ))}
+                        <div ref={messagesEndRef} />
                     </div>
                     {!isDrawer && roomData.room.status === 'DRAWING' && (
-                        <div className="chat-input-wrapper d-flex">
-                            <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('guess', {guess: input}), setInput(''))} placeholder="Guess word..." />
-                            <button className="btn btn-success rounded-end-pill px-3" onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}><i className="fas fa-check"></i></button>
+                        <div className="chat-input-wrapper d-flex flex-column mt-auto">
+                            <div className="d-flex w-100">
+                                <input type="text" className="form-control rounded-start-pill border-0 bg-light" disabled={!canGuess} value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && canGuess && (socket.emit('guess', {guess: input}), setInput(''))} placeholder={canGuess ? `Guess (1 Credit)...` : `Max 5 Guesses Reached`} />
+                                <button className="btn btn-success rounded-end-pill px-3" disabled={!canGuess} onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}><i className="fas fa-check"></i></button>
+                            </div>
+                            {canGuess && <small className="text-muted text-center mt-2">{5 - myGuessesCount} Guesses left this round</small>}
                         </div>
                     )}
                 </div>
