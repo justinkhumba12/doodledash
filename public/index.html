@@ -98,14 +98,27 @@
             }
 
             useEffect(() => {
-                const socket = io();
+                // FIX: Force WebSocket transport to prevent 400 Bad Request errors on Railway proxy
+                const socket = io({
+                    transports: ['websocket'],
+                    upgrade: false
+                });
                 socketRef.current = socket;
-                socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+
+                // FIX: Re-emit auth every time socket connects/reconnects so server remembers the user
+                socket.on('connect', () => {
+                    socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                });
 
                 socket.on('lobby_data', (data) => {
                     setUser(data.user);
                     setRooms(data.rooms);
-                    if (data.currentRoom) setCurrentRoomId(data.currentRoom);
+                    if (data.currentRoom) {
+                        setCurrentRoomId(data.currentRoom);
+                    } else {
+                        setCurrentRoomId(null);
+                        setRoomData(null);
+                    }
                 });
 
                 socket.on('user_update', (userData) => setUser(userData));
@@ -139,7 +152,7 @@
                 socket.on('webrtc_signal_receive', handleReceiveSignal);
 
                 return () => socket.disconnect();
-            }, []); // <-- FIX: Removed [currentRoomId] from dependency array to prevent socket disconnection
+            }, []); 
 
             const requestMic = async () => {
                 try {
