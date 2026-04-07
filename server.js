@@ -25,6 +25,7 @@ app.get('/sw.js', (req, res) => {
             '/audio/mgs_notification.mp3',
             '/audio/guess_notification.mp3',
             '/audio/call.mp3',
+            '/thememusic/themesongdefault.mp3',
             'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
             'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
             'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
@@ -498,6 +499,42 @@ io.on('connection', (socket) => {
                 socket.emit('create_error', msg);
             }
         } catch (err) {}
+    });
+
+    socket.on('transfer_credits', async ({ target_id, amount }) => {
+        try {
+            if (!currentUser || currentUser === target_id) return;
+            const amt = Number(amount);
+            if (![50, 100, 200, 500, 1000].includes(amt)) return socket.emit('create_error', 'Invalid transfer amount.');
+
+            const totalCost = amt + 2; // Including 2 credit transaction fee
+            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            
+            if (u[0].credits < totalCost) {
+                return socket.emit('create_error', `Not enough credits! You need ${totalCost} credits (includes 2 credit fee).`);
+            }
+
+            // Perform transaction
+            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
+            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amt, target_id]);
+
+            socket.emit('reward_success', `Successfully sent ${amt} credits to ${toHex(target_id)}!`);
+            
+            // Notify receiver if they are online
+            const [targetUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
+            if (targetUser.length > 0) {
+                const targetState = await getUserState(target_id);
+                io.to(`user_${target_id}`).emit('user_update', targetState);
+                io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits from ${toHex(currentUser)}!`);
+            }
+            
+            // Update sender's balance
+            const myState = await getUserState(currentUser);
+            socket.emit('user_update', myState);
+
+        } catch (err) {
+            console.error('Transfer credits error:', err);
+        }
     });
 
     socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
