@@ -211,15 +211,13 @@
             };
 
             const initPeerConnection = (stream, callObj) => {
-                // Highly robust NAT Traversal config without TURN (using Cloudflare and Google STUN for IPv4/IPv6 Bridging)
+                // Expanding STUN servers for robust IPv4/IPv6 NAT Traversal without using TURN
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.cloudflare.com:3478' },     // Effective NAT64/IPv6 translation
-                        { urls: 'stun:stun.miwifi.com:3478' }          // Solid fallback behavior in mixed regions
-                    ],
-                    iceCandidatePoolSize: 10 // Pre-gather candidates deeply for better NAT piercing across connections
+                        { urls: 'stun:global.stun.twilio.com:3478' },
+                        { urls: 'stun:stun.cloudflare.com:3478' }
+                    ] 
                 });
                 
                 if (stream) {
@@ -234,10 +232,17 @@
                 };
 
                 pc.ontrack = (e) => {
-                    if (remoteAudioRef.current) {
+                    if (remoteAudioRef.current && e.streams[0]) {
                         remoteAudioRef.current.srcObject = e.streams[0];
                         // Force play to bypass mobile restrictions
                         remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                    }
+                };
+
+                // Safety: Automatically end the call if the connection fails or drops
+                pc.oniceconnectionstatechange = () => {
+                    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                        socketRef.current.emit('end_call', { call_id: callObj.id });
                     }
                 };
 
@@ -256,23 +261,21 @@
                         await pc.setLocalDescription(answer);
                         socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                         
-                        // Flush any candidates that arrived early safely
+                        // Flush any candidates that arrived early
                         while (candidateQueue.current.length > 0) {
-                            const c = candidateQueue.current.shift();
-                            pc.addIceCandidate(c).catch(e => console.error("Failed adding queued candidate after offer:", e));
+                            await pc.addIceCandidate(candidateQueue.current.shift());
                         }
                     } else if (signal.type === 'answer') {
                         await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
                         
                         while (candidateQueue.current.length > 0) {
-                            const c = candidateQueue.current.shift();
-                            pc.addIceCandidate(c).catch(e => console.error("Failed adding queued candidate after answer:", e));
+                            await pc.addIceCandidate(candidateQueue.current.shift());
                         }
                     } else if (signal.type === 'candidate') {
                         const candidate = new RTCIceCandidate(signal.candidate);
                         // Store candidate in queue if remote description isn't ready yet
                         if (pc.remoteDescription && pc.remoteDescription.type) {
-                            pc.addIceCandidate(candidate).catch(e => console.error("Failed adding active candidate:", e));
+                            await pc.addIceCandidate(candidate);
                         } else {
                             candidateQueue.current.push(candidate);
                         }
@@ -291,9 +294,12 @@
             const acceptCall = async (callObj) => {
                 const stream = await requestMic();
                 if (!stream || !callObj) return;
-                socketRef.current.emit('accept_call', { call_id: callObj.id });
                 setLocalStream(stream);
-                initPeerConnection(stream, callObj);
+                
+                // CRITICAL FIX: Initialize PC *before* emitting accept_call to prevent Race Conditions 
+                // when Caller sends Offer too fast.
+                initPeerConnection(stream, callObj); 
+                socketRef.current.emit('accept_call', { call_id: callObj.id });
             };
 
             const cleanupCall = () => {
@@ -312,7 +318,7 @@
 
             useEffect(() => {
                 const handleCallUpdate = (call) => setActiveCall(call);
-                const handleCallEnded = () => cleanupCall(); // Automatically triggers local cleanup when another user disconnects/leaves
+                const handleCallEnded = () => cleanupCall();
                 
                 socketRef.current.on('call_update', handleCallUpdate);
                 socketRef.current.on('call_ended', handleCallEnded);
@@ -323,18 +329,28 @@
             }, []);
 
             useEffect(() => {
+                // Wait until Caller status is Active and Call requires setup from Caller's End
                 if (activeCall?.status === 'ACTIVE' && activeCall.caller === tgId && !peerConnectionRef.current) {
                     const startCall = async () => {
-                        const stream = localStream || await requestMic();
+                        let stream = localStream;
+                        if (!stream) {
+                            stream = await requestMic();
+                            if (stream) setLocalStream(stream);
+                        }
+                        if (!stream) return; // User denied mic
+
                         const pc = initPeerConnection(stream, activeCall);
-                        const offer = await pc.createOffer();
-                        await pc.setLocalDescription(offer);
-                        socketRef.current.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
+                        try {
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            socketRef.current.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
+                        } catch(e) {
+                            console.error("Error creating WebRTC Offer:", e);
+                        }
                     };
                     startCall();
-                } else if (activeCall?.status === 'ACTIVE' && activeCall.receiver === tgId && !peerConnectionRef.current) {
-                    initPeerConnection(localStream, activeCall);
                 }
+                // Receiver logic is handled synchronously in acceptCall
             }, [activeCall, localStream]);
 
             // Handle Mic Mute Update
