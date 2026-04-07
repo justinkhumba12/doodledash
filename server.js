@@ -15,6 +15,29 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Service Worker for Caching
+app.get('/sw.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.send(`
+        const CACHE_NAME = 'doodledash-cache-v1';
+        const urlsToCache = [
+            '/',
+            '/audio/mgs_notification.mp3',
+            '/audio/guess_notification.mp3',
+            '/audio/call.mp3',
+            'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
+            'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
+            'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
+        ];
+        self.addEventListener('install', event => {
+            event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache)));
+        });
+        self.addEventListener('fetch', event => {
+            event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
+        });
+    `);
+});
+
 const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
 // Database Connection
@@ -437,7 +460,7 @@ io.on('connection', (socket) => {
                 }
 
                 const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-                let timeCost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+                let timeCost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
                 let totalCost = limit + timeCost;
 
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
@@ -533,7 +556,7 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom) return;
             const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-            let cost = hours === 12 ? 20 : (hours === 4 ? 8 : 4);
+            let cost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
             
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
@@ -676,7 +699,7 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom) return;
 
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 3) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+            if (u[0].credits < 2) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
             const [member] = await db.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             if(member.length === 0) return;
@@ -684,10 +707,10 @@ io.on('connection', (socket) => {
             let purchased = JSON.parse(member[0].purchased_hints || '[]');
             if (!purchased.includes(index)) {
                 purchased.push(index);
-                await db.query('UPDATE users SET credits = credits - 3 WHERE tg_id = ?', [currentUser]);
+                await db.query('UPDATE users SET credits = credits - 2 WHERE tg_id = ?', [currentUser]);
                 await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
                 
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 3 Credits!`]);
+                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 2 Credits!`]);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
