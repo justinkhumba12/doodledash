@@ -160,7 +160,10 @@
 
             const requestMic = async () => {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Added echoCancellation, noiseSuppression, and autoGainControl for better audio quality
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+                    });
                     return stream;
                 } catch (e) {
                     alert("Microphone permission required for calls.");
@@ -176,7 +179,11 @@
                         { urls: 'stun:stun2.l.google.com:19302' },
                         { urls: 'stun:stun3.l.google.com:19302' },
                         { urls: 'stun:global.stun.twilio.com:3478' },
-                        { urls: 'stun:stun.cloudflare.com:3478' }
+                        { urls: 'stun:stun.cloudflare.com:3478' },
+                        // Added Free Public TURN Servers to fix IPv4/IPv6 mismatch and Symmetric NAT issues (One-sided audio fix)
+                        { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+                        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+                        { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
                     ] 
                 });
                 
@@ -197,13 +204,18 @@
                 pc.ontrack = (e) => {
                     if (remoteAudioRef.current) {
                         const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        remoteAudioRef.current.srcObject = inboundStream;
+                        if (remoteAudioRef.current.srcObject !== inboundStream) {
+                            remoteAudioRef.current.srcObject = inboundStream;
+                        }
                         remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
                     }
                 };
 
                 pc.oniceconnectionstatechange = () => {
-                    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                    // Fix for auto-disconnects: 
+                    // 'disconnected' can be a temporary state when changing networks.
+                    // We only terminate the call automatically if the connection permanently 'failed' or 'closed'.
+                    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
                         socketRef.current.emit('end_call', { call_id: callId });
                     }
                 };
@@ -241,17 +253,17 @@
                         socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                         
                         while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
+                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
                         }
                     } else if (signal.type === 'answer') {
                         await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
                         while (candidateQueue.current.length > 0) {
-                            await pc.addIceCandidate(candidateQueue.current.shift());
+                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
                         }
                     } else if (signal.type === 'candidate') {
                         const candidate = new RTCIceCandidate(signal.candidate);
                         if (pc.remoteDescription && pc.remoteDescription.type) {
-                            await pc.addIceCandidate(candidate);
+                            try { await pc.addIceCandidate(candidate); } catch (e) {}
                         } else {
                             candidateQueue.current.push(candidate);
                         }
@@ -279,7 +291,8 @@
                     const targetId = call.receiver;
                     const pc = initPeerConnection(stream, targetId, call.id);
                     try {
-                        const offer = await pc.createOffer();
+                        // Added offerToReceiveAudio to ensure strict browsers don't block inbound audio
+                        const offer = await pc.createOffer({ offerToReceiveAudio: true });
                         await pc.setLocalDescription(offer);
                         socketRef.current.emit('webrtc_signal', { 
                             call_id: call.id, 
