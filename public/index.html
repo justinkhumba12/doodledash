@@ -73,13 +73,13 @@
 
         const getStatusText = (status) => {
             const map = {
-                'WAITING': 'Lobby',
+                'WAITING': 'Lobby Waiting',
                 'PRE_DRAW': 'Choosing Word',
                 'DRAWING': 'Drawing Phase',
                 'REVEAL': 'Round Over',
                 'BREAK': 'Intermission'
             };
-            return map[status] || status;
+            return map[status] || 'Unknown Phase';
         };
 
         const IdleWarningModal = ({ socket, close }) => {
@@ -115,7 +115,6 @@
             // Audio Controls State
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
-            const [callVolume, setCallVolume] = useState(1);
 
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
@@ -211,17 +210,16 @@
             };
 
             const initPeerConnection = (stream, callObj) => {
-                // Extended ICE Servers configuration for robust IPv4/IPv6 NAT Traversal
+                // Robust ICE Servers configuration for IPv4/IPv6 NAT Traversal without TURN.
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
-                        { urls: [
-                            'stun:stun.l.google.com:19302',
-                            'stun:stun1.l.google.com:19302',
-                            'stun:stun2.l.google.com:19302',
-                            'stun:stun3.l.google.com:19302',
-                            'stun:stun4.l.google.com:19302',
-                            'stun:stun.services.mozilla.com' 
-                        ]}
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        { urls: 'stun:stun.services.mozilla.com' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
                     ] 
                 });
                 stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -288,7 +286,6 @@
                 setActiveCall(null);
                 setIsMicMuted(false);
                 setIsSpeakerMuted(false);
-                setCallVolume(1);
             };
 
             useEffect(() => {
@@ -326,13 +323,6 @@
                     });
                 }
             }, [isMicMuted, localStream]);
-
-            // Handle Volume Update
-            useEffect(() => {
-                if (remoteAudioRef.current) {
-                    remoteAudioRef.current.volume = callVolume;
-                }
-            }, [callVolume]);
 
             // Enhanced Touch Swipe Handler for Smart Switching
             const [touchStart, setTouchStart] = useState(null);
@@ -390,8 +380,6 @@
                                 setIsMicMuted={setIsMicMuted}
                                 isSpeakerMuted={isSpeakerMuted}
                                 setIsSpeakerMuted={setIsSpeakerMuted}
-                                callVolume={callVolume}
-                                setCallVolume={setCallVolume}
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -404,7 +392,7 @@
                                 </div>
                                 
                                 {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
-                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
                             </div>
                         </div>
                     ) : <div className="text-center mt-5">Loading room...</div>}
@@ -536,13 +524,44 @@
                 );
             } else if (modal.type === 'idle_warning') {
                 content = <IdleWarningModal socket={socket} close={close} />;
+            } else if (modal.type === 'confirm_guess_credit') {
+                content = (
+                    <>
+                        <p className="text-muted">You have used your 5 free guesses this round. This guess will cost 1 Credit.</p>
+                        <div className="alert alert-warning">Your guess: <b>{modal.guess}</b></div>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_drawer_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to give up drawing? This will immediately end the round.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Give Up</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_guesser_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Vote Give Up</button>
+                        </div>
+                    </>
+                );
             }
 
             return (
                 <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
                     <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
                         <div className="d-flex justify-content-between align-items-center mb-3">
-                            <h5 className="m-0 fw-bold">{modal.title}</h5>
+                            <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
                             <button className="btn-close" onClick={close}></button>
                         </div>
                         {content}
@@ -619,7 +638,7 @@
                     
                     <div className="d-flex justify-content-between align-items-center mb-3">
                         <h3 className="fw-bold m-0">Game Lobbies</h3>
-                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room' })}>
+                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
                             <i className="fas fa-plus"></i> Create
                         </button>
                     </div>
@@ -662,7 +681,7 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, callVolume, setCallVolume }) => {
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted }) => {
             const { room, members, activeCalls } = roomData;
             const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
 
@@ -689,7 +708,6 @@
                                         <button className={`btn btn-sm ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow`} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
                                             <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'}`}></i>
                                         </button>
-                                        <input type="range" className="form-range" style={{width: '100px'}} min="0" max="1" step="0.1" value={callVolume} onChange={e => setCallVolume(parseFloat(e.target.value))} disabled={isSpeakerMuted} />
                                     </div>
                                 </div>
                             )}
@@ -707,8 +725,9 @@
                                                 </div>
                                                 <div className="d-flex flex-column">
                                                     <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
-                                                    <div>
-                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : ''}
+                                                    <div className="d-flex align-items-center gap-1">
+                                                        {m.is_ready && <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span>}
+                                                        {m.has_given_up && <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span>}
                                                     </div>
                                                 </div>
                                             </div>
@@ -857,17 +876,17 @@
                         <div className="wb-overlay">
                             {room.status !== 'WAITING' && (
                                 <>
-                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h4>
+                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
                                     {room.last_winner_id ? (
-                                        <div className="alert alert-success mt-2 d-flex align-items-center gap-2">
+                                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
                                             {roomData.profiles[room.last_winner_id] ? (
-                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow-sm" width="30" height="30" style={{objectFit: 'cover'}}/>
+                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
                                             ) : (
-                                                <i className="fas fa-user-circle fs-3 text-secondary"></i>
+                                                <i className="fas fa-user-circle fs-1 text-secondary"></i>
                                             )}
-                                            <span><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
+                                            <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
                                         </div>
-                                    ) : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
+                                    ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
                                 </>
                             )}
                             
@@ -932,9 +951,8 @@
             );
         };
 
-        const GuessBox = ({ guesses, profiles, tgId, roomData, socket }) => {
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
             const [input, setInput] = useState('');
-            const [hasGivenUp, setHasGivenUp] = useState(false);
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
             
@@ -943,10 +961,22 @@
             const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
             const isFree = myGuessesCount < 5;
 
-            // Reset Give up local state when not in drawing phase
-            useEffect(() => {
-                if (roomData.room.status !== 'DRAWING') setHasGivenUp(false);
-            }, [roomData.room.status]);
+            const myMemberData = roomData.members.find(m => m.user_id === tgId);
+            const hasGivenUp = myMemberData?.has_given_up;
+
+            const totalGuessers = Math.max(0, roomData.members.length - 1);
+            const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
+
+            const handleGuessSubmit = () => {
+                if (!input.trim()) return;
+                if (isFree) {
+                    socket.emit('guess', {guess: input});
+                    setInput('');
+                } else {
+                    setModal({ type: 'confirm_guess_credit', guess: input, title: 'Use Credit to Guess?' });
+                    setInput('');
+                }
+            };
 
             useEffect(() => {
                 if (guesses.length > prevCount.current) {
@@ -975,27 +1005,42 @@
                         <div ref={messagesEndRef} />
                     </div>
                     
-                    {!isDrawer && roomData.room.status === 'DRAWING' && !hasGivenUp && (
+                    {roomData.room.status === 'DRAWING' && (
                         <div className="chat-input-wrapper d-flex flex-column mt-auto">
-                            <button className="btn btn-warning w-100 mb-2 rounded-pill shadow-sm fw-bold text-dark" onClick={() => { setHasGivenUp(true); socket.emit('give_up'); }}>
-                                <i className="fas fa-flag"></i> Give Up Round
+                            <button 
+                                className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                                onClick={() => {
+                                    setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                                }}
+                                disabled={!isDrawer && hasGivenUp}
+                            >
+                                <i className="fas fa-flag"></i> 
+                                {isDrawer ? 'Give Up Drawing' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
                             </button>
-                            <div className="d-flex w-100">
-                                <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
-                                    value={input} onChange={e=>setInput(e.target.value)} 
-                                    onKeyPress={e => e.key === 'Enter' && (socket.emit('guess', {guess: input}), setInput(''))} 
-                                    placeholder={isFree ? `Free Guess (${5 - myGuessesCount} left)...` : `Extra Guess (1 Credit)...`} />
-                                <button className="btn btn-success rounded-end-pill px-3" onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}>
-                                    <i className="fas fa-check"></i>
-                                </button>
-                            </div>
-                            {!isFree && <small className="text-muted text-center mt-2">Extra guesses cost 1 Credit each</small>}
-                        </div>
-                    )}
 
-                    {!isDrawer && roomData.room.status === 'DRAWING' && hasGivenUp && (
-                        <div className="chat-input-wrapper text-center text-muted p-3 fst-italic">
-                            You've given up on this round.
+                            {!isDrawer && !hasGivenUp && (
+                                <div className="d-flex w-100">
+                                    <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
+                                        value={input} onChange={e=>setInput(e.target.value)} 
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
+                                        placeholder={isFree ? `Free Guess (${5 - myGuessesCount} left)...` : `Extra Guess (1 Credit)...`} />
+                                    <button className="btn btn-success rounded-end-pill px-3" onClick={handleGuessSubmit}>
+                                        <i className="fas fa-check"></i>
+                                    </button>
+                                </div>
+                            )}
+
+                            {!isDrawer && hasGivenUp && (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You've given up. Waiting for others ({givenUpCount}/{totalGuessers})
+                                </div>
+                            )}
+
+                            {isDrawer && (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You are the drawer. Use tools to draw!
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
