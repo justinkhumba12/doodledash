@@ -13,7 +13,7 @@
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
     <link rel="preload" href="/audio/call.mp3" as="audio">
-
+    
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
@@ -48,6 +48,7 @@
         .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); transition: 0.3s; }
         .toggle-glow { background-color: #f59e0b !important; box-shadow: 0 0 20px #f59e0b !important; animation: pulseGlow 1s infinite alternate; }
         @keyframes pulseGlow { 0% { transform: translateY(-50%) scale(1); } 100% { transform: translateY(-50%) scale(1.15); } }
+        
         .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
         .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
         .panel-tab.active { background: var(--primary); color: white; }
@@ -184,7 +185,7 @@
                         if (playPromise !== undefined) {
                             playPromise.then(() => {
                                 if (!audioEl.srcObject) audioEl.pause();
-                            }).catch(() => console.log("Audio unlock interaction needed."));
+                            }).catch(() => {});
                         }
                     }
                     
@@ -202,7 +203,7 @@
 
             useEffect(() => {
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
-                    callSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                    callSound.play().catch(() => {});
                 } else {
                     callSound.pause();
                     callSound.currentTime = 0;
@@ -490,7 +491,7 @@
             }
 
             const handleLoadBalance = () => {
-                // IMPORTANT: Replace 'YOUR_BOT_USERNAME' with your actual Telegram bot username
+                // Replace 'YOUR_BOT_USERNAME' with your actual Telegram bot username
                 tg.openTelegramLink('https://t.me/YOUR_BOT_USERNAME?start=load_balance');
             };
 
@@ -1143,24 +1144,101 @@
             );
         };
 
-        const ChatBox = ({ chats, profiles, socket, tgId, setGlowToggle }) => {
-            const [input, setInput] = useState('');
-            const prevCount = useRef(chats.length);
-            const messagesEndRef = useRef(null);
+        const Whiteboard = ({ roomData, tgId, socket }) => {
+            const canvasRef = useRef(null);
+            const { room, drawings, members } = roomData;
+            const isDrawer = room.current_drawer_id === tgId;
+            const isDrawingPhase = room.status === 'DRAWING';
             
+            const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
+            const readyCount = members.filter(m => m.is_ready).length;
+            
+            const [wordInput, setWordInput] = useState('');
+            let drawing = false;
+            let currentLine = [];
+            let lastPos = {x: 0, y: 0};
+
+            const redraw = useCallback(() => {
+                const canvas = canvasRef.current;
+                if(!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0,0, canvas.width, canvas.height);
+                ctx.strokeStyle = '#334155';
+                ctx.lineCap = 'round';
+                ctx.lineWidth = 5;
+                
+                drawings.forEach(jsonStr => {
+                    try {
+                        const lines = JSON.parse(jsonStr);
+                        lines.forEach(l => {
+                            ctx.beginPath();
+                            ctx.moveTo(l.x0, l.y0);
+                            ctx.lineTo(l.x1, l.y1);
+                            ctx.stroke();
+                        });
+                    } catch(e){}
+                });
+            }, [drawings]);
+
+            useEffect(() => { redraw(); }, [redraw]);
+
             useEffect(() => {
-                if (chats.length > prevCount.current) {
-                    const newChats = chats.slice(prevCount.current);
-                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
-                    if (isOthersMessage) {
-                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                        setGlowToggle(true);
-                        setTimeout(() => setGlowToggle(false), 3000);
-                    }
+                const handleLiveDraw = (lines) => {
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    ctx.strokeStyle = '#334155';
+                    ctx.lineCap = 'round';
+                    ctx.lineWidth = 5;
+                    lines.forEach(l => {
+                        ctx.beginPath();
+                        ctx.moveTo(l.x0, l.y0);
+                        ctx.lineTo(l.x1, l.y1);
+                        ctx.stroke();
+                    });
+                };
+                socket.on('live_draw', handleLiveDraw);
+                return () => socket.off('live_draw', handleLiveDraw);
+            }, [socket]);
+
+            const getMousePos = (e) => {
+                const rect = canvasRef.current.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const scaleX = 500 / rect.width;
+                const scaleY = 500 / rect.height;
+                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+            };
+
+            const startDraw = (e) => {
+                if (!isDrawer || !isDrawingPhase) return;
+                e.preventDefault();
+                drawing = true;
+                currentLine = [];
+                lastPos = getMousePos(e);
+            };
+
+            const moveDraw = (e) => {
+                if (!drawing) return;
+                e.preventDefault();
+                const newPos = getMousePos(e);
+                
+                const ctx = canvasRef.current.getContext('2d');
+                ctx.beginPath();
+                ctx.moveTo(lastPos.x, lastPos.y);
+                ctx.lineTo(newPos.x, newPos.y);
+                ctx.stroke();
+
+                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
+                lastPos = newPos;
+            };
+
+            const stopDraw = () => {
+                if(!drawing) return;
+                drawing = false;
+                if(currentLine.length > 0) {
+                    socket.emit('draw', { lines: currentLine });
                 }
-                prevCount.current = chats.length;
-                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [chats, tgId, setGlowToggle]);
+            };
 
             return (
                 <div className="whiteboard-container">
@@ -1217,6 +1295,51 @@
                             <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
                         </div>
                     )}
+                </div>
+            );
+        };
+
+        const ChatBox = ({ chats, profiles, socket, tgId, setGlowToggle }) => {
+            const [input, setInput] = useState('');
+            const prevCount = useRef(chats.length);
+            const messagesEndRef = useRef(null);
+            
+            useEffect(() => {
+                if (chats.length > prevCount.current) {
+                    const newChats = chats.slice(prevCount.current);
+                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
+                    if (isOthersMessage) {
+                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                        setGlowToggle(true);
+                        setTimeout(() => setGlowToggle(false), 3000);
+                    }
+                }
+                prevCount.current = chats.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [chats, tgId, setGlowToggle]);
+
+            return (
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                        {chats.map(c => (
+                            <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                                {c.user_id !== 'System' && (
+                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
+                                )}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {c.user_id === 'System' ? 'System' : toHex(c.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{c.message}</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    <div className="chat-input-wrapper d-flex mt-auto">
+                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
+                        <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
+                    </div>
                 </div>
             );
         };
