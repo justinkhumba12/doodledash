@@ -172,11 +172,19 @@ async function getUserState(tg_id) {
 }
 
 const activeCalls = new Map(); 
-const roomRedoStacks = {}; // Memory for redo functionality
+const roomRedoStacks = {}; 
 
 const broadcastRooms = async () => {
     const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
     io.emit('lobby_rooms_update', rooms);
+};
+
+// Auto Room Resetter
+const checkRoomReset = async (roomId) => {
+    const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
+    if (members[0].c < 2) {
+        await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+    }
 };
 
 const syncRoom = async (roomId) => {
@@ -186,7 +194,7 @@ const syncRoom = async (roomId) => {
         if (roomData.length === 0) return; 
 
         const [members] = await db.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
-        const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20', [roomId]);
+        const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id ASC', [roomId]); 
         const [guesses] = await db.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
         const [drawings] = await db.query('SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC', [roomId]);
         
@@ -198,17 +206,32 @@ const syncRoom = async (roomId) => {
         }
 
         const activeCallsList = Array.from(activeCalls.values()).filter(c => c.room_id === roomId);
+        const sockets = await io.in(`room_${roomId}`).fetchSockets();
 
-        io.to(`room_${roomId}`).emit('room_sync', {
-            room: roomData[0],
-            members,
-            chats: chats.reverse(),
-            guesses,
-            drawings: drawings.map(d => d.line_data),
-            profiles,
-            activeCalls: activeCallsList,
-            server_time: new Date()
-        });
+        // Broadcast tailor-made states for server-side blurring 
+        for (let s of sockets) {
+            const userId = s.currentUser;
+            const isDrawer = roomData[0].current_drawer_id === userId;
+            
+            const sanitizedGuesses = guesses.map(g => {
+                // Determine if we show the real guess or blur it securely from the server
+                if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
+                    return g;
+                }
+                return { ...g, guess_text: '••••••••' };
+            });
+
+            s.emit('room_sync', {
+                room: roomData[0],
+                members,
+                chats, 
+                guesses: sanitizedGuesses,
+                drawings: drawings.map(d => d.line_data),
+                profiles,
+                activeCalls: activeCallsList,
+                server_time: new Date()
+            });
+        }
     } catch (error) {
         console.error("syncRoom error:", error);
     }
@@ -223,6 +246,7 @@ io.on('connection', (socket) => {
         try {
             if (!tg_id) return;
             currentUser = tg_id;
+            socket.currentUser = tg_id; // Set for targeted fetching
             socket.join(`user_${tg_id}`);
             
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
@@ -243,9 +267,7 @@ io.on('connection', (socket) => {
             }
 
             socket.emit('lobby_data', { user: userState, rooms, currentRoom });
-        } catch (err) {
-            console.error('Auth Error:', err);
-        }
+        } catch (err) {}
     });
 
     socket.on('active_event', () => {
@@ -298,9 +320,7 @@ io.on('connection', (socket) => {
             } else {
                 socket.emit('create_error', msg);
             }
-        } catch (err) {
-            console.error('Claim Reward Error:', err);
-        }
+        } catch (err) {}
     });
 
     socket.on('create_room', async ({ is_private, password, max_members }) => {
@@ -361,7 +381,10 @@ io.on('connection', (socket) => {
 
             const oldRoom = currentRoom;
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-            if (oldRoom) socket.leave(`room_${oldRoom}`);
+            if (oldRoom) {
+                socket.leave(`room_${oldRoom}`);
+                await checkRoomReset(oldRoom);
+            }
 
             await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
             currentRoom = roomIdNum;
@@ -382,6 +405,7 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom) return;
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+            await checkRoomReset(currentRoom);
             socket.leave(`room_${currentRoom}`);
             syncRoom(currentRoom);
             currentRoom = null;
@@ -400,13 +424,34 @@ io.on('connection', (socket) => {
     socket.on('guess', async ({ guess }) => {
         try {
             if (!currentUser || !currentRoom || !guess.trim()) return;
-            const [room] = await db.query('SELECT word_to_draw FROM rooms WHERE id = ?', [currentRoom]);
+            
+            const [room] = await db.query('SELECT word_to_draw, current_drawer_id FROM rooms WHERE id = ?', [currentRoom]);
+            if (room[0]?.current_drawer_id === currentUser) return; // Drawer can't guess
+            
+            // Validate Max 5 Guesses
+            const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            if (guessCount[0].count >= 5) {
+                return socket.emit('create_error', 'Maximum of 5 guesses reached for this round.');
+            }
+            
+            // Deduct 1 Credit for guessing
+            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (u[0].credits < 1) {
+                return socket.emit('create_error', 'Not enough credits to guess! (Cost: 1 Credit)');
+            }
+            await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+            
             const isCorrect = room[0]?.word_to_draw?.toLowerCase() === guess.toLowerCase();
             
             await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess, isCorrect]);
             if (isCorrect) {
                 await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
             }
+            
+            // Send user update to reflect deducted credit
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
+
             syncRoom(currentRoom);
         } catch (err) {}
     });
@@ -433,7 +478,7 @@ io.on('connection', (socket) => {
     socket.on('draw', async ({ lines }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            roomRedoStacks[currentRoom] = []; // clear redo logic on new draw
+            roomRedoStacks[currentRoom] = []; 
             await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
             socket.to(`room_${currentRoom}`).emit('live_draw', lines);
         } catch (err) {}
@@ -477,24 +522,22 @@ io.on('connection', (socket) => {
             call.startTime = Date.now();
             activeCalls.set(call_id, call);
             
+            // Charge ONLY the caller for the call
             call.interval = setInterval(async () => {
                 const c = activeCalls.get(call_id);
                 if(!c) return clearInterval(call.interval);
                 
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id IN (?, ?) AND credits > 0', [c.caller, c.receiver]);
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits > 0', [c.caller]);
                 const [u1] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
-                const [u2] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.receiver]);
                 
-                if (u1[0].credits <= 0 || u2[0].credits <= 0) {
+                if (u1[0].credits <= 0) {
                     clearInterval(call.interval);
                     activeCalls.delete(call_id);
                     io.to(`room_${c.room_id}`).emit('call_ended', call_id);
                     syncRoom(c.room_id);
                 } else {
                     const uState1 = await getUserState(c.caller);
-                    const uState2 = await getUserState(c.receiver);
                     if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
-                    if(uState2) io.to(`user_${c.receiver}`).emit('user_update', uState2);
                 }
             }, 60000);
 
@@ -519,13 +562,13 @@ io.on('connection', (socket) => {
     socket.on('disconnect', async () => {
         if (currentUser && currentRoom) {
             await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+            await checkRoomReset(currentRoom);
             syncRoom(currentRoom);
             broadcastRooms();
         }
     });
 });
 
-// Main Game Timers (Drawing timeout removed)
 setInterval(async () => {
     try {
         const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
@@ -552,8 +595,10 @@ setInterval(async () => {
             if (s.currentRoom && now - (s.lastActiveEvent || now) > 60000) {
                 s.emit('kick_idle');
                 db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
-                    syncRoom(s.currentRoom);
-                    broadcastRooms();
+                    checkRoomReset(s.currentRoom).then(() => {
+                        syncRoom(s.currentRoom);
+                        broadcastRooms();
+                    });
                 });
                 s.leave(`room_${s.currentRoom}`);
                 s.currentRoom = null;
