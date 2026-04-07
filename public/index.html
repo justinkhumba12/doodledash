@@ -1,717 +1,1108 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const mysql = require('mysql2/promise');
-const cors = require('cors');
-const path = require('path');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DoodleDash - React Clone</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
-
-// Database Connection
-let db;
-async function initDB() {
-    const dbUrl = process.env.MYSQL_URL || 'mysql://root:dKIKDNsnObjDvJlZawBHjzaEsoetaATX@mysql.railway.internal:3306/railway';
-    try {
-        db = await mysql.createConnection({ uri: dbUrl, timezone: 'Z' });
-        console.log('Connected to MySQL Database.');
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                tg_id VARCHAR(50) PRIMARY KEY,
-                credits INT DEFAULT 0,
-                last_daily_claim DATE,
-                ad_claims_today INT DEFAULT 0,
-                last_ad_claim_date DATE,
-                last_ad_claim_time DATETIME,
-                ad2_claims_today INT DEFAULT 0,
-                last_ad2_claim_date DATE,
-                last_ad2_claim_time DATETIME,
-                profile_pic VARCHAR(255),
-                last_active DATETIME
-            )
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS rooms (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                status VARCHAR(20) DEFAULT 'WAITING',
-                current_drawer_id VARCHAR(50),
-                word_to_draw VARCHAR(50),
-                round_end_time DATETIME,
-                break_end_time DATETIME,
-                last_winner_id VARCHAR(50),
-                next_drawer_id VARCHAR(50),
-                modified_at DATETIME,
-                is_private BOOLEAN DEFAULT FALSE,
-                password VARCHAR(255),
-                max_members INT DEFAULT 4
-            )
-        `);
-
-        // Migration logic for modifying existing tables
-        const migrations = [
-            "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
-            "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
-            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE"
-        ];
+    <style>
+        :root { --primary: #6366f1; --primary-hover: #4f46e5; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #1e293b; --call-green: #10b981; }
+        body { background-color: var(--bg-color); font-family: 'Poppins', sans-serif; color: var(--text-main); overflow-x: hidden; touch-action: manipulation; }
+        .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
+        .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
+        .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 25px 20px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); }
+        .room-card { background: var(--card-bg); border-radius: 16px; border: 1px solid #e2e8f0; transition: transform 0.2s; overflow: hidden; }
+        .room-card:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12); }
         
-        for (let query of migrations) {
-            try { await db.query(query); } catch (e) { /* Ignore if column already exists */ }
-        }
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS room_members (
-                room_id INT,
-                user_id VARCHAR(50),
-                is_ready BOOLEAN DEFAULT FALSE,
-                consecutive_turns INT DEFAULT 0,
-                total_turns INT DEFAULT 0,
-                has_given_up BOOLEAN DEFAULT FALSE,
-                PRIMARY KEY(room_id, user_id)
-            )
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS drawings (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                line_data LONGTEXT
-            )
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS chats (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                user_id VARCHAR(50),
-                message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS guesses (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                user_id VARCHAR(50),
-                guess_text VARCHAR(50),
-                is_correct BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        const [rooms] = await db.query('SELECT COUNT(*) as count FROM rooms');
-        if (rooms[0].count === 0) {
-            for (let i = 0; i < 5; i++) {
-                await db.query(`INSERT INTO rooms (status, modified_at, is_private, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, 4)`);
-            }
-        }
-    } catch (err) {
-        console.error('MySQL Init Error:', err);
-    }
-}
-initDB();
-
-app.post('/webhook', async (req, res) => {
-    const update = req.body;
-    if (update?.message?.text === '/start') {
-        const chatId = update.message.chat.id;
-        const tgId = update.message.from.id;
+        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
         
-        try {
-            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
-        } catch (e) {
-            console.error('Webhook DB Error:', e);
-        }
-
-        const token = process.env.BOT_TOKEN; 
-        const webAppUrl = process.env.WEBAPP_URL; 
+        /* Fully Responsive Square Constraints */
+        .whiteboard-container { width: 100% !important; max-width: 500px !important; aspect-ratio: 1/1; height: auto !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
+        canvas { cursor: crosshair; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
         
-        if (token && webAppUrl) {
-            const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-            fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: chatId,
-                    text: 'Welcome to DoodleDash! Click below to play.',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-                    }
-                })
-            }).catch(console.error);
-        }
-    }
-    res.sendStatus(200);
-});
-
-async function getUserState(tg_id) {
-    const [rows] = await db.query(`
-        SELECT *,
-        (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_date IS NULL OR DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        (last_ad2_claim_date IS NULL OR DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 2 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
-        (DATE_FORMAT(last_ad_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
-        (DATE_FORMAT(last_ad2_claim_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
-        FROM users WHERE tg_id = ?
-    `, [tg_id]);
-
-    if (rows.length === 0) return null;
-    let u = rows[0];
-    if (!u.ad1_is_today) u.ad_claims_today = 0;
-    if (!u.ad2_is_today) u.ad2_claims_today = 0;
-    return u;
-}
-
-const activeCalls = new Map(); 
-const roomRedoStacks = {}; 
-
-const broadcastRooms = async () => {
-    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
-    io.emit('lobby_rooms_update', rooms);
-};
-
-// Auto Room Resetter
-const checkRoomReset = async (roomId) => {
-    const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
-    if (members[0].c < 2) {
-        await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-        await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
-    }
-};
-
-const syncRoom = async (roomId) => {
-    if (!roomId) return;
-    try {
-        const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
-        if (roomData.length === 0) return; 
-
-        const [members] = await db.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
-        const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id ASC', [roomId]); 
-        const [guesses] = await db.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
-        const [drawings] = await db.query('SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC', [roomId]);
+        .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
         
-        const userIds = [...new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)])];
-        let profiles = {};
-        if (userIds.length > 0) {
-            const [users] = await db.query(`SELECT tg_id, profile_pic FROM users WHERE tg_id IN (?)`, [userIds]);
-            users.forEach(u => profiles[u.tg_id] = u.profile_pic);
-        }
+        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; touch-action: pan-y; }
+        .interaction-panel.open { right: 0; }
+        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); }
+        .panel-header { display: flex; padding: 10px; gap: 10px; flex-shrink: 0; }
+        .panel-tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 12px; transition: 0.2s; }
+        .panel-tab.active { background: var(--primary); color: white; }
+        .panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 15px; display: flex; flex-direction: column; }
+        .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
+        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; word-wrap: break-word; }
+        .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
+        .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
+        
+        .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+        @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .heartbeat { animation: heartbeat 1s infinite; }
+        
+        .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
+        .cursor-pointer { cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-        const activeCallsList = Array.from(activeCalls.values())
-            .filter(c => c.room_id === roomId)
-            .map(c => ({
-                id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id
-            }));
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        const urlParams = new URLSearchParams(window.location.search);
+        
+        const mgsSound = new Audio('/audio/mgs_notification.mp3');
+        const guessSound = new Audio('/audio/guess_notification.mp3');
 
-        const roomSockets = io.sockets.adapter.rooms.get(`room_${roomId}`);
-        if (roomSockets) {
-            for (const socketId of roomSockets) {
-                const s = io.sockets.sockets.get(socketId);
-                if (s) {
-                    const userId = s.currentUser;
-                    const isDrawer = roomData[0].current_drawer_id === userId;
-                    
-                    const sanitizedGuesses = guesses.map(g => {
-                        if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
-                            return g;
-                        }
-                        return { ...g, guess_text: '••••••••' };
-                    });
+        const tgId = urlParams.get('user_id');
+        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
-                    s.emit('room_sync', {
-                        room: roomData[0],
-                        members,
-                        chats, 
-                        guesses: sanitizedGuesses,
-                        drawings: drawings.map(d => d.line_data),
-                        profiles,
-                        activeCalls: activeCallsList,
-                        server_time: new Date()
-                    });
-                }
-            }
-        }
-    } catch (error) {
-        console.error("syncRoom error:", error);
-    }
-};
+        const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
-// End active calls if a user disconnects or leaves room to prevent orphaned calls
-const terminateCallsForUser = (userId) => {
-    for (const [callId, call] of activeCalls.entries()) {
-        if (call.caller === userId || call.receiver === userId) {
-            if (call.interval) clearInterval(call.interval);
-            activeCalls.delete(callId);
-            io.to(`room_${call.room_id}`).emit('call_ended', callId);
-            syncRoom(call.room_id);
-        }
-    }
-};
+        const getStatusText = (status) => {
+            const map = {
+                'WAITING': 'Lobby Waiting',
+                'PRE_DRAW': 'Choosing Word',
+                'DRAWING': 'Drawing Phase',
+                'REVEAL': 'Round Over',
+                'BREAK': 'Intermission'
+            };
+            return map[status] || 'Unknown Phase';
+        };
 
-io.on('connection', (socket) => {
-    let currentUser = null;
-    let currentRoom = null;
-    socket.lastActiveEvent = Date.now();
-    socket.idleWarned = false;
+        const IdleWarningModal = ({ socket, close }) => {
+            const [countdown, setCountdown] = useState(10);
+            useEffect(() => {
+                const t = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000);
+                return () => clearInterval(t);
+            }, []);
+            return (
+                <>
+                    <div className="alert alert-danger mb-3 text-center">
+                        <i className="fas fa-exclamation-triangle fs-3 mb-2 d-block"></i>
+                        You will be removed from the room in <b>{countdown}s</b> due to inactivity.
+                    </div>
+                    <button className="btn btn-primary w-100 rounded-pill" onClick={() => { socket.emit('active_event'); close(); }}>I'm here!</button>
+                </>
+            );
+        };
 
-    socket.on('auth', async ({ tg_id, profile_pic }) => {
-        try {
-            if (!tg_id) return;
-            currentUser = tg_id;
-            socket.currentUser = tg_id; 
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [rooms, setRooms] = useState([]);
+            const [currentRoomId, setCurrentRoomId] = useState(null);
+            const [roomData, setRoomData] = useState(null);
+            const [activeTab, setActiveTab] = useState('chat');
+            const [panelOpen, setPanelOpen] = useState(false);
+            const [modal, setModal] = useState(null);
+            const [profileModal, setProfileModal] = useState(null);
             
-            // CRITICAL for WebRTC signaling
-            socket.join(`user_${tg_id}`);
+            const [activeCall, setActiveCall] = useState(null);
+            const [localStream, setLocalStream] = useState(null);
             
-            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
-            if (profile_pic) {
-                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
-            } else {
-                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
+            // Audio Controls State
+            const [isMicMuted, setIsMicMuted] = useState(false);
+            const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+
+            const peerConnectionRef = useRef(null);
+            const remoteAudioRef = useRef(null);
+            const socketRef = useRef(null);
+            const candidateQueue = useRef([]);
+
+            if (!tgId) {
+                return (
+                    <div className="container mt-5 text-center">
+                        <div className="alert alert-danger shadow-lg py-5 rounded-4">
+                            <h1><i className="fas fa-lock mb-3"></i></h1>
+                            <h3 className="fw-bold">Access Denied</h3>
+                            <p>You can only access DoodleDash directly through the official Telegram Bot.</p>
+                        </div>
+                    </div>
+                );
             }
 
-            const userState = await getUserState(tg_id);
-            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
-            
-            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
-            if (existing.length > 0) {
-                currentRoom = existing[0].room_id;
-                socket.join(`room_${currentRoom}`);
-                syncRoom(currentRoom);
-            }
+            useEffect(() => {
+                const socket = io({ transports: ['websocket'], upgrade: false });
+                socketRef.current = socket;
 
-            socket.emit('lobby_data', { user: userState, rooms, currentRoom });
-        } catch (err) {}
-    });
+                socket.on('connect', () => {
+                    socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                });
 
-    socket.on('active_event', () => {
-        socket.lastActiveEvent = Date.now();
-        socket.idleWarned = false;
-    });
+                socket.on('lobby_data', (data) => {
+                    setUser(data.user);
+                    setRooms(data.rooms);
+                    setCurrentRoomId(data.currentRoom || null);
+                    if(!data.currentRoom) setRoomData(null);
+                });
+                
+                socket.on('lobby_rooms_update', (data) => setRooms(data));
+                socket.on('user_update', (userData) => setUser(userData));
+                socket.on('room_sync', (data) => setRoomData(data));
+                
+                socket.on('kick_idle', () => {
+                    setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
+                    setCurrentRoomId(null);
+                });
 
-    socket.on('claim_reward', async ({ type }) => {
-        try {
-            if (!currentUser) return;
-            let success = false;
-            let msg = '';
+                socket.on('idle_warning', () => {
+                    setModal({ type: 'idle_warning', title: 'Are you still there?' });
+                });
 
-            if (type === 'daily') {
-                const [res] = await db.query(`
-                    UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
-                    WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
-                `, [currentUser]);
-                if (res.affectedRows > 0) { success = true; msg = 'Daily reward claimed! +1 Credit'; }
-                else { msg = 'Daily reward already claimed today.'; }
-            } 
-            else if (type === 'ad' || type === 'ad2') {
-                const prefix = type === 'ad' ? 'ad' : 'ad2';
-                const [u] = await db.query(`SELECT
-                    ${prefix}_claims_today as claims,
-                    DATE_FORMAT(last_${prefix}_claim_date, '%Y-%m-%d') as last_date,
-                    DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
-                    TIMESTAMPDIFF(MINUTE, last_${prefix}_claim_time, UTC_TIMESTAMP()) as mins_passed
-                    FROM users WHERE tg_id = ?`, [currentUser]);
+                socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Reward Claimed!', content: msg }));
+                socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
+                socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
+                
+                socket.on('join_success', (roomId) => {
+                    setCurrentRoomId(roomId);
+                    setModal(null);
+                });
 
-                if (u.length > 0) {
-                    const user = u[0];
-                    const isToday = user.last_date === user.today;
+                socket.on('room_created', ({ room_id }) => {
+                    setModal(null);
+                    socket.emit('search_room', { room_id }); 
+                });
 
-                    if (!user.last_date || !isToday) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
-                    } else if (user.claims < 2 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_date = UTC_DATE(), last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
+                socket.on('search_result', (room) => {
+                    if (room.is_private) {
+                        setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
                     } else {
-                        msg = 'Ad reward not available yet. Max 2 per day, 3 hours apart.';
+                        setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${room.id} for 1 Credit?`, room_id: room.id });
+                    }
+                });
+
+                socket.on('webrtc_signal_receive', handleReceiveSignal);
+                
+                const resetIdle = () => {
+                    socketRef.current.emit('active_event');
+                    setModal(prev => prev?.type === 'idle_warning' ? null : prev);
+                };
+                window.addEventListener('mousemove', resetIdle);
+                window.addEventListener('touchstart', resetIdle);
+
+                return () => {
+                    window.removeEventListener('mousemove', resetIdle);
+                    window.removeEventListener('touchstart', resetIdle);
+                    socket.disconnect();
+                }
+            }, []); 
+
+            const requestMic = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    setLocalStream(stream);
+                    return stream;
+                } catch (e) {
+                    alert("Microphone permission required for calls.");
+                    return null;
+                }
+            };
+
+            const initPeerConnection = (stream, callObj) => {
+                // Expanding STUN servers for robust IPv4/IPv6 NAT Traversal without using TURN
+                const pc = new RTCPeerConnection({ 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' },
+                        { urls: 'stun:stun.cloudflare.com:3478' }
+                    ] 
+                });
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                }
+                
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        const targetId = callObj.caller === tgId ? callObj.receiver : callObj.caller;
+                        socketRef.current.emit('webrtc_signal', { call_id: callObj.id, target_id: targetId, signal: { type: 'candidate', candidate: e.candidate } });
+                    }
+                };
+
+                pc.ontrack = (e) => {
+                    if (remoteAudioRef.current) {
+                        // CRITICAL FIX: Mobile browsers sometimes return an empty streams array. 
+                        // If it's missing, we manually wrap the track in a new MediaStream.
+                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
+                        remoteAudioRef.current.srcObject = inboundStream;
+                        
+                        // Force play to bypass mobile restrictions
+                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                    }
+                };
+
+                // Safety: Automatically end the call if the connection fails or drops
+                pc.oniceconnectionstatechange = () => {
+                    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                        socketRef.current.emit('end_call', { call_id: callObj.id });
+                    }
+                };
+
+                peerConnectionRef.current = pc;
+                return pc;
+            };
+
+            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
+                // CRITICAL FIX: Enforce String comparison to prevent Number vs String mismatches from dropping signals
+                if (String(target_id) !== String(tgId) || !peerConnectionRef.current) return;
+                
+                const pc = peerConnectionRef.current;
+                
+                try {
+                    if (signal.type === 'offer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                        
+                        // Flush any candidates that arrived early
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                        
+                        while (candidateQueue.current.length > 0) {
+                            await pc.addIceCandidate(candidateQueue.current.shift());
+                        }
+                    } else if (signal.type === 'candidate') {
+                        const candidate = new RTCIceCandidate(signal.candidate);
+                        // Store candidate in queue if remote description isn't ready yet
+                        if (pc.remoteDescription && pc.remoteDescription.type) {
+                            await pc.addIceCandidate(candidate);
+                        } else {
+                            candidateQueue.current.push(candidate);
+                        }
+                    }
+                } catch (e) {
+                    console.error("WebRTC Signal Error:", e);
+                }
+            };
+
+            const initiateCall = async (targetId) => {
+                const stream = await requestMic();
+                if (!stream) return;
+                socketRef.current.emit('initiate_call', { receiver_id: targetId });
+            };
+
+            const acceptCall = async (callObj) => {
+                const stream = await requestMic();
+                if (!stream || !callObj) return;
+                setLocalStream(stream);
+                
+                // CRITICAL FIX: Initialize PC *before* emitting accept_call to prevent Race Conditions 
+                // when Caller sends Offer too fast.
+                initPeerConnection(stream, callObj); 
+                socketRef.current.emit('accept_call', { call_id: callObj.id });
+            };
+
+            const cleanupCall = () => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                candidateQueue.current = [];
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    setLocalStream(null);
+                }
+                setActiveCall(null);
+                setIsMicMuted(false);
+                setIsSpeakerMuted(false);
+            };
+
+            useEffect(() => {
+                const handleCallUpdate = (call) => setActiveCall(call);
+                const handleCallEnded = () => cleanupCall();
+                
+                socketRef.current.on('call_update', handleCallUpdate);
+                socketRef.current.on('call_ended', handleCallEnded);
+                return () => {
+                    socketRef.current.off('call_update', handleCallUpdate);
+                    socketRef.current.off('call_ended', handleCallEnded);
+                }
+            }, []);
+
+            useEffect(() => {
+                // Wait until Caller status is Active and Call requires setup from Caller's End
+                if (activeCall?.status === 'ACTIVE' && activeCall.caller === tgId && !peerConnectionRef.current) {
+                    const startCall = async () => {
+                        let stream = localStream;
+                        if (!stream) {
+                            stream = await requestMic();
+                            if (stream) setLocalStream(stream);
+                        }
+                        if (!stream) return; // User denied mic
+
+                        const pc = initPeerConnection(stream, activeCall);
+                        try {
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            socketRef.current.emit('webrtc_signal', { call_id: activeCall.id, target_id: activeCall.receiver, signal: { type: 'offer', offer } });
+                        } catch(e) {
+                            console.error("Error creating WebRTC Offer:", e);
+                        }
+                    };
+                    startCall();
+                }
+                // Receiver logic is handled synchronously in acceptCall
+            }, [activeCall, localStream]);
+
+            // Handle Mic Mute Update
+            useEffect(() => {
+                if (localStream) {
+                    localStream.getAudioTracks().forEach(track => {
+                        track.enabled = !isMicMuted;
+                    });
+                }
+            }, [isMicMuted, localStream]);
+
+            // Enhanced Touch Swipe Handler for Smart Switching
+            const [touchStart, setTouchStart] = useState(null);
+            const onTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+            const onTouchEnd = (e) => {
+                if (!touchStart) return;
+                const touchEndX = e.changedTouches[0].clientX;
+                const diff = touchStart - touchEndX;
+                
+                if (diff > 50) { // Swiped Left
+                    if (activeTab === 'chat') setActiveTab('guess');
+                    else if (activeTab === 'guess') setActiveTab('chat');
+                } else if (diff < -50) { // Swiped Right
+                    if (activeTab === 'guess') setActiveTab('chat');
+                    else if (activeTab === 'chat') setPanelOpen(false);
+                }
+                setTouchStart(null);
+            };
+
+            if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
+
+            return (
+                <div>
+                    <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
+                    <div className="app-header">
+                        <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
+                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm">
+                            <i className="fas fa-coins text-warning me-1"></i> <b>{user.credits}</b>
+                        </div>
+                    </div>
+
+                    {!currentRoomId ? (
+                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
+                    ) : roomData ? (
+                        <div className="container-fluid pt-3">
+                            <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
+                                <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
+                                    <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                    <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
+                                </div>
+                                <div className="text-center w-100">
+                                    <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
+                                    <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                                </div>
+                            </div>
+                        
+                            <GameRoom 
+                                roomData={roomData} 
+                                tgId={tgId} 
+                                onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
+                                socket={socketRef.current}
+                                setProfileModal={setProfileModal}
+                                activeCall={activeCall}
+                                isMicMuted={isMicMuted}
+                                setIsMicMuted={setIsMicMuted}
+                                isSpeakerMuted={isSpeakerMuted}
+                                setIsSpeakerMuted={setIsSpeakerMuted}
+                            />
+                            
+                            <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+                                <div className="floating-toggle" onClick={() => setPanelOpen(!panelOpen)}>
+                                    <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
+                                </div>
+                                <div className="panel-header">
+                                    <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                    <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
+                                </div>
+                                
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
+                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
+                            </div>
+                        </div>
+                    ) : <div className="text-center mt-5">Loading room...</div>}
+
+                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
+                    
+                    {profileModal && (
+                        <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
+                           {!profileModal.full ? (
+                               <div className="call-toast text-center" onClick={e=>e.stopPropagation()}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
+                                   <h3>{toHex(profileModal.user_id)}</h3>
+                                   <p className="text-muted small">Tap photo to view full size</p>
+                                   <button className="btn btn-primary w-100 mt-2 rounded-pill" onClick={() => setProfileModal(null)}>Close</button>
+                               </div>
+                           ) : (
+                               <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} />
+                               </div>
+                           )}
+                        </div>
+                    )}
+
+                    {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
+                        <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
+                            <div className="call-toast text-center w-75" onClick={e => e.stopPropagation()}>
+                                <i className="fas fa-phone-volume heartbeat text-success fs-1 mb-3"></i>
+                                <h4>Incoming Call</h4>
+                                <p className="text-muted">From {toHex(activeCall.caller)}</p>
+                                <div className="d-flex gap-2 mt-3">
+                                    <button className="btn btn-danger w-50" onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i> Reject</button>
+                                    <button className="btn btn-success w-50" onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i> Accept</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ModalManager = ({ modal, setModal, socket, initiateCall, setCurrentRoomId, cleanupCall }) => {
+            if (!modal) return null;
+            const [pwd, setPwd] = useState('');
+            const [isPriv, setIsPriv] = useState(false);
+            const [maxMembers, setMaxMembers] = useState(4);
+
+            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); };
+
+            let content = null;
+            if (modal.type === 'success' || modal.type === 'error') {
+                content = (
+                    <>
+                        <div className="mb-4 text-muted">{modal.content}</div>
+                        <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
+                    </>
+                );
+            } else if (modal.type === 'create_room') {
+                content = (
+                    <>
+                        <div className="form-check mb-3">
+                            <input className="form-check-input" type="checkbox" checked={isPriv} onChange={e => setIsPriv(e.target.checked)} id="privCheck" />
+                            <label className="form-check-label" htmlFor="privCheck">Make Room Private</label>
+                        </div>
+                        {isPriv && (
+                            <>
+                                <input type="text" className="form-control mb-3" placeholder="Set a Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Max Players</label>
+                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
+                                        <option value={2}>2 Players</option>
+                                        <option value={3}>3 Players</option>
+                                        <option value={4}>4 Players</option>
+                                    </select>
+                                </div>
+                                <div className="alert alert-warning py-2 small mb-3">
+                                    <i className="fas fa-coins text-warning me-1"></i> Cost: 4 Credits
+                                </div>
+                            </>
+                        )}
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers }); close(); }}>Create</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'prompt_pwd') {
+                content = (
+                    <>
+                        <p className="text-muted">Enter password to join Room {modal.room_id}</p>
+                        <input type="password" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_join') {
+                content = (
+                    <>
+                        <p className="text-muted">{modal.content}</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm Join</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'call_warn') {
+                content = (
+                    <>
+                        <div className="alert alert-warning mb-3">
+                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit per minute</b> for the Caller.
+                        </div>
+                        <p className="text-muted text-center mb-4">Do you want to continue?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { initiateCall(modal.target_id); close(); }}><i className="fas fa-phone"></i> Call Now</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_leave') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave Room</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'idle_warning') {
+                content = <IdleWarningModal socket={socket} close={close} />;
+            } else if (modal.type === 'confirm_guess_credit') {
+                content = (
+                    <>
+                        <p className="text-muted">You have used your 5 free guesses this round. This guess will cost 1 Credit.</p>
+                        <div className="alert alert-warning">Your guess: <b>{modal.guess}</b></div>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_drawer_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to give up drawing? This will immediately end the round.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Give Up</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_guesser_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Vote Give Up</button>
+                        </div>
+                    </>
+                );
+            }
+
+            return (
+                <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
+                    <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
+                        <div className="d-flex justify-content-between align-items-center mb-3">
+                            <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
+                            <button className="btn-close" onClick={close}></button>
+                        </div>
+                        {content}
+                    </div>
+                </div>
+            );
+        };
+
+        const LobbyView = ({ user, rooms, setModal, socket }) => {
+            const [searchId, setSearchId] = useState('');
+            const [adState, setAdState] = useState({ show: false, timer: 0, type: '' });
+            
+            const handleSearch = () => { if (searchId) socket.emit('search_room', { room_id: searchId }); };
+
+            useEffect(() => {
+                if (adState.show && adState.timer > 0) {
+                    const t = setTimeout(() => setAdState(prev => ({ ...prev, timer: prev.timer - 1 })), 1000);
+                    return () => clearTimeout(t);
+                } else if (adState.show && adState.timer === 0) {
+                    setAdState(prev => ({ ...prev, show: false }));
+                    socket.emit('claim_reward', { type: adState.type });
+                }
+            }, [adState.show, adState.timer]);
+
+            const renderAdBtn = (adNum, title) => {
+                const prefix = adNum === 1 ? 'ad' : 'ad2';
+                const claims = user[`${prefix}_claims_today`] || 0;
+                const isAvailable = user[`${prefix}_available`];
+                const waitMins = user[`${prefix}_wait_mins`];
+
+                let btnText = title;
+                let disabled = false;
+
+                if (!isAvailable) {
+                    disabled = true;
+                    if (claims >= 2) { btnText = `Max 2/2 Reached`; } 
+                    else { btnText = `Wait ${Math.floor(waitMins / 60)}h ${waitMins % 60}m`; }
+                }
+
+                return (
+                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 mt-2 text-dark" disabled={disabled} onClick={() => setAdState({ show: true, timer: 5, type: prefix })}>
+                        {btnText} ({claims}/2)
+                    </button>
+                );
+            };
+
+            return (
+                <div className="container mt-3">
+                    <div className="row mb-4">
+                        <div className="col-md-4 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
+                                <h5><i className="fas fa-calendar-check"></i> Daily Claim</h5>
+                                <p className="small mb-2">Get 1 Free Credit everyday!</p>
+                                <button className="btn btn-light text-success fw-bold rounded-pill btn-sm w-100 mt-2" disabled={!user.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                                    {user.daily_available ? 'Claim Now' : 'Claimed Today'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="col-md-4 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'}}>
+                                <h5><i className="fas fa-tv"></i> Ad Bonus 1</h5>
+                                <p className="small mb-2">Watch to earn 2 Credits!</p>
+                                {renderAdBtn(1, 'Watch Ad 1')}
+                            </div>
+                        </div>
+                        <div className="col-md-4 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f43f5e 0%, #fb7185 100%)'}}>
+                                <h5><i className="fas fa-tv"></i> Ad Bonus 2</h5>
+                                <p className="small mb-2">Watch to earn 2 Credits!</p>
+                                {renderAdBtn(2, 'Watch Ad 2')}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h3 className="fw-bold m-0">Game Lobbies</h3>
+                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
+                            <i className="fas fa-plus"></i> Create
+                        </button>
+                    </div>
+
+                    <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border">
+                        <input type="text" className="form-control border-0 px-4" placeholder="Search Room ID..." value={searchId} onChange={e => setSearchId(e.target.value)} />
+                        <button className="btn btn-dark px-4" onClick={handleSearch}><i className="fas fa-search"></i> Search</button>
+                    </div>
+
+                    <div className="row">
+                        {rooms.map(r => {
+                            const isFull = r.member_count >= r.max_members;
+                            return (
+                                <div key={r.id} className="col-md-4 mb-3">
+                                    <div className="room-card card h-100 p-3">
+                                        <div className="d-flex justify-content-between align-items-center mb-2">
+                                            <h5 className="fw-bold m-0">Room {r.id}</h5>
+                                            <span className={`badge ${isFull ? 'bg-danger' : 'bg-success'}`}>{isFull ? 'Full' : 'Open'}</span>
+                                        </div>
+                                        <p className="text-muted"><i className="fas fa-users"></i> {r.member_count} / {r.max_members} Players</p>
+                                        <button className="btn btn-outline-primary rounded-pill w-100 fw-bold" disabled={isFull} 
+                                            onClick={() => setModal({ type: 'confirm_join', title: 'Join Public Room', content: `Join Room ${r.id}? This costs 1 Credit.`, room_id: r.id })}>
+                                            Join (1 Credit)
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {adState.show && (
+                        <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                            <h2 className="text-white mb-4 fw-bold">Advertisement</h2>
+                            <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                            <h4 className="text-light">Reward in <span className="text-warning fw-bold">{adState.timer}</span> seconds...</h4>
+                            <p className="text-muted mt-5 small">Please wait, do not close.</p>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted }) => {
+            const { room, members, activeCalls } = roomData;
+            const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
+
+            return (
+                <div className="row">
+                    <div className="col-12 col-lg-8 mx-auto">
+                        <div className="whiteboard-wrapper">
+                            <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
+                            
+                            {activeCall && activeCall.status === 'ACTIVE' && (
+                                <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
+                                    <div className="d-flex align-items-center justify-content-center w-100 px-2">
+                                        <div className="d-flex align-items-center gap-2">
+                                            <i className="fas fa-phone-volume heartbeat text-success"></i>
+                                            <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="d-flex align-items-center gap-4 justify-content-center w-100 pb-2">
+                                        <button className={`btn ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
+                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'} fs-5`}></i>
+                                        </button>
+                                        <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
+                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
+                                        </button>
+                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => socket.emit('end_call', {call_id: activeCall.id})} title="End Call">
+                                            <i className="fas fa-phone-slash fs-5"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="mt-4 w-100">
+                                <h6 className="fw-bold text-secondary mb-3">Player List</h6>
+                                {members.map(m => {
+                                    const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
+                                    
+                                    return (
+                                        <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                            <div className="d-flex align-items-center">
+                                                <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
+                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                                </div>
+                                                <div className="d-flex flex-column">
+                                                    <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId && '(You)'}</span>
+                                                    <div className="d-flex align-items-center gap-1">
+                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : null}
+                                                        {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="d-flex align-items-center gap-2">
+                                                {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
+                                                
+                                                {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
+                                                    <div className="d-flex align-items-center gap-2">
+                                                        <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
+                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
+                                                    </div>
+                                                )}
+
+                                                {m.user_id !== tgId && !mCall && !myCall && (
+                                                    <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Whiteboard = ({ roomData, tgId, socket }) => {
+            const canvasRef = useRef(null);
+            const { room, drawings, members } = roomData;
+            const isDrawer = room.current_drawer_id === tgId;
+            const isDrawingPhase = room.status === 'DRAWING';
+            
+            const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
+            const readyCount = members.filter(m => m.is_ready).length;
+            
+            const [wordInput, setWordInput] = useState('');
+            let drawing = false;
+            let currentLine = [];
+            let lastPos = {x: 0, y: 0};
+
+            const redraw = useCallback(() => {
+                const canvas = canvasRef.current;
+                if(!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0,0, canvas.width, canvas.height);
+                ctx.strokeStyle = '#334155';
+                ctx.lineCap = 'round';
+                ctx.lineWidth = 5;
+                
+                drawings.forEach(jsonStr => {
+                    try {
+                        const lines = JSON.parse(jsonStr);
+                        lines.forEach(l => {
+                            ctx.beginPath();
+                            ctx.moveTo(l.x0, l.y0);
+                            ctx.lineTo(l.x1, l.y1);
+                            ctx.stroke();
+                        });
+                    } catch(e){}
+                });
+            }, [drawings]);
+
+            useEffect(() => { redraw(); }, [redraw]);
+
+            useEffect(() => {
+                const handleLiveDraw = (lines) => {
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    ctx.strokeStyle = '#334155';
+                    ctx.lineCap = 'round';
+                    ctx.lineWidth = 5;
+                    lines.forEach(l => {
+                        ctx.beginPath();
+                        ctx.moveTo(l.x0, l.y0);
+                        ctx.lineTo(l.x1, l.y1);
+                        ctx.stroke();
+                    });
+                };
+                socket.on('live_draw', handleLiveDraw);
+                return () => socket.off('live_draw', handleLiveDraw);
+            }, [socket]);
+
+            const getMousePos = (e) => {
+                const rect = canvasRef.current.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const scaleX = 500 / rect.width;
+                const scaleY = 500 / rect.height;
+                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+            };
+
+            const startDraw = (e) => {
+                if (!isDrawer || !isDrawingPhase) return;
+                e.preventDefault();
+                drawing = true;
+                currentLine = [];
+                lastPos = getMousePos(e);
+            };
+
+            const moveDraw = (e) => {
+                if (!drawing) return;
+                e.preventDefault();
+                const newPos = getMousePos(e);
+                
+                const ctx = canvasRef.current.getContext('2d');
+                ctx.beginPath();
+                ctx.moveTo(lastPos.x, lastPos.y);
+                ctx.lineTo(newPos.x, newPos.y);
+                ctx.stroke();
+
+                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
+                lastPos = newPos;
+            };
+
+            const stopDraw = () => {
+                if(!drawing) return;
+                drawing = false;
+                if(currentLine.length > 0) {
+                    socket.emit('draw', { lines: currentLine });
+                }
+            };
+
+            return (
+                <div className="whiteboard-container">
+                    <canvas 
+                        ref={canvasRef} width="500" height="500"
+                        onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
+                        onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
+                    />
+                    
+                    {room.status === 'PRE_DRAW' && isDrawer && (
+                        <div className="wb-overlay">
+                            <h4 className="text-primary fw-bold">Your turn to draw!</h4>
+                            <input type="text" className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                        </div>
+                    )}
+                    
+                    {room.status === 'PRE_DRAW' && !isDrawer && (
+                        <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                    )}
+
+                    {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                        <div className="wb-overlay">
+                            {room.status !== 'WAITING' && (
+                                <>
+                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
+                                    {room.last_winner_id ? (
+                                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
+                                            {roomData.profiles[room.last_winner_id] ? (
+                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
+                                            ) : (
+                                                <i className="fas fa-user-circle fs-1 text-secondary"></i>
+                                            )}
+                                            <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
+                                        </div>
+                                    ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
+                                </>
+                            )}
+                            
+                            {isMeReady ? (
+                                <h5 className="mt-4 text-muted fw-bold">
+                                    {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                                </h5>
+                            ) : (
+                                <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                            )}
+                        </div>
+                    )}
+
+                    {isDrawer && isDrawingPhase && (
+                        <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ChatBox = ({ chats, profiles, socket, tgId }) => {
+            const [input, setInput] = useState('');
+            const prevCount = useRef(chats.length);
+            const messagesEndRef = useRef(null);
+            
+            useEffect(() => {
+                if (chats.length > prevCount.current) {
+                    const newChats = chats.slice(prevCount.current);
+                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
+                    if (isOthersMessage) {
+                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                     }
                 }
-            }
+                prevCount.current = chats.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [chats, tgId]);
 
-            if (success) {
-                socket.emit('reward_success', msg);
-                const userState = await getUserState(currentUser);
-                if (userState) socket.emit('user_update', userState);
-            } else {
-                socket.emit('create_error', msg);
-            }
-        } catch (err) {}
-    });
+            return (
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                        {chats.map(c => (
+                            <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                                {c.user_id !== 'System' && (
+                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
+                                )}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {c.user_id === 'System' ? 'System' : toHex(c.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{c.message}</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    <div className="chat-input-wrapper d-flex mt-auto">
+                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
+                        <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
+            );
+        };
 
-    socket.on('create_room', async ({ is_private, password, max_members }) => {
-        try {
-            if (!currentUser) return;
-            const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
-
-            if (is_private) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 4) return socket.emit('create_error', 'Not enough credits. Private rooms cost 4 credits.');
-                await db.query('UPDATE users SET credits = credits - 4 WHERE tg_id = ?', [currentUser]);
-            }
-
-            const [res] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), ?, ?, ?)`, [is_private ? 1 : 0, password || null, limit]);
-            socket.emit('room_created', { room_id: res.insertId });
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
+            const [input, setInput] = useState('');
+            const isDrawer = roomData.room.current_drawer_id === tgId;
+            const messagesEndRef = useRef(null);
             
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-            broadcastRooms();
-        } catch (err) {}
-    });
+            const prevCount = useRef(guesses.length);
 
-    socket.on('search_room', async ({ room_id }) => {
-        try {
-            const [rows] = await db.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
-            if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
-            socket.emit('search_result', rows[0]);
-        } catch (err) {}
-    });
+            const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
+            const isFree = myGuessesCount < 5;
 
-    socket.on('join_room', async ({ room_id, password }) => {
-        try {
-            if (!currentUser) return;
-            const roomIdNum = Number(room_id);
+            const myMemberData = roomData.members.find(m => m.user_id === tgId);
+            const hasGivenUp = myMemberData?.has_given_up;
 
-            const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
-            if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
-            const room = roomData[0];
+            const totalGuessers = Math.max(0, roomData.members.length - 1);
+            const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
 
-            const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
-            if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
-
-            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [currentUser]);
-            if (existing.length > 0 && existing[0].room_id === roomIdNum) {
-                currentRoom = roomIdNum;
-                socket.join(`room_${currentRoom}`);
-                socket.emit('join_success', currentRoom);
-                return syncRoom(currentRoom);
-            }
-
-            if (room.is_private) {
-                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
-            } else {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-            }
-
-            const oldRoom = currentRoom;
-            if (oldRoom) {
-                terminateCallsForUser(currentUser); // End calls in old room
-                socket.leave(`room_${oldRoom}`);
-                await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]); 
-                await checkRoomReset(oldRoom);
-            }
-
-            await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, currentUser]);
-            currentRoom = roomIdNum;
-            socket.join(`room_${currentRoom}`);
-            
-            socket.emit('join_success', currentRoom);
-            
-            if (oldRoom) syncRoom(oldRoom);
-            syncRoom(currentRoom);
-            broadcastRooms();
-
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-        } catch (err) {}
-    });
-
-    socket.on('leave_room', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            terminateCallsForUser(currentUser); // Auto disconnect active calls
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-            await checkRoomReset(currentRoom);
-            socket.leave(`room_${currentRoom}`);
-            syncRoom(currentRoom);
-            currentRoom = null;
-            broadcastRooms();
-        } catch (err) {}
-    });
-
-    socket.on('chat', async ({ message }) => {
-        try {
-            if (!currentUser || !currentRoom || !message.trim()) return;
-            await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
-            
-            // Keep only the last 20 messages per room to prevent overflow
-            await db.query(`
-                DELETE FROM chats 
-                WHERE room_id = ? AND id NOT IN (
-                    SELECT id FROM (
-                        SELECT id FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20
-                    ) t
-                )
-            `, [currentRoom, currentRoom]);
-
-            syncRoom(currentRoom);
-        } catch (err) {}
-    });
-
-    socket.on('give_up', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            const [room] = await db.query('SELECT current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
-            if (room.length === 0 || room[0].status !== 'DRAWING') return;
-
-            const isDrawer = room[0].current_drawer_id === currentUser;
-
-            if (isDrawer) {
-                // Drawer giving up reveals immediately
-                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
-            } else {
-                // Guesser voting to give up
-                await db.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
-
-                const [members] = await db.query('SELECT user_id, has_given_up FROM room_members WHERE room_id = ?', [currentRoom]);
-                const guessers = members.filter(m => m.user_id !== room[0].current_drawer_id);
-                const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
-
-                if (allGivenUp) {
-                    await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                    await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'All guessers gave up.']);
-                }
-            }
-            syncRoom(currentRoom);
-        } catch (err) {
-            console.error('Give Up Error:', err);
-        }
-    });
-
-    socket.on('guess', async ({ guess }) => {
-        try {
-            if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
-            if (!guess || !guess.trim()) return;
-            
-            const [room] = await db.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
-            if (room.length === 0) return;
-            if (room[0].status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
-            if (room[0].current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
-            
-            const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            
-            // Allow the first 5 free. Beyond that, charge 1 credit.
-            if (guessCount[0].count >= 5) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 1) {
-                    return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
-                }
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-            }
-            
-            const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.trim().toLowerCase();
-            
-            await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess.trim(), isCorrect]);
-            if (isCorrect) {
-                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
-            }
-            
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-
-            syncRoom(currentRoom);
-        } catch (err) {
-            console.error('Guess Error:', err);
-        }
-    });
-
-    socket.on('set_word', async ({ word }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
-            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [currentRoom]);
-            await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
-            await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
-            roomRedoStacks[currentRoom] = [];
-            syncRoom(currentRoom);
-        } catch (err) {}
-    });
-
-    socket.on('set_ready', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            await db.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            syncRoom(currentRoom);
-        } catch (err) {}
-    });
-
-    socket.on('draw', async ({ lines }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            roomRedoStacks[currentRoom] = []; 
-            await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
-            socket.to(`room_${currentRoom}`).emit('live_draw', lines);
-        } catch (err) {}
-    });
-
-    socket.on('undo', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            const [last] = await db.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
-            if (last.length > 0) {
-                if(!roomRedoStacks[currentRoom]) roomRedoStacks[currentRoom] = [];
-                roomRedoStacks[currentRoom].push(last[0]);
-                await db.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
-                syncRoom(currentRoom);
-            }
-        } catch (err) {}
-    });
-
-    socket.on('redo', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            if(roomRedoStacks[currentRoom] && roomRedoStacks[currentRoom].length > 0) {
-                const toRestore = roomRedoStacks[currentRoom].pop();
-                await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
-                syncRoom(currentRoom);
-            }
-        } catch (err) {}
-    });
-
-    socket.on('initiate_call', async ({ receiver_id }) => {
-        if (!currentUser || !currentRoom) return;
-        
-        // Prevent calling if either user is already in an active call
-        const isInCall = Array.from(activeCalls.values()).some(
-            c => c.caller === currentUser || c.receiver === currentUser ||
-                 c.caller === receiver_id || c.receiver === receiver_id
-        );
-        
-        if (isInCall) {
-            return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
-        }
-
-        const callId = `call_${Date.now()}_${Math.random()}`;
-        const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
-        activeCalls.set(callId, callObj);
-        io.to(`room_${currentRoom}`).emit('call_update', callObj);
-        syncRoom(currentRoom);
-    });
-
-    socket.on('accept_call', async ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call && call.receiver === currentUser) {
-            call.status = 'ACTIVE';
-            call.startTime = Date.now();
-            activeCalls.set(call_id, call);
-            io.to(`room_${call.room_id}`).emit('call_update', call);
-            
-            // Charge ONLY the caller for the call
-            call.interval = setInterval(async () => {
-                const c = activeCalls.get(call_id);
-                if(!c) return clearInterval(call.interval);
-                
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits > 0', [c.caller]);
-                const [u1] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
-                
-                if (u1[0].credits <= 0) {
-                    clearInterval(call.interval);
-                    activeCalls.delete(call_id);
-                    io.to(`room_${c.room_id}`).emit('call_ended', call_id);
-                    syncRoom(c.room_id);
+            const handleGuessSubmit = () => {
+                if (!input.trim()) return;
+                if (isFree) {
+                    socket.emit('guess', {guess: input});
+                    setInput('');
                 } else {
-                    const uState1 = await getUserState(c.caller);
-                    if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
+                    setModal({ type: 'confirm_guess_credit', guess: input, title: 'Use Credit to Guess?' });
+                    setInput('');
                 }
-            }, 60000);
+            };
 
-            syncRoom(currentRoom);
-        }
-    });
-
-    socket.on('end_call', ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call) {
-            if(call.interval) clearInterval(call.interval);
-            activeCalls.delete(call_id);
-            io.to(`room_${currentRoom || call.room_id}`).emit('call_ended', call_id);
-            syncRoom(currentRoom || call.room_id);
-        }
-    });
-
-    socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-        // CRITICAL FIX: Route direct to user's private socket room, not game room
-        socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
-    });
-
-    socket.on('disconnect', async () => {
-        if (currentUser) {
-            terminateCallsForUser(currentUser); // End active calls automatically
-        }
-        if (currentUser && currentRoom) {
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-            await checkRoomReset(currentRoom);
-            syncRoom(currentRoom);
-            broadcastRooms();
-        }
-    });
-});
-
-setInterval(async () => {
-    try {
-        const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
-        for (let r of revealRooms) {
-            await db.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [r.id]);
-            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [r.id]);
-            syncRoom(r.id);
-        }
-
-        const [waitingRooms] = await db.query("SELECT * FROM rooms WHERE status IN ('WAITING', 'BREAK')");
-        for (let r of waitingRooms) {
-            const [members] = await db.query("SELECT user_id, is_ready FROM room_members WHERE room_id = ?", [r.id]);
-            if (members.length >= 2 && members.every(m => m.is_ready)) {
-                const nextDrawer = members[Math.floor(Math.random() * members.length)].user_id;
-                await db.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, r.id]);
-                await db.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [r.id]);
-                await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
-                roomRedoStacks[r.id] = [];
-                syncRoom(r.id);
-            }
-        }
-        
-        // Idle Tracker - 60 sec inactivity remove logic & 50s Warning
-        const now = Date.now();
-        io.sockets.sockets.forEach(s => {
-            if (s.currentRoom) {
-                const idleTime = now - (s.lastActiveEvent || now);
-                if (idleTime > 60000) {
-                    s.emit('kick_idle');
-                    db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
-                        checkRoomReset(s.currentRoom).then(() => {
-                            syncRoom(s.currentRoom);
-                            broadcastRooms();
-                        });
-                    });
-                    s.leave(`room_${s.currentRoaom}`);
-                    s.currentRoom = null;
-                } else if (idleTime > 50000 && !s.idleWarned) {
-                    s.idleWarned = true;
-                    s.emit('idle_warning');
-                } else if (idleTime <= 50000) {
-                    s.idleWarned = false;
+            useEffect(() => {
+                if (guesses.length > prevCount.current) {
+                    const newGuesses = guesses.slice(prevCount.current);
+                    const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
+                    if (shouldPlaySound) {
+                        guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                    }
                 }
-            }
-        });
-    } catch (e) { console.error("Game Loop Error:", e); }
-}, 1000);
+                prevCount.current = guesses.length;
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [guesses, tgId]);
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+            return (
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                        {guesses.map(g => (
+                            <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                                {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {toHex(g.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    
+                    {roomData.room.status === 'DRAWING' && (
+                        <div className="chat-input-wrapper d-flex flex-column mt-auto">
+                            <button 
+                                className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                                onClick={() => {
+                                    setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                                }}
+                                disabled={!isDrawer && hasGivenUp}
+                            >
+                                <i className="fas fa-flag"></i> 
+                                {isDrawer ? 'Give Up Drawing' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                            </button>
+
+                            {!isDrawer && !hasGivenUp && (
+                                <div className="d-flex w-100">
+                                    <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
+                                        value={input} onChange={e=>setInput(e.target.value)} 
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
+                                        placeholder={isFree ? `Free Guess (${5 - myGuessesCount} left)...` : `Extra Guess (1 Credit)...`} />
+                                    <button className="btn btn-success rounded-end-pill px-3" onClick={handleGuessSubmit}>
+                                        <i className="fas fa-check"></i>
+                                    </button>
+                                </div>
+                            )}
+
+                            {!isDrawer && hasGivenUp && (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You've given up. Waiting for others ({givenUpCount}/{totalGuessers})
+                                </div>
+                            )}
+
+                            {isDrawer && (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You are the drawer. Use tools to draw!
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
