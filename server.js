@@ -56,14 +56,16 @@ async function initDB() {
             )
         `);
 
+        // Migration logic for modifying existing tables
         const migrations = [
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
-            "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4"
+            "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
+            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE" // Fix for the missing column error
         ];
         
         for (let query of migrations) {
-            try { await db.query(query); } catch (e) { }
+            try { await db.query(query); } catch (e) { /* Ignore if column already exists */ }
         }
 
         await db.query(`
@@ -524,6 +526,17 @@ io.on('connection', (socket) => {
 
     socket.on('initiate_call', async ({ receiver_id }) => {
         if (!currentUser || !currentRoom) return;
+        
+        // Prevent calling if either user is already in an active call
+        const isInCall = Array.from(activeCalls.values()).some(
+            c => c.caller === currentUser || c.receiver === currentUser ||
+                 c.caller === receiver_id || c.receiver === receiver_id
+        );
+        
+        if (isInCall) {
+            return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
+        }
+
         const callId = `call_${Date.now()}_${Math.random()}`;
         const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
         activeCalls.set(callId, callObj);
