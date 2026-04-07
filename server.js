@@ -58,6 +58,21 @@ async function initDB() {
             )
         `);
 
+        // FIX: Auto-add missing columns for databases that were created before these columns existed
+        const migrations = [
+            "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
+            "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4"
+        ];
+        
+        for (let query of migrations) {
+            try { 
+                await db.query(query); 
+            } catch (e) { 
+                // Silently ignore if column already exists (Error 1060)
+            }
+        }
+
         await db.query(`
             CREATE TABLE IF NOT EXISTS room_members (
                 room_id INT,
