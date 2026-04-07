@@ -13,6 +13,7 @@
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
     <link rel="preload" href="/audio/call.mp3" as="audio">
+    <link rel="preload" href="/thememusic/themesongdefault.mp3" as="audio">
     
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -82,6 +83,7 @@
     <audio id="mgsSound" src="/audio/mgs_notification.mp3" preload="auto"></audio>
     <audio id="guessSound" src="/audio/guess_notification.mp3" preload="auto"></audio>
     <audio id="callSound" src="/audio/call.mp3" loop preload="auto"></audio>
+    <audio id="bgmSound" loop preload="auto"></audio>
 
     <div id="root"></div>
 
@@ -108,16 +110,28 @@
             return map[status] || 'Unknown Phase';
         };
 
+        const AudioPolicyModal = ({ onAccept }) => (
+            <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
+                <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
+                    <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
+                    <h4 className="fw-bold">Enable Notifications</h4>
+                    <p className="text-muted small">To ensure you hear incoming calls and game alerts, please accept our audio policy.</p>
+                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Enter Room</button>
+                </div>
+            </div>
+        );
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
             const [roomData, setRoomData] = useState(null);
-            const [activeTab, setActiveTab] = useState('guess'); // Guess tab is now default
+            const [activeTab, setActiveTab] = useState('guess');
             const [panelOpen, setPanelOpen] = useState(false);
             const [glowToggle, setGlowToggle] = useState(false);
             const [modal, setModal] = useState(null);
             const [profileModal, setProfileModal] = useState(null);
+            const [sendAmount, setSendAmount] = useState(50);
             
             const [activeCall, setActiveCall] = useState(null);
             const [localStream, setLocalStream] = useState(null);
@@ -125,14 +139,17 @@
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
-            const [msgVol, setMsgVol] = useState(() => {
-                const saved = localStorage.getItem('msgVol');
-                return saved !== null ? parseFloat(saved) : 1.0;
-            });
-            const [guessVol, setGuessVol] = useState(() => {
-                const saved = localStorage.getItem('guessVol');
-                return saved !== null ? parseFloat(saved) : 1.0;
-            });
+            // Volumes & Background Music settings
+            const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
+            const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
+            const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.5'));
+            
+            const defaultBGM = 'themesongdefault.mp3';
+            const [currentBgm, setCurrentBgm] = useState(() => localStorage.getItem('currentBgm') || defaultBGM);
+            const availableMusics = [defaultBGM, 'chill_theme.mp3', 'upbeat_theme.mp3', 'lofi_theme.mp3'];
+
+            const [policyAccepted, setPolicyAccepted] = useState(() => localStorage.getItem('audioPolicy') === 'true');
 
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
@@ -154,7 +171,7 @@
                 );
             }
 
-            // Sync audio volume to HTML elements and local storage cache
+            // Sync audio volumes
             useEffect(() => {
                 const s = document.getElementById('mgsSound');
                 if (s) s.volume = msgVol;
@@ -167,17 +184,62 @@
                 localStorage.setItem('guessVol', guessVol);
             }, [guessVol]);
 
-            // Global interaction listener to explicitly enable Audio Autoplay Mobile Safaris
+            useEffect(() => {
+                const s = document.getElementById('callSound');
+                if (s) s.volume = ringVol;
+                localStorage.setItem('ringVol', ringVol);
+            }, [ringVol]);
+
+            useEffect(() => {
+                const s = document.getElementById('bgmSound');
+                if (s) s.volume = bgmVol;
+                localStorage.setItem('bgmVol', bgmVol);
+            }, [bgmVol]);
+
+            // BGM Player logic
+            useEffect(() => {
+                const bgm = document.getElementById('bgmSound');
+                if (!bgm) return;
+                if (currentRoomId && policyAccepted) {
+                    const expectedSrc = window.location.origin + '/thememusic/' + currentBgm;
+                    if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== '/thememusic/' + currentBgm) {
+                        bgm.src = '/thememusic/' + currentBgm;
+                    }
+                    bgm.play().catch(e => console.log('BGM Autoplay Blocked:', e));
+                } else {
+                    bgm.pause();
+                }
+            }, [currentRoomId, policyAccepted, currentBgm]);
+
+            const acceptAudioPolicy = () => {
+                setPolicyAccepted(true);
+                localStorage.setItem('audioPolicy', 'true');
+                
+                // Unlock all native audio contexts silently
+                ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if(el) {
+                        el.play().then(() => {
+                            if(id !== 'bgmSound' && id !== 'callSound') {
+                                el.pause();
+                                el.currentTime = 0;
+                            }
+                        }).catch(()=>{});
+                    }
+                });
+            };
+
+            // Mobile Safaris fallback interaction unlocker
             const handleGlobalInteraction = () => {
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
                     remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
                 }
 
-                if (!audioUnlocked.current) {
+                if (!audioUnlocked.current && policyAccepted) {
                     audioUnlocked.current = true;
                     ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
                         const s = document.getElementById(id);
-                        if (s) {
+                        if (s && s.paused) {
                             const originalVol = s.volume;
                             s.volume = 0;
                             const p = s.play();
@@ -185,7 +247,9 @@
                                 p.then(() => {
                                     s.pause();
                                     s.currentTime = 0;
-                                    s.volume = id === 'callSound' ? 1 : (id === 'mgsSound' ? msgVol : guessVol);
+                                    if (id === 'callSound') s.volume = ringVol;
+                                    else if (id === 'mgsSound') s.volume = msgVol;
+                                    else s.volume = guessVol;
                                 }).catch(() => {});
                             }
                         }
@@ -193,23 +257,24 @@
                 }
             };
 
-            // Call receiving logic with vibration fallback
+            // Call receiving logic
             useEffect(() => {
+                const s = document.getElementById('callSound');
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
-                    const s = document.getElementById('callSound');
-                    if(s) s.play().catch(() => {
-                        if (window.Telegram?.WebApp?.HapticFeedback) {
-                            window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
-                        }
-                    });
+                    if(s && policyAccepted) {
+                        s.play().catch(() => {
+                            if (window.Telegram?.WebApp?.HapticFeedback) {
+                                window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
+                            }
+                        });
+                    }
                 } else {
-                    const s = document.getElementById('callSound');
                     if(s) {
                         s.pause();
                         s.currentTime = 0;
                     }
                 }
-            }, [activeCall, tgId]);
+            }, [activeCall, tgId, policyAccepted]);
 
             const requestMic = async () => {
                 try {
@@ -254,7 +319,6 @@
 
                 pc.ontrack = (e) => {
                     if (remoteAudioRef.current) {
-                        // Crucial fix: Force reassignment of srcObject upon receiving tracks
                         const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
                         remoteAudioRef.current.srcObject = inboundStream;
                         remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
@@ -362,7 +426,6 @@
             };
 
             const acceptCall = async (callObj) => {
-                // Instantly command play on interaction event to unlock browser restriction
                 if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
                 const stream = await requestMic();
                 if (!callObj) return;
@@ -516,101 +579,172 @@
 
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
-                    ) : roomData ? (
-                        <div className="container-fluid pt-3">
-                            <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
-                                <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
-                                    <div className="d-flex flex-column">
-                                        <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
-                                        <div className="d-flex align-items-center gap-2 mt-1">
-                                            {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
-                                            {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
-                                            {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
-                                                <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                    <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
-                                </div>
-                                <div className="text-center w-100">
-                                    <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
-                                    <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
-                                </div>
-                            </div>
-                        
-                            <GameRoom 
-                                roomData={roomData} 
-                                tgId={tgId} 
-                                onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
-                                socket={socketRef.current}
-                                setProfileModal={setProfileModal}
-                                activeCall={activeCall}
-                                isMicMuted={isMicMuted}
-                                setIsMicMuted={setIsMicMuted}
-                                isSpeakerMuted={isSpeakerMuted}
-                                setIsSpeakerMuted={setIsSpeakerMuted}
-                                setModal={setModal}
-                            />
+                    ) : (
+                        <>
+                            {!policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
                             
-                            <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-                                <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
-                                    <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
-                                </div>
-                                <div className="panel-header">
-                                    <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
-                                    <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
-                                    <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
-                                </div>
-                                
-                                {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
-                                {activeTab === 'sounds' && (
-                                    <div className="panel-body">
-                                        <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
-                                        
-                                        <div className="mb-4 bg-light p-3 rounded-4 shadow-sm">
-                                            <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                <span>Message Volume</span>
-                                                <span className="text-primary">{Math.round(msgVol * 100)}%</span>
-                                            </label>
-                                            <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} onChange={e => {
-                                                const v = parseFloat(e.target.value);
-                                                setMsgVol(v);
-                                                const s = document.getElementById('mgsSound');
-                                                if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                            }} />
+                            {roomData ? (
+                                <div className="container-fluid pt-3">
+                                    <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
+                                        <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
+                                            <div className="d-flex flex-column">
+                                                <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                                <div className="d-flex align-items-center gap-2 mt-1">
+                                                    {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
+                                                    {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
+                                                    {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
+                                                        <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                            <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
                                         </div>
-                                        
-                                        <div className="mb-4 bg-light p-3 rounded-4 shadow-sm">
-                                            <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                <span>Guess Volume</span>
-                                                <span className="text-primary">{Math.round(guessVol * 100)}%</span>
-                                            </label>
-                                            <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} onChange={e => {
-                                                const v = parseFloat(e.target.value);
-                                                setGuessVol(v);
-                                                const s = document.getElementById('guessSound');
-                                                if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                            }} />
+                                        <div className="text-center w-100">
+                                            <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
+                                            <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
                                         </div>
-
-                                        <p className="text-center text-muted small mt-2">Volumes are auto-saved to your device cache.</p>
                                     </div>
-                                )}
-                            </div>
-                        </div>
-                    ) : <div className="text-center mt-5">Loading room...</div>}
+                                
+                                    <GameRoom 
+                                        roomData={roomData} 
+                                        tgId={tgId} 
+                                        onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
+                                        socket={socketRef.current}
+                                        setProfileModal={setProfileModal}
+                                        activeCall={activeCall}
+                                        isMicMuted={isMicMuted}
+                                        setIsMicMuted={setIsMicMuted}
+                                        isSpeakerMuted={isSpeakerMuted}
+                                        setIsSpeakerMuted={setIsSpeakerMuted}
+                                        setModal={setModal}
+                                    />
+                                    
+                                    <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+                                        <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
+                                            <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
+                                        </div>
+                                        <div className="panel-header">
+                                            <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
+                                            <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                            <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
+                                        </div>
+                                        
+                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
+                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
+                                        {activeTab === 'sounds' && (
+                                            <div className="panel-body">
+                                                <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
+                                                
+                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
+                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                        <span>Message Volume</span>
+                                                        <span className="text-primary">{Math.round(msgVol * 100)}%</span>
+                                                    </label>
+                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
+                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                        onChange={e => {
+                                                            const v = parseFloat(e.target.value);
+                                                            setMsgVol(v);
+                                                            const s = document.getElementById('mgsSound');
+                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                        }} />
+                                                </div>
+                                                
+                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
+                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                        <span>Guess Volume</span>
+                                                        <span className="text-primary">{Math.round(guessVol * 100)}%</span>
+                                                    </label>
+                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
+                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                        onChange={e => {
+                                                            const v = parseFloat(e.target.value);
+                                                            setGuessVol(v);
+                                                            const s = document.getElementById('guessSound');
+                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                        }} />
+                                                </div>
+
+                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm border-start border-warning border-4">
+                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                        <span>Call Ringtone</span>
+                                                        <span className="text-warning">{Math.round(ringVol * 100)}%</span>
+                                                    </label>
+                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
+                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                        onChange={e => {
+                                                            const v = parseFloat(e.target.value);
+                                                            setRingVol(v);
+                                                            const s = document.getElementById('callSound');
+                                                            if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
+                                                        }} />
+                                                </div>
+
+                                                <div className="mb-4 bg-light p-3 rounded-4 shadow-sm border-start border-info border-4">
+                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                        <span>Background Music</span>
+                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
+                                                    </label>
+                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
+                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                        onChange={e => {
+                                                            const v = parseFloat(e.target.value);
+                                                            setBgmVol(v);
+                                                        }} />
+                                                </div>
+
+                                                <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-music text-primary"></i> Theme Music</h6>
+                                                {availableMusics.map(music => (
+                                                    <div key={music} className="d-flex justify-content-between align-items-center bg-white p-2 rounded shadow-sm mb-2 border">
+                                                        <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
+                                                        <button className={`btn btn-sm ${currentBgm === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
+                                                            setCurrentBgm(music);
+                                                            localStorage.setItem('currentBgm', music);
+                                                            if ('caches' in window) {
+                                                                caches.open('doodledash-cache-v1').then(cache => cache.add('/thememusic/' + music)).catch(()=>{});
+                                                            }
+                                                        }}>
+                                                            {currentBgm === music ? 'Active' : 'Use'}
+                                                        </button>
+                                                    </div>
+                                                ))}
+
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : <div className="text-center mt-5">Loading room...</div>}
+                        </>
+                    )}
 
                     <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
                     
                     {profileModal && (
                         <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
                            {!profileModal.full ? (
-                               <div className="call-toast text-center" onClick={e=>e.stopPropagation()}>
+                               <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
                                    <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
                                    <h3>{toHex(profileModal.user_id)}</h3>
-                                   <p className="text-muted small">Tap photo to view full size</p>
-                                   <button className="btn btn-primary w-100 mt-2 rounded-pill" onClick={() => setProfileModal(null)}>Close</button>
+                                   
+                                   {profileModal.user_id !== tgId && (
+                                       <div className="mt-4 bg-light p-3 rounded-4 border text-start shadow-sm">
+                                           <label className="fw-bold small text-muted mb-2"><i className="fas fa-gift text-primary"></i> Send Credits</label>
+                                           <select className="form-select mb-2 rounded-pill shadow-sm fw-bold text-dark" value={sendAmount} onChange={e=>setSendAmount(Number(e.target.value))}>
+                                               <option value={50}>50 Credits</option>
+                                               <option value={100}>100 Credits</option>
+                                               <option value={200}>200 Credits</option>
+                                               <option value={500}>500 Credits</option>
+                                               <option value={1000}>1000 Credits</option>
+                                           </select>
+                                           <p className="small text-danger mb-3" style={{fontSize: '0.75rem'}}>*2 Credits transaction fee applies</p>
+                                           <button className="btn btn-warning w-100 rounded-pill shadow fw-bold text-dark border border-warning" onClick={() => {
+                                               socketRef.current.emit('transfer_credits', {target_id: profileModal.user_id, amount: sendAmount});
+                                               setProfileModal(null);
+                                           }}>Send {sendAmount} <i className="fas fa-paper-plane ms-1"></i></button>
+                                       </div>
+                                   )}
+                                   
+                                   <button className="btn btn-secondary w-100 mt-3 rounded-pill fw-bold" onClick={() => setProfileModal(null)}>Close Profile</button>
                                </div>
                            ) : (
                                <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
