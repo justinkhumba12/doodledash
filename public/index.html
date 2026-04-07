@@ -71,6 +71,17 @@
 
         const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
+        const getStatusText = (status) => {
+            const map = {
+                'WAITING': 'Lobby',
+                'PRE_DRAW': 'Choosing Word',
+                'DRAWING': 'Drawing Phase',
+                'REVEAL': 'Round Over',
+                'BREAK': 'Intermission'
+            };
+            return map[status] || status;
+        };
+
         const IdleWarningModal = ({ socket, close }) => {
             const [countdown, setCountdown] = useState(10);
             useEffect(() => {
@@ -200,14 +211,17 @@
             };
 
             const initPeerConnection = (stream, callObj) => {
-                // Expanded ICE Servers configuration using public Google STUN for reliable NAT traversal and IPv4/IPv6 support
+                // Extended ICE Servers configuration for robust IPv4/IPv6 NAT Traversal
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
+                        { urls: [
+                            'stun:stun.l.google.com:19302',
+                            'stun:stun1.l.google.com:19302',
+                            'stun:stun2.l.google.com:19302',
+                            'stun:stun3.l.google.com:19302',
+                            'stun:stun4.l.google.com:19302',
+                            'stun:stun.services.mozilla.com' 
+                        ]}
                     ] 
                 });
                 stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -360,7 +374,7 @@
                                     <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
                                 </div>
                                 <div className="text-center w-100">
-                                    <strong className="text-primary fs-6">{roomData.room.status} Phase</strong>
+                                    <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
                                     <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
                                 </div>
                             </div>
@@ -389,7 +403,7 @@
                                     <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
                                 </div>
                                 
-                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} />}
+                                {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
                                 {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} />}
                             </div>
                         </div>
@@ -702,7 +716,6 @@
                                             <div className="d-flex align-items-center gap-2">
                                                 {mCall && mCall.status === 'ACTIVE' && <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span>}
                                                 
-                                                {/* Only the caller sees the ringing status and cancel option next to the receiver's name */}
                                                 {mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id && (
                                                     <div className="d-flex align-items-center gap-2">
                                                         <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
@@ -710,7 +723,6 @@
                                                     </div>
                                                 )}
 
-                                                {/* Only show call button if neither the viewer nor the target is currently in an active/ringing call */}
                                                 {m.user_id !== tgId && !mCall && !myCall && (
                                                     <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
                                                 )}
@@ -846,7 +858,16 @@
                             {room.status !== 'WAITING' && (
                                 <>
                                     <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h4>
-                                    {room.last_winner_id ? <div className="alert alert-success mt-2">{toHex(room.last_winner_id)} guessed it!</div> : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
+                                    {room.last_winner_id ? (
+                                        <div className="alert alert-success mt-2 d-flex align-items-center gap-2">
+                                            {roomData.profiles[room.last_winner_id] ? (
+                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow-sm" width="30" height="30" style={{objectFit: 'cover'}}/>
+                                            ) : (
+                                                <i className="fas fa-user-circle fs-3 text-secondary"></i>
+                                            )}
+                                            <span><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
+                                        </div>
+                                    ) : <div className="alert alert-warning mt-2">Nobody guessed it!</div>}
                                 </>
                             )}
                             
@@ -870,18 +891,22 @@
             );
         };
 
-        const ChatBox = ({ chats, profiles, socket }) => {
+        const ChatBox = ({ chats, profiles, socket, tgId }) => {
             const [input, setInput] = useState('');
             const prevCount = useRef(chats.length);
             const messagesEndRef = useRef(null);
             
             useEffect(() => {
                 if (chats.length > prevCount.current) {
-                    mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                    const newChats = chats.slice(prevCount.current);
+                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
+                    if (isOthersMessage) {
+                        mgsSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
+                    }
                 }
                 prevCount.current = chats.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [chats]);
+            }, [chats, tgId]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -909,24 +934,31 @@
 
         const GuessBox = ({ guesses, profiles, tgId, roomData, socket }) => {
             const [input, setInput] = useState('');
+            const [hasGivenUp, setHasGivenUp] = useState(false);
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
             
             const prevCount = useRef(guesses.length);
 
             const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
-            const canGuess = myGuessesCount < 5;
+            const isFree = myGuessesCount < 5;
+
+            // Reset Give up local state when not in drawing phase
+            useEffect(() => {
+                if (roomData.room.status !== 'DRAWING') setHasGivenUp(false);
+            }, [roomData.room.status]);
 
             useEffect(() => {
                 if (guesses.length > prevCount.current) {
                     const lastGuess = guesses[guesses.length - 1];
-                    if (lastGuess.is_correct) {
+                    // Only play success sound if it's someone ELSE guessing correctly
+                    if (lastGuess.is_correct && lastGuess.user_id !== tgId) {
                         guessSound.play().catch(e => console.log('Audio Autoplay Blocked:', e));
                     }
                 }
                 prevCount.current = guesses.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [guesses]);
+            }, [guesses, tgId]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -942,13 +974,28 @@
                         ))}
                         <div ref={messagesEndRef} />
                     </div>
-                    {!isDrawer && roomData.room.status === 'DRAWING' && (
+                    
+                    {!isDrawer && roomData.room.status === 'DRAWING' && !hasGivenUp && (
                         <div className="chat-input-wrapper d-flex flex-column mt-auto">
+                            <button className="btn btn-warning w-100 mb-2 rounded-pill shadow-sm fw-bold text-dark" onClick={() => { setHasGivenUp(true); socket.emit('give_up'); }}>
+                                <i className="fas fa-flag"></i> Give Up Round
+                            </button>
                             <div className="d-flex w-100">
-                                <input type="text" className="form-control rounded-start-pill border-0 bg-light" disabled={!canGuess} value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && canGuess && (socket.emit('guess', {guess: input}), setInput(''))} placeholder={canGuess ? `Guess (1 Credit)...` : `Max 5 Guesses Reached`} />
-                                <button className="btn btn-success rounded-end-pill px-3" disabled={!canGuess} onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}><i className="fas fa-check"></i></button>
+                                <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
+                                    value={input} onChange={e=>setInput(e.target.value)} 
+                                    onKeyPress={e => e.key === 'Enter' && (socket.emit('guess', {guess: input}), setInput(''))} 
+                                    placeholder={isFree ? `Free Guess (${5 - myGuessesCount} left)...` : `Extra Guess (1 Credit)...`} />
+                                <button className="btn btn-success rounded-end-pill px-3" onClick={() => { socket.emit('guess', {guess: input}); setInput(''); }}>
+                                    <i className="fas fa-check"></i>
+                                </button>
                             </div>
-                            {canGuess && <small className="text-muted text-center mt-2">{5 - myGuessesCount} Guesses left this round</small>}
+                            {!isFree && <small className="text-muted text-center mt-2">Extra guesses cost 1 Credit each</small>}
+                        </div>
+                    )}
+
+                    {!isDrawer && roomData.room.status === 'DRAWING' && hasGivenUp && (
+                        <div className="chat-input-wrapper text-center text-muted p-3 fst-italic">
+                            You've given up on this round.
                         </div>
                     )}
                 </div>
