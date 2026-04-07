@@ -54,7 +54,8 @@ async function initDB() {
                 modified_at DATETIME,
                 is_private BOOLEAN DEFAULT FALSE,
                 password VARCHAR(255),
-                max_members INT DEFAULT 4
+                max_members INT DEFAULT 4,
+                base_hints VARCHAR(255) DEFAULT '[]'
             )
         `);
 
@@ -63,8 +64,10 @@ async function initDB() {
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
             "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
+            "ALTER TABLE rooms ADD COLUMN base_hints VARCHAR(255) DEFAULT '[]'",
             "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE"
+            "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE room_members ADD COLUMN purchased_hints VARCHAR(255) DEFAULT '[]'"
         ];
         
         for (let query of migrations) {
@@ -79,6 +82,7 @@ async function initDB() {
                 consecutive_turns INT DEFAULT 0,
                 total_turns INT DEFAULT 0,
                 has_given_up BOOLEAN DEFAULT FALSE,
+                purchased_hints VARCHAR(255) DEFAULT '[]',
                 PRIMARY KEY(room_id, user_id)
             )
         `);
@@ -179,6 +183,7 @@ async function getUserState(tg_id) {
 
 const activeCalls = new Map(); 
 const roomRedoStacks = {}; 
+const disconnectTimeouts = new Map(); // Tracks 10-second offline grace periods
 
 const broadcastRooms = async () => {
     const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id WHERE r.is_private = 0 GROUP BY r.id');
@@ -233,6 +238,24 @@ const syncRoom = async (roomId) => {
                         return { ...g, guess_text: '••••••••' };
                     });
 
+                    // Build masked word based on shared hints & locally purchased hints
+                    let masked_word = null;
+                    if (['DRAWING', 'REVEAL', 'BREAK'].includes(roomData[0].status)) {
+                        const base_hints = JSON.parse(roomData[0].base_hints || '[]');
+                        const actual_word = roomData[0].word_to_draw || '';
+                        const memberData = members.find(m => m.user_id === userId);
+                        const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
+                        const isReveal = roomData[0].status !== 'DRAWING';
+                        
+                        masked_word = actual_word.split('').map((char, index) => {
+                            if (char === ' ') return { char: ' ', index, revealed: true };
+                            if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
+                                return { char, index, revealed: true };
+                            }
+                            return { char: null, index, revealed: false };
+                        });
+                    }
+
                     s.emit('room_sync', {
                         room: roomData[0],
                         members,
@@ -241,6 +264,7 @@ const syncRoom = async (roomId) => {
                         drawings: drawings.map(d => d.line_data),
                         profiles,
                         activeCalls: activeCallsList,
+                        masked_word: masked_word,
                         server_time: new Date()
                     });
                 }
@@ -275,6 +299,12 @@ io.on('connection', (socket) => {
             currentUser = tg_id;
             socket.currentUser = tg_id; 
             
+            // Reconnection check logic (Cancel Grace Period Drop)
+            if (disconnectTimeouts.has(tg_id)) {
+                clearTimeout(disconnectTimeouts.get(tg_id));
+                disconnectTimeouts.delete(tg_id);
+            }
+
             // CRITICAL for WebRTC signaling
             socket.join(`user_${tg_id}`);
             
@@ -533,16 +563,72 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('buy_hint', async ({ index }) => {
+        try {
+            if (!currentUser || !currentRoom) return;
+
+            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+
+            const [member] = await db.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            if(member.length === 0) return;
+
+            let purchased = JSON.parse(member[0].purchased_hints || '[]');
+            if (!purchased.includes(index)) {
+                purchased.push(index);
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
+                
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+                
+                syncRoom(currentRoom);
+            }
+        } catch (err) {
+            console.error('Buy Hint Error:', err);
+        }
+    });
+
     socket.on('set_word', async ({ word }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            await db.query("UPDATE rooms SET word_to_draw = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [word, currentRoom, currentUser]);
-            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [currentRoom]);
+            const wordClean = word.trim().toUpperCase();
+            if (wordClean.length < 3 || wordClean.length > 10) {
+                return socket.emit('create_error', 'Word must be between 3 and 10 characters.');
+            }
+
+            // Calculate Random Hints mapped on server
+            let hints = [];
+            let validIndices = [];
+            for (let i = 0; i < wordClean.length; i++) {
+                if (wordClean[i] !== ' ') validIndices.push(i);
+            }
+            const len = wordClean.length;
+            
+            if (len >= 3 && len <= 4) {
+                hints.push(Math.floor(len / 2));
+            } else {
+                let count = 0;
+                if (len >= 5 && len <= 6) count = 2;
+                else if (len >= 7 && len <= 9) count = 3;
+                else if (len === 10) count = 4;
+                
+                while (hints.length < count && validIndices.length > 0) {
+                    let randIdx = Math.floor(Math.random() * validIndices.length);
+                    hints.push(validIndices[randIdx]);
+                    validIndices.splice(randIdx, 1); // remove picked index
+                }
+            }
+
+            await db.query("UPDATE rooms SET word_to_draw = ?, base_hints = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [wordClean, JSON.stringify(hints), currentRoom, currentUser]);
+            await db.query("UPDATE room_members SET purchased_hints = '[]', has_given_up = 0 WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
             await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
             roomRedoStacks[currentRoom] = [];
             syncRoom(currentRoom);
-        } catch (err) {}
+        } catch (err) {
+            console.error('Set Word Error:', err);
+        }
     });
 
     socket.on('set_ready', async () => {
@@ -652,15 +738,21 @@ io.on('connection', (socket) => {
         socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
 
-    socket.on('disconnect', async () => {
+    socket.on('disconnect', () => {
         if (currentUser) {
-            terminateCallsForUser(currentUser); // End active calls automatically
-        }
-        if (currentUser && currentRoom) {
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-            await checkRoomReset(currentRoom);
-            syncRoom(currentRoom);
-            broadcastRooms();
+            // Apply Grace Period 10-second Disconnect Timeout
+            const timeoutId = setTimeout(async () => {
+                terminateCallsForUser(currentUser); 
+                if (currentRoom) {
+                    await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+                    await checkRoomReset(currentRoom);
+                    syncRoom(currentRoom);
+                    broadcastRooms();
+                }
+                disconnectTimeouts.delete(currentUser);
+            }, 10000);
+
+            disconnectTimeouts.set(currentUser, timeoutId);
         }
     });
 });
@@ -700,7 +792,7 @@ setInterval(async () => {
                             broadcastRooms();
                         });
                     });
-                    s.leave(`room_${s.currentRoaom}`);
+                    s.leave(`room_${s.currentRoom}`);
                     s.currentRoom = null;
                 } else if (idleTime > 50000 && !s.idleWarned) {
                     s.idleWarned = true;
