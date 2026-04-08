@@ -73,13 +73,14 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        /* Responsive Lobby Tabs with Fixed Height */
         .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
         .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
         .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
         .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
         .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
         .swipe-container { transition: transform 0.3s ease-out; }
+        
+        .scale-110 { transform: scale(1.15); transition: 0.2s; }
     </style>
 </head>
 <body>
@@ -93,6 +94,17 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback } = React;
         
+        const INK_CONFIG = {
+            black: { free: 1500, extra: 1500, cost: 0.5, hex: '#000000' },
+            white: { free: 500, extra: 1000, cost: 0.5, hex: '#ffffff' },
+            red: { free: 200, extra: 1000, cost: 0.5, hex: '#ef4444' },
+            blue: { free: 300, extra: 1000, cost: 0.5, hex: '#3b82f6' },
+            green: { free: 300, extra: 1000, cost: 0.5, hex: '#22c55e' },
+            yellow: { free: 300, extra: 1000, cost: 0.5, hex: '#eab308' },
+            purple: { free: 300, extra: 1000, cost: 0.5, hex: '#a855f7' },
+            orange: { free: 300, extra: 1000, cost: 0.5, hex: '#f97316' }
+        };
+
         const tg = window.Telegram.WebApp;
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
@@ -189,7 +201,6 @@
                 );
             }
 
-            // Sync master volume
             useEffect(() => {
                 ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
                     const s = document.getElementById(id);
@@ -198,7 +209,6 @@
                 localStorage.setItem('appVol', appVol);
             }, [appVol]);
 
-            // Sync BGM volume & Apply 40% reduction when in ACTIVE call
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
                 if (s) {
@@ -208,7 +218,6 @@
                 localStorage.setItem('bgmVol', bgmVol);
             }, [bgmVol, activeCall]);
 
-            // Robust mobile audio player function
             const playAudioSafe = (id) => {
                 if (localStorage.getItem('audioPolicy') !== 'true') return;
                 const el = document.getElementById(id);
@@ -216,16 +225,14 @@
                     el.currentTime = 0;
                     const p = el.play();
                     if (p !== undefined) {
-                        p.catch(e => console.warn('Audio blocked by browser policy:', e));
+                        p.catch(e => console.warn('Audio blocked:', e));
                     }
                 }
             };
 
-            // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
                 if (!roomData) return;
                 
-                // Track new chats
                 if (roomData.chats && roomData.chats.length > prevChatsCount.current) {
                     const newChats = roomData.chats.slice(prevChatsCount.current);
                     if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
@@ -240,7 +247,6 @@
                     prevChatsCount.current = roomData.chats.length;
                 }
 
-                // Track new guesses
                 if (roomData.guesses && roomData.guesses.length > prevGuessesCount.current) {
                     const newGuesses = roomData.guesses.slice(prevGuessesCount.current);
                     if (newGuesses.some(g => g.user_id !== tgId)) {
@@ -281,7 +287,6 @@
                 }
             }, [currentRoomId, policyAccepted, activeTrack]);
 
-            // Fix for Mobile Safari/Chrome Audio Policies
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
                 localStorage.setItem('audioPolicy', 'true');
@@ -290,7 +295,6 @@
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        // Play completely muted to initialize context
                         el.volume = 0.01; 
                         const p = el.play();
                         if (p !== undefined) {
@@ -304,7 +308,7 @@
                                         el.currentTime = 0;
                                     }
                                     el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
-                                }, 50); // Pause immediately after audio context is registered active
+                                }, 50); 
                             }).catch(()=>{});
                         }
                     }
@@ -649,7 +653,7 @@
                     <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                         <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
-                            <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{user.credits}</b>
+                            <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{parseFloat(user.credits)}</b>
                             <button className="btn btn-sm btn-link p-0 text-success m-0 lh-1" onClick={handleLoadBalance} title="Load Balance">
                                 <i className="fas fa-plus-circle fs-5"></i>
                             </button>
@@ -1085,12 +1089,14 @@
                     </>
                 );
             } else if (modal.type === 'confirm_buy_ink') {
+                const colorName = modal.color || 'black';
+                const inkAmount = INK_CONFIG[colorName].extra;
                 content = (
                     <>
-                        <p className="text-muted text-center mb-4">Refill your ink to keep drawing? (Cost: 1 Credit)</p>
+                        <p className="text-muted text-center mb-4">Refill your <b style={{color: INK_CONFIG[colorName].hex}}>{colorName}</b> ink by {inkAmount}? (Cost: 0.5 Credit)</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy (1 Cred)</button>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: colorName }); close(); }}>Buy (0.5 Cred)</button>
                         </div>
                     </>
                 );
@@ -1404,14 +1410,15 @@
 
                             <div className="mt-4 w-100">
                                 <h6 className="fw-bold text-secondary mb-3">Player List</h6>
-                                {members.map(m => {
+                                {members.map((m, index) => {
                                     const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
                                     
                                     return (
                                         <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                             <div className="d-flex align-items-center">
-                                                <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
-                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                                <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer position-relative me-3">
+                                                    <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-dark" style={{fontSize:'0.6rem', transform: 'translate(-50%, -50%)', zIndex: 5}}>{index + 1}</span>
+                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
                                                 </div>
                                                 <div className="d-flex flex-column">
                                                     <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
@@ -1454,7 +1461,7 @@
             const canvasRef = useRef(null);
             const [localTimeLeft, setLocalTimeLeft] = useState(0);
             
-            // Refs prevent unnecessary React re-renders while drawing and tracking fast movements
+            const [activeColor, setActiveColor] = useState('black');
             const drawingRef = useRef(false);
             const currentLineRef = useRef([]);
             const lastPosRef = useRef({x: 0, y: 0});
@@ -1471,19 +1478,24 @@
             const [wordInput, setWordInput] = useState('');
             const myData = members.find(m => m.user_id === tgId) || {};
             
-            // Max Ink allowed (length in px)
-            const maxInk = 4000 + (myData.extra_ink || 0);
+            const myInks = myData.inks || {};
+            const activeInkData = myInks[activeColor] || { used: 0, extra: 0 };
+            const configInk = INK_CONFIG[activeColor] || INK_CONFIG['black'];
+            
+            const maxInk = configInk.free + activeInkData.extra;
 
             useEffect(() => {
-                inkUsedRef.current = myData.ink_used || 0;
+                inkUsedRef.current = activeInkData.used || 0;
                 updateInkUI();
-            }, [myData.ink_used, myData.extra_ink]);
+            }, [activeInkData.used, activeInkData.extra, activeColor]);
 
-            // Timer for Auto Ready
             useEffect(() => {
-                if ((room.status === 'WAITING' || room.status === 'BREAK') && room.break_end_time) {
+                if (((room.status === 'WAITING' || room.status === 'BREAK') && room.break_end_time) ||
+                    (room.status === 'PRE_DRAW' && room.round_end_time)) {
+                    
+                    const target = room.status === 'PRE_DRAW' ? room.round_end_time : room.break_end_time;
                     const offset = Date.now() - new Date(roomData.server_time).getTime();
-                    const targetTime = new Date(room.break_end_time).getTime() + offset;
+                    const targetTime = new Date(target).getTime() + offset;
                     
                     const updateTime = () => {
                         const diff = targetTime - Date.now();
@@ -1493,7 +1505,7 @@
                     const intv = setInterval(updateTime, 1000);
                     return () => clearInterval(intv);
                 }
-            }, [room.status, room.break_end_time, roomData.server_time]);
+            }, [room.status, room.break_end_time, room.round_end_time, roomData.server_time]);
 
             const updateInkUI = () => {
                 if (!isDrawer || !isDrawingPhase) return;
@@ -1506,10 +1518,11 @@
                 
                 if (bar) {
                     bar.style.width = `${inkPercent}%`;
-                    bar.className = `progress-bar progress-bar-striped progress-bar-animated ${inkLeft <= 500 ? 'bg-danger' : (inkLeft <= 1500 ? 'bg-warning' : 'bg-primary')}`;
+                    bar.style.backgroundColor = INK_CONFIG[activeColor].hex;
+                    bar.className = `progress-bar progress-bar-striped progress-bar-animated`;
                 }
                 if (text) {
-                    text.className = inkLeft <= 500 ? 'text-danger fw-bold' : 'text-muted';
+                    text.className = inkLeft <= 500 ? 'text-danger fw-bold' : 'text-muted fw-bold';
                     text.innerText = `${Math.floor(inkLeft)} / ${maxInk}`;
                 }
                 if (buyBtn) {
@@ -1522,14 +1535,21 @@
                 if(!canvas) return;
                 const ctx = canvas.getContext('2d');
                 ctx.clearRect(0,0, canvas.width, canvas.height);
-                ctx.strokeStyle = '#334155';
                 ctx.lineCap = 'round';
                 ctx.lineWidth = 5;
                 
                 drawings.forEach(jsonStr => {
                     try {
-                        const lines = JSON.parse(jsonStr);
-                        lines.forEach(l => {
+                        const parsed = JSON.parse(jsonStr);
+                        let linesToDraw = parsed;
+                        let c = '#334155';
+                        if (parsed.lines && parsed.color) {
+                            linesToDraw = parsed.lines;
+                            c = INK_CONFIG[parsed.color]?.hex || parsed.color;
+                        }
+                        ctx.strokeStyle = c;
+
+                        linesToDraw.forEach(l => {
                             ctx.beginPath();
                             ctx.moveTo(l.x0, l.y0);
                             ctx.lineTo(l.x1, l.y1);
@@ -1542,10 +1562,17 @@
             useEffect(() => { redraw(); }, [redraw]);
 
             useEffect(() => {
-                const handleLiveDraw = (lines) => {
+                const handleLiveDraw = (data) => {
+                    let lines = data;
+                    let c = '#334155';
+                    if (data.lines && data.color) {
+                        lines = data.lines;
+                        c = INK_CONFIG[data.color]?.hex || data.color;
+                    }
+
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = '#334155';
+                    ctx.strokeStyle = c;
                     ctx.lineCap = 'round';
                     ctx.lineWidth = 5;
                     lines.forEach(l => {
@@ -1581,12 +1608,11 @@
                 e.preventDefault();
                 const newPos = getMousePos(e);
                 
-                // Track physical length distance drawn
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
                 
                 if (inkUsedRef.current + dist > maxInk) {
                     stopDraw(); 
-                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' });
+                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor });
                     return;
                 }
                 
@@ -1594,6 +1620,7 @@
                 updateInkUI();
                 
                 const ctx = canvasRef.current.getContext('2d');
+                ctx.strokeStyle = INK_CONFIG[activeColor].hex;
                 ctx.beginPath();
                 ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
                 ctx.lineTo(newPos.x, newPos.y);
@@ -1611,7 +1638,7 @@
                 if (now - lastStrokeTime.current < 100) return; 
                 
                 if(currentLineRef.current.length > 0) {
-                    socket.emit('draw', { lines: currentLineRef.current });
+                    socket.emit('draw', { lines: currentLineRef.current, color: activeColor });
                     lastStrokeTime.current = now;
                 }
             };
@@ -1619,18 +1646,31 @@
             return (
                 <div className="w-100 d-flex flex-column align-items-center">
                     {isDrawer && isDrawingPhase && (
-                        <div className="w-100 mb-3 px-2" style={{maxWidth: '500px'}}>
-                            <div className="d-flex justify-content-between small fw-bold mb-1">
-                                <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - (myData.ink_used || 0)))} / {maxInk}</span>
+                        <div className="w-100 mb-2 px-2 d-flex flex-column align-items-center" style={{maxWidth: '500px'}}>
+                            
+                            <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-2 bg-light p-2 rounded-pill shadow-sm">
+                                {Object.keys(INK_CONFIG).map(col => (
+                                    <div 
+                                        key={col} 
+                                        onClick={() => setActiveColor(col)}
+                                        className={`rounded-circle cursor-pointer shadow-sm ${activeColor === col ? 'border border-3 scale-110' : 'border border-2 border-secondary'}`}
+                                        style={{ width: '25px', height: '25px', backgroundColor: INK_CONFIG[col].hex, borderColor: activeColor === col ? '#3b82f6' : 'transparent' }}
+                                        title={`${col} Ink`}
+                                    ></div>
+                                ))}
                             </div>
-                            <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
-                                <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
-                                     style={{width: '100%', transition: 'width 0.1s'}}></div>
+
+                            <div className="w-100 d-flex justify-content-between small fw-bold mb-1 px-1">
+                                <span className="text-muted"><i className="fas fa-tint"></i> {activeColor.charAt(0).toUpperCase() + activeColor.slice(1)} Ink Level</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - activeInkData.used))} / {maxInk}</span>
                             </div>
-                            <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' })}>
-                                    <i className="fas fa-plus-circle"></i> Refill Ink (1 Cred)
+                            <div className="progress shadow-sm border w-100" style={{height: '14px', borderRadius: '10px'}}>
+                                <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated" 
+                                     style={{width: '100%', transition: 'width 0.1s', backgroundColor: INK_CONFIG[activeColor].hex }}></div>
+                            </div>
+                            <div className="text-center mt-2 w-100" id="buyInkBtn" style={{display: 'none'}}>
+                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark w-100" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor })}>
+                                    <i className="fas fa-plus-circle"></i> Refill {activeColor} (0.5 Cred)
                                 </button>
                             </div>
                         </div>
@@ -1647,13 +1687,17 @@
                             <div className="wb-overlay">
                                 <h4 className="text-primary fw-bold">Your turn to draw!</h4>
                                 <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
-                                <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                                <div className="badge bg-danger rounded-pill fs-6 my-2 shadow-sm"><i className="fas fa-clock"></i> {localTimeLeft}s left</div>
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center mb-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
                                 <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
                             </div>
                         )}
                         
                         {room.status === 'PRE_DRAW' && !isDrawer && (
-                            <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                            <div className="wb-overlay">
+                                <h4 className="fw-bold">Drawer is choosing a word...</h4>
+                                <div className="badge bg-warning text-dark rounded-pill fs-6 mt-3 shadow-sm"><i className="fas fa-clock"></i> {localTimeLeft}s</div>
+                            </div>
                         )}
 
                         {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
