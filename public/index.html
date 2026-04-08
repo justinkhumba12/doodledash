@@ -1577,19 +1577,46 @@
                         />
                         
                         {room.status === 'PRE_DRAW' && isDrawer && (
-                                    ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
-                                </>
-                            )}
-                            
-                            {isMeReady ? (
-                                <h5 className="mt-4 text-muted fw-bold">
-                                    {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
-                                </h5>
-                            ) : (
-                                <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
-                            )}
-                        </div>
-                    )}
+                            <div className="wb-overlay">
+                                <h4 className="text-primary fw-bold">Your turn to draw!</h4>
+                                <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                                <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                            </div>
+                        )}
+                        
+                        {room.status === 'PRE_DRAW' && !isDrawer && (
+                            <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                        )}
+
+                        {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                            <div className="wb-overlay">
+                                {room.status !== 'WAITING' && (
+                                    <>
+                                        <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
+                                        {room.last_winner_id ? (
+                                            <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
+                                                {roomData.profiles[room.last_winner_id] ? (
+                                                    <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
+                                                ) : (
+                                                    <i className="fas fa-user-circle fs-1 text-secondary"></i>
+                                                )}
+                                                <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
+                                            </div>
+                                        ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
+                                    </>
+                                )}
+                                
+                                {isMeReady ? (
+                                    <h5 className="mt-4 text-muted fw-bold">
+                                        {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                                    </h5>
+                                ) : (
+                                    <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                                )}
+                            </div>
+                        )}
+
                         {isDrawer && isDrawingPhase && (
                             <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
                                 <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
