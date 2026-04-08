@@ -1,1225 +1,1829 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const mysql = require('mysql2/promise');
-const cors = require('cors');
-const path = require('path');
-
-const app = express();
-const server = http.createServer(app);
-
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
-
-// In-memory stores (Redis removed)
-const memCalls = new Map();
-const memRedo = new Map();
-
-const getActiveCalls = async () => {
-    return Object.fromEntries(memCalls);
-};
-const setCall = async (id, val) => {
-    memCalls.set(id, val);
-};
-const getCall = async (id) => {
-    return memCalls.get(id);
-};
-const delCall = async (id) => {
-    memCalls.delete(id);
-};
-const clearRedo = async (roomId) => {
-    memRedo.delete(roomId);
-};
-const pushRedo = async (roomId, val) => {
-    if(!memRedo.has(roomId)) memRedo.set(roomId, []);
-    memRedo.get(roomId).push(val);
-};
-const popRedo = async (roomId) => {
-    const arr = memRedo.get(roomId);
-    if (arr && arr.length > 0) return arr.pop();
-    return null;
-};
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Service Worker for Caching
-app.get('/sw.js', (req, res) => {
-    res.setHeader('Content-Type', 'application/javascript');
-    res.send(`
-        const CACHE_NAME = 'doodledash-cache-v2';
-        const urlsToCache = [
-            '/',
-            '/audio/mgs_notification.mp3',
-            '/audio/guess_notification.mp3',
-            '/audio/call.mp3',
-            '/thememusic/themesongdefault.mp3',
-            '/thememusic/Pencils%20Down.mp3',
-            '/thememusic/Pencils%20Down%202.mp3',
-            '/thememusic/Quick%20Draw%20Frenzy.mp3',
-            'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
-            'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-            'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
-        ];
-        self.addEventListener('install', event => {
-            event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache)));
-        });
-        self.addEventListener('fetch', event => {
-            event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
-        });
-    `);
-});
-
-const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
-
-// Database Connection Pooling for Scalability
-let pool;
-async function initDB() {
-    const dbUrl = process.env.MYSQL_URL || 'mysql://root:dKIKDNsnObjDvJlZawBHjzaEsoetaATX@mysql.railway.internal:3306/railway';
-    try {
-        pool = mysql.createPool({ 
-            uri: dbUrl, 
-            timezone: 'Z',
-            connectionLimit: 100, 
-            queueLimit: 0,
-            waitForConnections: true
-        });
-        console.log('Connected to MySQL Database via Pool.');
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS users (
-                tg_id VARCHAR(50) PRIMARY KEY,
-                credits INT DEFAULT 0,
-                last_daily_claim DATE,
-                ad_claims_today INT DEFAULT 0,
-                last_ad_claim_time DATETIME,
-                ad2_claims_today INT DEFAULT 0,
-                last_ad2_claim_time DATETIME,
-                profile_pic VARCHAR(255),
-                last_active DATETIME,
-                tg_username VARCHAR(100)
-            )
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS rooms (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                status VARCHAR(20) DEFAULT 'WAITING',
-                current_drawer_id VARCHAR(50),
-                word_to_draw VARCHAR(50),
-                round_end_time DATETIME,
-                break_end_time DATETIME,
-                last_winner_id VARCHAR(50),
-                next_drawer_id VARCHAR(50),
-                modified_at DATETIME,
-                is_private BOOLEAN DEFAULT FALSE,
-                password VARCHAR(255),
-                max_members INT DEFAULT 4,
-                base_hints VARCHAR(255) DEFAULT '[]',
-                creator_id VARCHAR(50),
-                expire_at DATETIME
-            )
-        `);
-
-        const migrations = [
-            "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
-            "ALTER TABLE rooms ADD COLUMN max_members INT DEFAULT 4",
-            "ALTER TABLE rooms ADD COLUMN base_hints VARCHAR(255) DEFAULT '[]'",
-            "ALTER TABLE rooms ADD COLUMN creator_id VARCHAR(50)",
-            "ALTER TABLE rooms ADD COLUMN expire_at DATETIME",
-            "ALTER TABLE guesses ADD COLUMN is_correct BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE room_members ADD COLUMN has_given_up BOOLEAN DEFAULT FALSE",
-            "ALTER TABLE room_members ADD COLUMN purchased_hints VARCHAR(255) DEFAULT '[]'",
-            "ALTER TABLE users ADD COLUMN tg_username VARCHAR(100)"
-        ];
-        
-        for (let query of migrations) {
-            try { await pool.query(query); } catch (e) { /* Ignore if column already exists */ }
-        }
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS room_members (
-                room_id INT,
-                user_id VARCHAR(50),
-                is_ready BOOLEAN DEFAULT FALSE,
-                consecutive_turns INT DEFAULT 0,
-                total_turns INT DEFAULT 0,
-                has_given_up BOOLEAN DEFAULT FALSE,
-                purchased_hints VARCHAR(255) DEFAULT '[]',
-                PRIMARY KEY(room_id, user_id)
-            )
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS drawings (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                line_data LONGTEXT
-            )
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS chats (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                user_id VARCHAR(50),
-                message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS guesses (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                room_id INT,
-                user_id VARCHAR(50),
-                guess_text VARCHAR(50),
-                is_correct BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        const [rooms] = await pool.query('SELECT COUNT(*) as count FROM rooms');
-        if (rooms[0].count === 0) {
-            for (let i = 0; i < 5; i++) {
-                await pool.query(`INSERT INTO rooms (status, modified_at, is_private, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, 4)`);
-            }
-        }
-    } catch (err) {
-        console.error('MySQL Init Error:', err);
-    }
-}
-initDB();
-
-app.post('/webhook', async (req, res) => {
-    const update = req.body;
-    res.sendStatus(200); 
-
-    const token = process.env.BOT_TOKEN; 
-    const webAppUrl = process.env.WEBAPP_URL; 
-    if (!token || !webAppUrl) return;
-
-    const sendMsg = (chatId, text, replyMarkup) => {
-        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
-        }).catch(console.error);
-    };
-
-    if (update?.pre_checkout_query) {
-        fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true })
-        });
-        return;
-    }
-
-    if (update?.message?.successful_payment) {
-        try {
-            const payload = JSON.parse(update.message.successful_payment.invoice_payload);
-            const addedCredits = payload.amount;
-            const buyerId = payload.tgId;
-            
-            await pool.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
-            sendMsg(update.message.chat.id, `✅ Successfully purchased ${addedCredits} Credits! Your balance has been updated.`);
-            
-            const userState = await getUserState(buyerId);
-            if (userState) io.to(`user_${buyerId}`).emit('user_update', userState);
-        } catch(e) { console.error('Payment processing error:', e); }
-        return;
-    }
-
-    if (update?.message?.text && update.message.text.startsWith('/start')) {
-        const chatId = update.message.chat.id;
-        const tgId = update.message.from.id;
-        const username = update.message.from.username;
-        
-        try {
-            await pool.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
-        } catch (e) {
-            console.error('Webhook DB Error:', e);
-        }
-
-        if (update.message.text === '/start load_balance') {
-            sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1000 Credits = 500 Telegram Stars*", {
-                inline_keyboard: [
-                    [{ text: '50 Credits (25 ⭐️)', callback_data: 'buy_50' }],
-                    [{ text: '100 Credits (50 ⭐️)', callback_data: 'buy_100' }],
-                    [{ text: '200 Credits (100 ⭐️)', callback_data: 'buy_200' }],
-                    [{ text: '500 Credits (250 ⭐️)', callback_data: 'buy_500' }],
-                    [{ text: '1000 Credits (500 ⭐️)', callback_data: 'buy_1000' }]
-                ]
-            });
-            return;
-        }
-
-        if (!username) {
-            sendMsg(chatId, "⚠️ You need a Telegram username to play and receive credits!\n\nPlease set a username in your Telegram profile Settings, then click 'Check' below.", {
-                inline_keyboard: [[{ text: '🔄 Check', callback_data: 'check_username' }]]
-            });
-        } else {
-            const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-            sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
-                inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-            });
-        }
-    } else if (update?.callback_query) {
-        const query = update.callback_query;
-        const chatId = query.message.chat.id;
-        const tgId = query.from.id;
-        const username = query.from.username;
-        const messageId = query.message.message_id;
-
-        if (query.data.startsWith('buy_')) {
-            const amount = parseInt(query.data.split('_')[1]);
-            const stars = amount / 2; 
-            
-            const payload = JSON.stringify({ tgId: tgId.toString(), amount: amount });
-            const invoice = {
-                chat_id: chatId,
-                title: `${amount} DoodleDash Credits`,
-                description: `Top up your account with ${amount} credits.`,
-                payload: payload,
-                provider_token: "", 
-                currency: "XTR",
-                prices: [{ label: `${amount} Credits`, amount: stars }]
-            };
-            
-            fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(invoice)
-            }).catch(console.error);
-            
-            fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ callback_query_id: query.id })
-            });
-        } else if (query.data === 'check_username') {
-            if (!username) {
-                fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ callback_query_id: query.id, text: "Username not set yet! Please set it in Settings.", show_alert: true })
-                });
-            } else {
-                try {
-                    await pool.query('UPDATE users SET tg_username = ? WHERE tg_id = ?', [username, tgId.toString()]);
-                } catch(e) {}
-                
-                const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-                fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: chatId,
-                        message_id: messageId,
-                        text: "Awesome! Your username is verified.\n\nWelcome to DoodleDash! Click below to play.",
-                        reply_markup: {
-                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-                        }
-                    })
-                });
-            }
-        }
-    }
-});
-
-async function getUserState(tg_id) {
-    const [rows] = await pool.query(`
-        SELECT *,
-        (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
-        (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
-        (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
-        FROM users WHERE tg_id = ?
-    `, [tg_id]);
-
-    if (rows.length === 0) return null;
-    let u = rows[0];
-    if (!u.ad1_is_today) u.ad_claims_today = 0;
-    if (!u.ad2_is_today) u.ad2_claims_today = 0;
-    return u;
-}
-
-const broadcastRooms = async () => {
-    const [rooms] = await pool.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DoodleDash - React Clone</title>
     
-    const sockets = await io.fetchSockets();
-    sockets.forEach(s => {
-        const userId = s.currentUser;
-        const customizedRooms = rooms.map(r => {
-            if (r.creator_id === userId) {
-                return r; 
-            } else {
-                const { password, ...safeRoom } = r;
-                return safeRoom;
-            }
-        });
-        s.emit('lobby_rooms_update', customizedRooms);
-    });
-};
-
-const deleteRoom = async (roomId) => {
-    if (!roomId) return;
-    try {
-        await pool.query("DELETE FROM rooms WHERE id = ?", [roomId]);
-        await pool.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
-        await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-        await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
-        await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-        await clearRedo(roomId);
-    } catch (e) {
-        console.error("Error completely deleting room:", roomId, e);
-    }
-};
-
-const checkRoomReset = async (roomId) => {
-    if (!roomId) return;
-    try {
-        const [members] = await pool.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
-        if (members[0].c === 0) {
-            const [roomInfo] = await pool.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
-            const isPrivate = roomInfo.length > 0 && roomInfo[0].is_private;
-
-            if (roomId !== 1 && roomId !== 2 && !isPrivate) {
-                await deleteRoom(roomId);
-            } else {
-                await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-                await pool.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
-                await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-                await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
-                await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-                await clearRedo(roomId);
-            }
-        } else if (members[0].c < 2) {
-            await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-            await pool.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
-        }
-    } catch(err) {
-        console.error("Auto delete room error:", err);
-    }
-};
-
-const syncRoom = async (roomId) => {
-    if (!roomId) return;
-    try {
-        const [roomData] = await pool.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
-        if (roomData.length === 0) return; 
-
-        const [members] = await pool.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
-        const [chats] = await pool.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id ASC', [roomId]); 
-        const [guesses] = await pool.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
-        const [drawings] = await pool.query('SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC', [roomId]);
-        
-        const userIds = [...new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)])];
-        let profiles = {};
-        if (userIds.length > 0) {
-            const [users] = await pool.query(`SELECT tg_id, profile_pic FROM users WHERE tg_id IN (?)`, [userIds]);
-            users.forEach(u => profiles[u.tg_id] = u.profile_pic);
-        }
-
-        const allCallsMap = await getActiveCalls();
-        const activeCallsList = Object.values(allCallsMap)
-            .map(c => JSON.parse(c))
-            .filter(c => c.room_id === roomId)
-            .map(c => ({
-                id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id
-            }));
-
-        const socketsInRoom = await io.in(`room_${roomId}`).fetchSockets();
-        
-        for (const s of socketsInRoom) {
-            const userId = s.currentUser;
-            const isDrawer = roomData[0].current_drawer_id === userId;
-            
-            const sanitizedGuesses = guesses.map(g => {
-                if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
-                    return g;
-                }
-                return { ...g, guess_text: '••••••••' };
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Preload Assets -->
+    <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
+    <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
+    <link rel="preload" href="/audio/call.mp3" as="audio">
+    
+    <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Use local Socket.IO provided by the Express server to prevent CDN blocking -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW Registration failed: ', err));
             });
+        }
+    </script>
 
-            let masked_word = null;
-            if (['DRAWING', 'REVEAL', 'BREAK'].includes(roomData[0].status)) {
-                const base_hints = JSON.parse(roomData[0].base_hints || '[]');
-                const actual_word = roomData[0].word_to_draw || '';
-                const memberData = members.find(m => m.user_id === userId);
-                const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
-                const isReveal = roomData[0].status !== 'DRAWING';
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        :root { --primary: #6366f1; --primary-hover: #4f46e5; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #1e293b; --call-green: #10b981; }
+        body { background-color: var(--bg-color); font-family: 'Poppins', sans-serif; color: var(--text-main); overflow-x: hidden; touch-action: manipulation; }
+        .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
+        .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
+        .hero-section { background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%); border-radius: 20px; padding: 25px 20px; color: white; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2); }
+        
+        .whiteboard-wrapper { background: var(--card-bg); padding: 15px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); margin: 0 auto; display: flex; flex-direction: column; align-items: center; position: relative; }
+        .whiteboard-container { width: 100% !important; max-width: 500px !important; aspect-ratio: 1/1; height: auto !important; margin: 0 auto; background-color: #fff; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 20px 20px; border: 2px solid #cbd5e1; border-radius: 12px; position: relative; overflow: hidden; touch-action: none; flex-shrink: 0; }
+        canvas { cursor: crosshair; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+        
+        .wb-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.92); backdrop-filter: blur(4px); z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 10px; }
+        
+        .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; touch-action: pan-y; }
+        .interaction-panel.open { right: 0; }
+        .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); transition: 0.3s; }
+        .toggle-glow { background-color: #f59e0b !important; box-shadow: 0 0 20px #f59e0b !important; animation: pulseGlow 1s infinite alternate; }
+        @keyframes pulseGlow { 0% { transform: translateY(-50%) scale(1); } 100% { transform: translateY(-50%) scale(1.15); } }
+        
+        .panel-header { display: flex; padding: 10px; gap: 8px; flex-shrink: 0; }
+        .panel-tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; font-weight: 600; font-size: 0.9rem; color: #64748b; border-radius: 12px; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
+        .panel-tab.active { background: var(--primary); color: white; }
+        .panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 15px; display: flex; flex-direction: column; }
+        .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
+        .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; word-wrap: break-word; }
+        .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
+        .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
+        
+        .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+        @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .heartbeat { animation: heartbeat 1s infinite; }
+        
+        @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        .hint-reveal { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        .room-header { background: #fff; border-radius: 16px; padding: 12px 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e2e8f0; }
+        .cursor-pointer { cursor: pointer; }
+        .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
+
+        .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
+        .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
+        .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
+        .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
+        .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
+        .swipe-container { transition: transform 0.3s ease-out; }
+    </style>
+</head>
+<body>
+    <audio id="mgsSound" src="/audio/mgs_notification.mp3" preload="auto"></audio>
+    <audio id="guessSound" src="/audio/guess_notification.mp3" preload="auto"></audio>
+    <audio id="callSound" src="/audio/call.mp3" loop preload="auto"></audio>
+    <audio id="bgmSound" loop preload="auto"></audio>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        const urlParams = new URLSearchParams(window.location.search);
+
+        const tgId = urlParams.get('user_id');
+        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
+
+        const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
+
+        const getStatusText = (status) => {
+            const map = {
+                'WAITING': 'Lobby Waiting',
+                'PRE_DRAW': 'Choosing Word',
+                'DRAWING': 'Drawing Phase',
+                'REVEAL': 'Round Over',
+                'BREAK': 'Intermission'
+            };
+            return map[status] || 'Unknown Phase';
+        };
+
+        const AudioPolicyModal = ({ onAccept }) => (
+            <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
+                <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
+                    <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
+                    <h4 className="fw-bold">Enable Notifications</h4>
+                    <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically, please accept our audio policy.</p>
+                    <button className="btn btn-success rounded-pill px-5 py-3 fw-bold w-100 shadow mt-3 fs-5" onClick={onAccept}>
+                        <i className="fas fa-volume-up me-2"></i> Accept & Enable Audio
+                    </button>
+                </div>
+            </div>
+        );
+
+        const IdleWarningContent = ({ close, socket }) => {
+            const [timeLeft, setTimeLeft] = useState(10);
+            
+            useEffect(() => {
+                if (timeLeft <= 0) return;
+                const t = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
+                return () => clearTimeout(t);
+            }, [timeLeft]);
+
+            return (
+                <div className="text-center py-2">
+                    <i className="fas fa-clock fs-1 text-warning mb-3 heartbeat"></i>
+                    <h5 className="fw-bold">Are you still there?</h5>
+                    <p className="text-muted small">You will be removed for inactivity in:</p>
+                    <h2 className="fw-bold text-danger">{timeLeft}s</h2>
+                    <button className="btn btn-success w-100 rounded-pill mt-3 shadow" onClick={() => { socket.emit('active_event'); close(); }}>I'm here!</button>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [rooms, setRooms] = useState([]);
+            const [currentRoomId, setCurrentRoomId] = useState(null);
+            const [roomData, setRoomData] = useState(null);
+            const [activeTab, setActiveTab] = useState('guess');
+            const [panelOpen, setPanelOpen] = useState(false);
+            const [glowToggle, setGlowToggle] = useState(false);
+            const [modal, setModal] = useState(null);
+            const [profileModal, setProfileModal] = useState(null);
+            const [sendAmount, setSendAmount] = useState(50);
+            
+            const [activeCall, setActiveCall] = useState(null);
+            const [localStream, setLocalStream] = useState(null);
+            
+            const [isMicMuted, setIsMicMuted] = useState(false);
+            const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+
+            const [isOffline, setIsOffline] = useState(!navigator.onLine);
+            const [openAccordion, setOpenAccordion] = useState(null);
+
+            const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
+            const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
+            const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.05')); 
+            
+            const [isNotifying, setIsNotifying] = useState(false);
+            
+            const defaultBGM = 'themesongdefault.mp3';
+            const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
+            
+            const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
+            const [activeTrack, setActiveTrack] = useState(defaultBGM);
+
+            const [policyAccepted, setPolicyAccepted] = useState(() => sessionStorage.getItem('audioPolicy') === 'true');
+
+            const peerConnectionRef = useRef(null);
+            const remoteAudioRef = useRef(null);
+            const socketRef = useRef(null);
+            const candidateQueue = useRef([]);
+            const localStreamRef = useRef(null);
+            const tgIdRef = useRef(tgId);
+            const audioUnlocked = useRef(false);
+
+            const prevCountChats = useRef(0);
+            const prevCountGuesses = useRef(0);
+
+            useEffect(() => {
+                if (roomData && roomData.chats) {
+                    if (roomData.chats.length > prevCountChats.current) {
+                        const newChats = roomData.chats.slice(prevCountChats.current);
+                        if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
+                            const s = document.getElementById('mgsSound');
+                            if (s) { s.currentTime = 0; s.play().catch(()=>{}); }
+                            if (activeTab !== 'chat') setGlowToggle(true);
+                        }
+                    }
+                    prevCountChats.current = roomData.chats.length;
+                }
+            }, [roomData?.chats, tgId, activeTab]);
+
+            useEffect(() => {
+                if (roomData && roomData.guesses) {
+                    if (roomData.guesses.length > prevCountGuesses.current) {
+                        const newGuesses = roomData.guesses.slice(prevCountGuesses.current);
+                        if (newGuesses.some(g => g.user_id !== tgId)) {
+                            const s = document.getElementById('guessSound');
+                            if (s) { s.currentTime = 0; s.play().catch(()=>{}); }
+                            if (activeTab !== 'guess') setGlowToggle(true);
+                        }
+                    }
+                    prevCountGuesses.current = roomData.guesses.length;
+                }
+            }, [roomData?.guesses, tgId, activeTab]);
+
+            useEffect(() => {
+                const handleOffline = () => setIsOffline(true);
+                const handleOnline = () => setIsOffline(false);
+                window.addEventListener('offline', handleOffline);
+                window.addEventListener('online', handleOnline);
+                return () => {
+                    window.removeEventListener('offline', handleOffline);
+                    window.removeEventListener('online', handleOnline);
+                };
+            }, []);
+
+            useEffect(() => {
+                const updateNotify = () => {
+                    const mgs = document.getElementById('mgsSound');
+                    const guess = document.getElementById('guessSound');
+                    const call = document.getElementById('callSound');
+                    const playing = (mgs && !mgs.paused && mgs.currentTime > 0) || 
+                                    (guess && !guess.paused && guess.currentTime > 0) || 
+                                    (call && !call.paused && call.currentTime > 0);
+                    setIsNotifying(playing);
+                };
                 
-                masked_word = actual_word.split('').map((char, index) => {
-                    if (char === ' ') return { char: ' ', index, revealed: true };
-                    if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
-                        return { char, index, revealed: true };
-                    }
-                    return { char: null, index, revealed: false };
+                const events = ['play', 'playing', 'ended', 'pause'];
+                const els = ['mgsSound', 'guessSound', 'callSound'];
+                
+                const handleEvent = () => updateNotify();
+
+                els.forEach(id => {
+                    const el = document.getElementById(id);
+                    if(el) events.forEach(e => el.addEventListener(e, handleEvent));
                 });
-            }
+                
+                return () => {
+                    els.forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) events.forEach(e => el.removeEventListener(e, handleEvent));
+                    });
+                };
+            }, []);
 
-            s.emit('room_sync', {
-                room: roomData[0],
-                members,
-                chats, 
-                guesses: sanitizedGuesses,
-                drawings: drawings.map(d => d.line_data),
-                profiles,
-                activeCalls: activeCallsList,
-                masked_word: masked_word,
-                server_time: new Date()
-            });
-        }
-    } catch (error) {
-        console.error("syncRoom error:", error);
-    }
-};
+            useEffect(() => {
+                const s = document.getElementById('mgsSound');
+                if (s) s.volume = msgVol;
+                localStorage.setItem('msgVol', msgVol);
+            }, [msgVol]);
 
-const terminateCallsForUser = async (userId) => {
-    const allCallsMap = await getActiveCalls();
-    for (const [callId, callStr] of Object.entries(allCallsMap)) {
-        const call = JSON.parse(callStr);
-        if (call.caller === userId || call.receiver === userId) {
-            await delCall(callId);
-            io.to(`room_${call.room_id}`).emit('call_ended', callId);
-            syncRoom(call.room_id);
-        }
-    }
-};
+            useEffect(() => {
+                const s = document.getElementById('guessSound');
+                if (s) s.volume = guessVol;
+                localStorage.setItem('guessVol', guessVol);
+            }, [guessVol]);
 
-const checkRoomReadiness = async (roomId) => {
-    try {
-        const [room] = await pool.query("SELECT status FROM rooms WHERE id = ?", [roomId]);
-        if (room.length === 0 || !['WAITING', 'BREAK'].includes(room[0].status)) return;
+            useEffect(() => {
+                const s = document.getElementById('callSound');
+                if (s) s.volume = ringVol;
+                localStorage.setItem('ringVol', ringVol);
+            }, [ringVol]);
 
-        const [members] = await pool.query("SELECT user_id, is_ready FROM room_members WHERE room_id = ?", [roomId]);
-        if (members.length >= 2 && members.every(m => m.is_ready)) {
-            const nextDrawer = members[Math.floor(Math.random() * members.length)].user_id;
-            await pool.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, roomId]);
-            await pool.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [roomId]);
-            
-            await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-            await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-            await clearRedo(roomId);
-            syncRoom(roomId);
-        }
-    } catch(e) { console.error('Room Readiness Error:', e); }
-};
+            useEffect(() => {
+                const s = document.getElementById('bgmSound');
+                if (s) {
+                    const ducked = isNotifying || (activeCall && activeCall.status === 'ACTIVE');
+                    s.volume = ducked ? (bgmVol * 0.15) : bgmVol;
+                }
+                localStorage.setItem('bgmVol', bgmVol);
+            }, [bgmVol, isNotifying, activeCall]);
 
-const scheduleBreakTransition = (roomId) => {
-    setTimeout(async () => {
-        const [room] = await pool.query("SELECT status, break_end_time FROM rooms WHERE id = ?", [roomId]);
-        if (room.length > 0 && room[0].status === 'REVEAL' && new Date(room[0].break_end_time) <= new Date()) {
-            await pool.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [roomId]);
-            await pool.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
-            syncRoom(roomId);
-            checkRoomReadiness(roomId); 
-        }
-    }, 5500); 
-};
-
-const scheduleRoomExpiration = (roomId, expireMs) => {
-    setTimeout(async () => {
-        const [r] = await pool.query("SELECT is_private, expire_at FROM rooms WHERE id = ?", [roomId]);
-        if (r.length > 0 && r[0].is_private) {
-            if (new Date(r[0].expire_at) <= new Date()) {
-                io.to(`room_${roomId}`).emit('room_expired');
-                await deleteRoom(roomId); 
-                const sockets = await io.in(`room_${roomId}`).fetchSockets();
-                sockets.forEach(s => { s.leave(`room_${roomId}`); s.currentRoom = null; });
-                broadcastRooms();
-            }
-        }
-    }, expireMs);
-};
-
-io.on('connection', (socket) => {
-    let currentUser = null;
-    let currentRoom = null;
-
-    const startIdleTimer = () => {
-        if (socket.idleTimeout) clearTimeout(socket.idleTimeout);
-        if (socket.warnTimeout) clearTimeout(socket.warnTimeout);
-        socket.idleWarned = false;
-
-        socket.warnTimeout = setTimeout(() => {
-            if (socket.currentRoom) {
-                socket.idleWarned = true;
-                socket.emit('idle_warning');
-            }
-        }, 50000); 
-
-        socket.idleTimeout = setTimeout(async () => {
-            if (socket.currentRoom) {
-                socket.emit('kick_idle');
-                await pool.query('DELETE FROM room_members WHERE user_id = ?', [socket.currentUser]);
-                await checkRoomReset(socket.currentRoom);
-                syncRoom(socket.currentRoom);
-                broadcastRooms();
-                socket.leave(`room_${socket.currentRoom}`);
-                socket.currentRoom = null;
-            }
-        }, 60000); 
-    };
-
-    const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
-        const [roomData] = await pool.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
-        if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
-        const room = roomData[0];
-
-        const [members] = await pool.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
-        if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
-
-        const [existing] = await pool.query('SELECT room_id FROM room_members WHERE user_id = ?', [userId]);
-        if (existing.length > 0 && existing[0].room_id === roomIdNum) {
-            currentRoom = roomIdNum;
-            socket.currentRoom = roomIdNum;
-            socket.join(`room_${roomIdNum}`);
-            socket.emit('join_success', roomIdNum);
-            return syncRoom(roomIdNum);
-        }
-
-        if (!bypassCost) {
-            if (room.is_private) {
-                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
-            } else if (roomIdNum !== 1 && roomIdNum !== 2) {
-                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
-                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]);
-            }
-        }
-
-        const oldRoom = currentRoom;
-        if (oldRoom) {
-            await terminateCallsForUser(userId); 
-            socket.leave(`room_${oldRoom}`);
-            await pool.query('DELETE FROM room_members WHERE user_id = ?', [oldRoom]); 
-            await checkRoomReset(oldRoom);
-        }
-
-        await pool.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, userId]);
-        currentRoom = roomIdNum;
-        socket.currentRoom = roomIdNum;
-        socket.join(`room_${currentRoom}`);
-        
-        socket.emit('join_success', currentRoom);
-        
-        if (oldRoom) {
-            syncRoom(oldRoom);
-            checkRoomReadiness(oldRoom);
-        }
-        syncRoom(currentRoom);
-        checkRoomReadiness(currentRoom);
-        broadcastRooms();
-
-        const userState = await getUserState(userId);
-        if (userState) socket.emit('user_update', userState);
-    };
-
-    socket.on('auth', async ({ tg_id, profile_pic }) => {
-        try {
-            if (!tg_id) return;
-            currentUser = tg_id;
-            socket.currentUser = tg_id; 
-            
-            socket.join(`user_${tg_id}`);
-            startIdleTimer();
-            
-            await pool.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
-            if (profile_pic) {
-                await pool.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
-            } else {
-                await pool.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
-            }
-
-            const userState = await getUserState(tg_id);
-            const [rooms] = await pool.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
-            const customizedRooms = rooms.map(r => r.creator_id === tg_id ? r : { ...r, password: null });
-            
-            const [existing] = await pool.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
-            if (existing.length > 0) {
-                currentRoom = existing[0].room_id;
-                socket.currentRoom = currentRoom;
-                socket.join(`room_${currentRoom}`);
-                syncRoom(currentRoom);
-            }
-
-            socket.emit('lobby_data', { user: userState, rooms: customizedRooms, currentRoom });
-        } catch (err) {}
-    });
-
-    socket.on('active_event', () => startIdleTimer());
-
-    socket.on('claim_reward', async ({ type }) => {
-        try {
-            if (!currentUser) return;
-            startIdleTimer();
-            let success = false;
-            let msg = '';
-
-            if (type === 'daily') {
-                const [res] = await pool.query(`
-                    UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
-                    WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
-                `, [currentUser]);
-                if (res.affectedRows > 0) { success = true; msg = 'Daily reward claimed! +1 Credit'; }
-                else { msg = 'Daily reward already claimed today.'; }
-            } 
-            else if (type === 'ad' || type === 'ad2') {
-                const prefix = type === 'ad' ? 'ad' : 'ad2';
-                const [u] = await pool.query(`SELECT
-                    ${prefix}_claims_today as claims,
-                    DATE_FORMAT(last_${prefix}_claim_time, '%Y-%m-%d') as last_date,
-                    DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
-                    TIMESTAMPDIFF(MINUTE, last_${prefix}_claim_time, UTC_TIMESTAMP()) as mins_passed
-                    FROM users WHERE tg_id = ?`, [currentUser]);
-
-                if (u.length > 0) {
-                    const user = u[0];
-                    const isToday = user.last_date === user.today;
-
-                    if (!user.last_date || !isToday) {
-                        await pool.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
-                    } else if (user.claims < 3 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                        await pool.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
+            useEffect(() => {
+                if (currentRoomId) {
+                    if (currentBgmMode === 'random') {
+                        const randomIndex = Math.floor(Math.random() * availableMusics.length);
+                        setActiveTrack(availableMusics[randomIndex]);
                     } else {
-                        msg = 'Ad reward not available yet. Max 3 per day, 3 hours apart.';
+                        setActiveTrack(currentBgmMode);
                     }
                 }
-            }
+            }, [currentRoomId, currentBgmMode]);
 
-            if (success) {
-                socket.emit('reward_success', msg);
-                const userState = await getUserState(currentUser);
-                if (userState) socket.emit('user_update', userState);
-            } else {
-                socket.emit('create_error', msg);
-            }
-        } catch (err) {}
-    });
+            useEffect(() => {
+                const bgm = document.getElementById('bgmSound');
+                if (!bgm) return;
+                if (currentRoomId && policyAccepted) {
+                    const expectedSrc = window.location.origin + encodeURI('/thememusic/' + activeTrack);
+                    if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== encodeURI('/thememusic/' + activeTrack)) {
+                        bgm.src = encodeURI('/thememusic/' + activeTrack);
+                    }
+                    bgm.play().catch(e => console.log('BGM Autoplay Blocked:', e));
+                } else {
+                    bgm.pause();
+                }
+            }, [currentRoomId, policyAccepted, activeTrack]);
 
-    socket.on('transfer_credits', async ({ target_id, amount }) => {
-        try {
-            if (!currentUser || currentUser === target_id) return;
-            startIdleTimer();
-            const amt = Number(amount);
-            if (![50, 100, 200, 500, 1000].includes(amt)) return socket.emit('create_error', 'Invalid transfer amount.');
-
-            const totalCost = amt + 2; 
-            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            
-            if (u[0].credits < totalCost) {
-                return socket.emit('create_error', `Not enough credits! You need ${totalCost} credits (includes 2 credit fee).`);
-            }
-
-            await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
-            await pool.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amt, target_id]);
-
-            socket.emit('reward_success', `Successfully sent ${amt} credits to ${toHex(target_id)}!`);
-            
-            const token = process.env.BOT_TOKEN;
-            const sendMsg = (chatId, text, replyMarkup) => {
-                if (!token) return;
-                fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
-                }).catch(console.error);
+            const acceptAudioPolicy = () => {
+                setPolicyAccepted(true);
+                sessionStorage.setItem('audioPolicy', 'true');
+                localStorage.setItem('audioPolicy', 'true');
+                
+                ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if(el) {
+                        el.play().then(() => {
+                            if(id !== 'bgmSound' && id !== 'callSound') {
+                                el.pause();
+                                el.currentTime = 0;
+                            }
+                        }).catch(()=>{});
+                    }
+                });
             };
 
-            const [targetUser] = await pool.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
-            const [senderUser] = await pool.query('SELECT * FROM users WHERE tg_id = ?', [currentUser]);
-            
-            const targetUsername = targetUser.length > 0 ? targetUser[0].tg_username : null;
-            const senderUsername = senderUser.length > 0 ? senderUser[0].tg_username : null;
-
-            if (amt >= 200) {
-                let sMarkup = targetUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${targetUsername}` }]] } : {};
-                sendMsg(currentUser, `You successfully sent ${amt} credits to ${targetUsername ? '@' + targetUsername : toHex(target_id)}.`, sMarkup);
-            }
-
-            if (targetUser.length > 0) {
-                let rMarkup = senderUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${senderUsername}` }]] } : {};
-                sendMsg(target_id, `🎁 You received a gift of ${amt} credits from ${senderUsername ? '@' + senderUsername : toHex(currentUser)}!`, rMarkup);
-                
-                const targetState = await getUserState(target_id);
-                io.to(`user_${target_id}`).emit('user_update', targetState);
-                io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits!`);
-            }
-            
-            const myState = await getUserState(currentUser);
-            socket.emit('user_update', myState);
-
-        } catch (err) {
-            console.error('Transfer credits error:', err);
-        }
-    });
-
-    socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
-        try {
-            if (!currentUser) return;
-            startIdleTimer();
-            const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
-            let insertRes;
-            
-            let cost = (auto_join && !is_private) ? 1 : 0;
-            const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-            
-            if (is_private) {
-                if (!password || password.length < 6 || password.length > 10) {
-                    return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
+            const handleGlobalInteraction = () => {
+                if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
+                    remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
                 }
-                let timeCost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
-                cost += limit + timeCost;
+
+                if (!audioUnlocked.current && policyAccepted) {
+                    audioUnlocked.current = true;
+                    ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
+                        const s = document.getElementById(id);
+                        if (s && s.paused) {
+                            const originalVol = s.volume;
+                            s.volume = 0;
+                            const p = s.play();
+                            if (p !== undefined) {
+                                p.then(() => {
+                                    s.pause();
+                                    s.currentTime = 0;
+                                    if (id === 'callSound') s.volume = ringVol;
+                                    else if (id === 'mgsSound') s.volume = msgVol;
+                                    else s.volume = guessVol;
+                                }).catch(() => {});
+                            }
+                        }
+                    });
+                }
+            };
+
+            useEffect(() => {
+                const s = document.getElementById('callSound');
+                if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
+                    if(s && policyAccepted) {
+                        s.play().catch(() => {
+                            if (window.Telegram?.WebApp?.HapticFeedback) {
+                                window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
+                            }
+                        });
+                    }
+                } else {
+                    if(s) {
+                        s.pause();
+                        s.currentTime = 0;
+                    }
+                }
+            }, [activeCall, tgId, policyAccepted]);
+
+            const requestMic = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { 
+                            echoCancellation: { ideal: true }, 
+                            noiseSuppression: { ideal: true }, 
+                            autoGainControl: { ideal: true } 
+                        } 
+                    });
+                    return stream;
+                } catch (e) {
+                    alert("Microphone permission required for calls. Please enable it in your browser/app settings.");
+                    return null; 
+                }
+            };
+
+            const initPeerConnection = (stream, targetId, callId) => {
+                // Incorporating strong IPv4/IPv6 TURN & STUN servers
+                const pc = new RTCPeerConnection({ 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        {
+                            urls: "turn:openrelay.metered.ca:80",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        },
+                        {
+                            urls: "turn:openrelay.metered.ca:443",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        },
+                        {
+                            urls: "turn:openrelay.metered.ca:443?transport=tcp",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        }
+                    ] 
+                });
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                }
+                
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        socketRef.current.emit('webrtc_signal', { 
+                            call_id: callId, 
+                            target_id: targetId, 
+                            signal: { type: 'candidate', candidate: e.candidate } 
+                        });
+                    }
+                };
+
+                pc.ontrack = (e) => {
+                    if (remoteAudioRef.current) {
+                        const inboundStream = (e.streams && e.streams.length > 0) ? e.streams[0] : new MediaStream([e.track]);
+                        if (remoteAudioRef.current.srcObject !== inboundStream) {
+                            remoteAudioRef.current.srcObject = inboundStream;
+                            remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                        }
+                    }
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                        socketRef.current.emit('end_call', { call_id: callId });
+                    }
+                };
+
+                peerConnectionRef.current = pc;
+                return pc;
+            };
+
+            const cleanupCall = () => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                candidateQueue.current = [];
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                if (localStreamRef.current) {
+                    localStreamRef.current.getTracks().forEach(track => track.stop());
+                    setLocalStream(null);
+                    localStreamRef.current = null;
+                }
+                setActiveCall(null);
+                setIsMicMuted(false);
+                setIsSpeakerMuted(false);
+            };
+
+            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
+                if (String(target_id) !== String(tgIdRef.current)) return;
+                
+                if (signal.type === 'offer') {
+                    let stream = localStreamRef.current;
+                    if (!stream) {
+                         stream = await requestMic();
+                         if (stream) { setLocalStream(stream); localStreamRef.current = stream; }
+                    }
+                    
+                    const pc = initPeerConnection(stream, sender_id, call_id);
+                    
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                    
+                    while (candidateQueue.current.length > 0) {
+                        try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch(e) {}
+                    }
+                } else if (signal.type === 'answer') {
+                    const pc = peerConnectionRef.current;
+                    if (!pc) return;
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                    
+                    while (candidateQueue.current.length > 0) {
+                        try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
+                    }
+                } else if (signal.type === 'candidate') {
+                    const pc = peerConnectionRef.current;
+                    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                        try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
+                    } else {
+                        candidateQueue.current.push(new RTCIceCandidate(signal.candidate));
+                    }
+                }
+            };
+
+            const handleCallUpdate = async (call) => {
+                setActiveCall(call);
+
+                if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
+                    let stream = localStreamRef.current;
+                    if (!stream) {
+                        stream = await requestMic();
+                        if (stream) {
+                            setLocalStream(stream);
+                            localStreamRef.current = stream;
+                        }
+                    }
+
+                    const targetId = call.receiver;
+                    const pc = initPeerConnection(stream, targetId, call.id);
+                    try {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        socketRef.current.emit('webrtc_signal', { 
+                            call_id: call.id, 
+                            target_id: targetId, 
+                            signal: { type: 'offer', offer } 
+                        });
+                    } catch(e) {}
+                }
+            };
+
+            const initiateCall = async (targetId) => {
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
+                const stream = await requestMic();
+                if (stream) {
+                    setLocalStream(stream);
+                    localStreamRef.current = stream;
+                }
+                socketRef.current.emit('initiate_call', { receiver_id: targetId });
+            };
+
+            const acceptCall = async (callObj) => {
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
+                const stream = await requestMic();
+                if (!callObj) return;
+                
+                if (stream) {
+                    setLocalStream(stream);
+                    localStreamRef.current = stream;
+                }
+                
+                socketRef.current.emit('accept_call', { call_id: callObj.id });
+            };
+
+            useEffect(() => {
+                // Safely load window.io to prevent initialization crashes
+                if (!window.io) {
+                    console.error("Socket.IO client library failed to load.");
+                    setModal({ type: 'error_reload', title: 'Connection Error', content: 'Game connection could not be established. Please check your connection and reload.'});
+                    return;
+                }
+
+                const socket = window.io({ transports: ['websocket'], upgrade: false });
+                socketRef.current = socket;
+
+                socket.on('connect', () => {
+                    socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                });
+
+                socket.on('lobby_data', (data) => {
+                    setUser(data.user);
+                    setRooms(data.rooms);
+                    setCurrentRoomId(data.currentRoom || null);
+                    if(!data.currentRoom) setRoomData(null);
+                });
+                
+                socket.on('lobby_rooms_update', (data) => setRooms(data));
+                socket.on('user_update', (userData) => setUser(userData));
+                socket.on('room_sync', (data) => setRoomData(data));
+                
+                socket.on('kick_idle', () => {
+                    setModal({ type: 'error_reload', title: 'Idle Timeout', content: 'You were removed from the room for being inactive.' });
+                });
+
+                socket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
+                socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
+                socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
+                socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
+                
+                socket.on('join_success', (roomId) => {
+                    setCurrentRoomId(roomId);
+                    setModal(null);
+                });
+
+                socket.on('kicked_by_admin', () => {
+                    setModal({ type: 'error_reload', title: 'Kicked', content: 'You were removed from the private room by the creator.' });
+                });
+
+                socket.on('room_expired', () => {
+                    setModal({ type: 'error_reload', title: 'Room Expired', content: 'The private room has expired and is now closed.' });
+                });
+
+                socket.on('room_created', ({ room_id }) => {
+                    setModal(null);
+                    socket.emit('search_room', { room_id }); 
+                });
+
+                socket.on('search_result', (room) => {
+                    if (room.is_private) {
+                        setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
+                    } else {
+                        const isFree = room.id === 1 || room.id === 2;
+                        if (isFree) {
+                            socket.emit('join_room', { room_id: room.id });
+                        } else {
+                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: room.id });
+                        }
+                    }
+                });
+
+                socket.on('webrtc_signal_receive', handleReceiveSignal);
+                socket.on('call_update', handleCallUpdate);
+                socket.on('call_ended', cleanupCall);
+                
+                const resetIdle = () => {
+                    if (socketRef.current) socketRef.current.emit('active_event');
+                    setModal(prev => prev?.type === 'idle_warning' ? null : prev);
+                };
+                window.addEventListener('mousemove', resetIdle);
+                window.addEventListener('touchstart', resetIdle);
+
+                return () => {
+                    window.removeEventListener('mousemove', resetIdle);
+                    window.removeEventListener('touchstart', resetIdle);
+                    socket.disconnect();
+                }
+            }, []); 
+
+            useEffect(() => {
+                if (localStreamRef.current) {
+                    localStreamRef.current.getAudioTracks().forEach(track => {
+                        track.enabled = !isMicMuted;
+                    });
+                }
+            }, [isMicMuted, localStream]);
+
+            const [touchStartPos, setTouchStartPos] = useState(null);
+            const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+            const onTouchEnd = (e) => {
+                if (!touchStartPos) return;
+                const diffX = touchStartPos.x - e.changedTouches[0].clientX;
+                const diffY = touchStartPos.y - e.changedTouches[0].clientY;
+                
+                if (Math.abs(diffY) > Math.abs(diffX)) {
+                    setTouchStartPos(null);
+                    return;
+                }
+
+                if (diffX > 50) {
+                    if (activeTab === 'guess') setActiveTab('chat');
+                    else if (activeTab === 'chat') setActiveTab('sounds');
+                } else if (diffX < -50) { 
+                    if (activeTab === 'sounds') setActiveTab('chat');
+                    else if (activeTab === 'chat') setActiveTab('guess');
+                    else if (activeTab === 'guess') setPanelOpen(false);
+                }
+                setTouchStartPos(null);
+            };
+
+            if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
+
+            let timeLeftText = '';
+            if (roomData && roomData.room.is_private && roomData.room.expire_at) {
+                const timeDiff = new Date(roomData.room.expire_at).getTime() - new Date(roomData.server_time).getTime();
+                if (timeDiff > 0) {
+                    const hoursLeft = Math.floor(timeDiff / (1000 * 60 * 60));
+                    const minsLeft = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+                    
+                    if (hoursLeft === 0 && minsLeft === 0) {
+                        timeLeftText = '< 1m';
+                    } else {
+                        timeLeftText = `${hoursLeft > 0 ? hoursLeft + 'h ' : ''}${minsLeft > 0 ? minsLeft + 'm' : ''}`.trim();
+                    }
+                }
             }
 
-            if (cost > 0) {
-                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
-                await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+            const handleLoadBalance = () => {
+                tg.openTelegramLink('https://t.me/doodledashbot?start=load_balance');
+            };
+
+            return (
+                <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100">
+                    <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
+                    
+                    {isOffline && (
+                        <div className="wb-overlay" style={{zIndex: 99999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                            <div className="call-toast text-center text-white bg-dark border border-secondary" style={{maxWidth: '400px', width: '90%'}}>
+                                <i className="fas fa-wifi text-danger fs-1 mb-3 heartbeat"></i>
+                                <h4 className="fw-bold">You are Offline</h4>
+                                <p className="text-muted small">Please check your internet connection and try again.</p>
+                                <button className="btn btn-primary rounded-pill px-5 py-2 fw-bold w-100 shadow mt-3" onClick={() => window.location.reload()}>Refresh Page</button>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="app-header">
+                        <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
+                        <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
+                            <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{user.credits}</b>
+                            <button className="btn btn-sm btn-link p-0 text-success m-0 lh-1" onClick={handleLoadBalance} title="Load Balance">
+                                <i className="fas fa-plus-circle fs-5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    {!policyAccepted && currentRoomId && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
+
+                    {!currentRoomId ? (
+                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
+                    ) : (
+                        <>
+                            {roomData ? (
+                                <div className="container-fluid pt-3">
+                                    <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
+                                        <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
+                                            <div className="d-flex flex-column">
+                                                <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                                <div className="d-flex align-items-center gap-2 mt-1">
+                                                    {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
+                                                    {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
+                                                    {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
+                                                        <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                            <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
+                                        </div>
+                                        <div className="text-center w-100">
+                                            <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
+                                            <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                                        </div>
+                                    </div>
+                                
+                                    <GameRoom 
+                                        roomData={roomData} 
+                                        tgId={tgId} 
+                                        onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
+                                        socket={socketRef.current}
+                                        setProfileModal={setProfileModal}
+                                        activeCall={activeCall}
+                                        isMicMuted={isMicMuted}
+                                        setIsMicMuted={setIsMicMuted}
+                                        isSpeakerMuted={isSpeakerMuted}
+                                        setIsSpeakerMuted={setIsSpeakerMuted}
+                                        setModal={setModal}
+                                    />
+                                    
+                                    <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+                                        <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
+                                            <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
+                                        </div>
+                                        <div className="panel-header">
+                                            <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
+                                            <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                            <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
+                                        </div>
+                                        
+                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
+                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
+                                        {activeTab === 'sounds' && (
+                                            <div className="panel-body">
+                                                <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
+                                                
+                                                <div className="accordion mb-4" id="soundAccordion">
+                                                    
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'msg' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'msg' ? null : 'msg')}>
+                                                                <i className="fas fa-comment-dots text-primary me-2"></i> Message Volume <span className="ms-auto text-primary me-2">{Math.round(msgVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'msg' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setMsgVol(v);
+                                                                        const s = document.getElementById('mgsSound');
+                                                                        if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'guess' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'guess' ? null : 'guess')}>
+                                                                <i className="fas fa-question-circle text-success me-2"></i> Guess Volume <span className="ms-auto text-success me-2">{Math.round(guessVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'guess' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setGuessVol(v);
+                                                                        const s = document.getElementById('guessSound');
+                                                                        if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'ring' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'ring' ? null : 'ring')}>
+                                                                <i className="fas fa-phone-alt text-warning me-2"></i> Call Ringtone <span className="ms-auto text-warning me-2">{Math.round(ringVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'ring' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3 border-start border-warning border-4">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setRingVol(v);
+                                                                        const s = document.getElementById('callSound');
+                                                                        if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'bgm' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'bgm' ? null : 'bgm')}>
+                                                                <i className="fas fa-music text-info me-2"></i> Background Music <span className="ms-auto text-info me-2">{Math.round(bgmVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'bgm' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3 border-start border-info border-4">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setBgmVol(v);
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                </div>
+
+                                                <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-record-vinyl text-primary"></i> Theme Music</h6>
+                                                
+                                                <button 
+                                                    className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
+                                                    onClick={() => {
+                                                        setCurrentBgmMode('random');
+                                                        localStorage.setItem('currentBgmMode', 'random');
+                                                    }}
+                                                >
+                                                    <i className="fas fa-random"></i> {currentBgmMode === 'random' ? 'Random Mode Active' : 'Use Randomly'}
+                                                </button>
+
+                                                {availableMusics.map(music => (
+                                                    <div key={music} className="d-flex justify-content-between align-items-center bg-white p-2 rounded shadow-sm mb-2 border">
+                                                        <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
+                                                        <button className={`btn btn-sm ${currentBgmMode === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
+                                                            setCurrentBgmMode(music);
+                                                            localStorage.setItem('currentBgmMode', music);
+                                                            if ('caches' in window) {
+                                                                caches.open('doodledash-cache-v2').then(cache => cache.add(encodeURI('/thememusic/' + music))).catch(()=>{});
+                                                            }
+                                                        }}>
+                                                            {currentBgmMode === music ? 'Active' : 'Use'}
+                                                        </button>
+                                                    </div>
+                                                ))}
+
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : <div className="text-center mt-5">Loading room...</div>}
+                        </>
+                    )}
+
+                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
+                    
+                    {profileModal && (
+                        <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
+                           {!profileModal.full ? (
+                               <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
+                                   <h3>{toHex(profileModal.user_id)}</h3>
+                                   
+                                   {profileModal.user_id !== tgId && (
+                                       <div className="mt-4 bg-light p-3 rounded-4 border text-start shadow-sm">
+                                           <label className="fw-bold small text-muted mb-2"><i className="fas fa-gift text-primary"></i> Send Credits</label>
+                                           <select className="form-select mb-2 rounded-pill shadow-sm fw-bold text-dark" value={sendAmount} onChange={e=>setSendAmount(Number(e.target.value))}>
+                                               <option value={50}>50 Credits</option>
+                                               <option value={100}>100 Credits</option>
+                                               <option value={200}>200 Credits</option>
+                                               <option value={500}>500 Credits</option>
+                                               <option value={1000}>1000 Credits</option>
+                                           </select>
+                                           <p className="small text-danger mb-1" style={{fontSize: '0.75rem'}}>*2 Credits transaction fee applies</p>
+                                           <p className="small text-muted mb-0" style={{fontSize: '0.7rem'}}>- Receiver will get message with your telegram username for all credit.</p>
+                                           <p className="small text-muted mb-3" style={{fontSize: '0.7rem'}}>- You will get message with receiver's telegram username only when the credit is 200 or more.</p>
+                                           <button className="btn btn-warning w-100 rounded-pill shadow fw-bold text-dark border border-warning" onClick={() => {
+                                               socketRef.current.emit('transfer_credits', {target_id: profileModal.user_id, amount: sendAmount});
+                                               setProfileModal(null);
+                                           }}>Send {sendAmount} <i className="fas fa-paper-plane ms-1"></i></button>
+                                       </div>
+                                   )}
+                                   
+                                   <button className="btn btn-secondary w-100 mt-3 rounded-pill fw-bold" onClick={() => setProfileModal(null)}>Close Profile</button>
+                               </div>
+                           ) : (
+                               <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} />
+                               </div>
+                           )}
+                        </div>
+                    )}
+
+                    {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
+                        <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
+                            <div className="call-toast text-center w-75" onClick={e => e.stopPropagation()}>
+                                <div onClick={() => setProfileModal({ user_id: activeCall.caller, pic: roomData.profiles[activeCall.caller] })} className="cursor-pointer mb-3 d-inline-block position-relative">
+                                    {roomData.profiles[activeCall.caller] ? (
+                                        <img src={roomData.profiles[activeCall.caller]} className="rounded-circle shadow heartbeat" width="80" height="80" style={{objectFit: 'cover'}}/>
+                                    ) : (
+                                        <i className="fas fa-user-circle fs-1 text-secondary heartbeat" style={{fontSize: '80px'}}></i>
+                                    )}
+                                </div>
+                                <h4>Incoming Call</h4>
+                                <p className="text-muted">From {toHex(activeCall.caller)}</p>
+                                <div className="d-flex gap-4 mt-3 justify-content-center">
+                                    <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                                    <button className="btn btn-success rounded-circle shadow d-flex align-items-center justify-content-center heartbeat" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ModalManager = ({ modal, setModal, socket, initiateCall, setCurrentRoomId, cleanupCall }) => {
+            if (!modal) return null;
+            const [pwd, setPwd] = useState('');
+            const [isPriv, setIsPriv] = useState(false);
+            const [maxMembers, setMaxMembers] = useState(4);
+            const [expireHours, setExpireHours] = useState(2);
+            const [autoJoin, setAutoJoin] = useState(false);
+
+            const close = () => { 
+                if (modal.type === 'idle_warning') {
+                    socket.emit('active_event');
+                }
+                setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); 
+            };
+
+            let content = null;
+            if (modal.type === 'success' || modal.type === 'error') {
+                content = (
+                    <>
+                        <div className="mb-4 text-muted">{modal.content}</div>
+                        <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
+                    </>
+                );
+            } else if (modal.type === 'error_reload') {
+                content = (
+                    <div className="text-center py-3">
+                        <i className="fas fa-exclamation-triangle fs-1 text-danger mb-3"></i>
+                        <div className="mb-4 text-muted fw-bold">{modal.content}</div>
+                        <button className="btn btn-primary w-100 rounded-pill shadow fw-bold" onClick={() => window.location.reload()}>Refresh Page</button>
+                    </div>
+                );
+            } else if (modal.type === 'idle_warning') {
+                content = <IdleWarningContent close={close} socket={socket} />;
+            } else if (modal.type === 'create_room') {
+                let baseRoomCost = isPriv ? (maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))) : 0;
+                let autoJoinCost = (autoJoin && !isPriv) ? 1 : 0;
+                let totalCostDisplay = baseRoomCost + autoJoinCost;
+
+                content = (
+                    <>
+                        <div className="form-check mb-3">
+                            <input className="form-check-input" type="checkbox" checked={isPriv} onChange={e => setIsPriv(e.target.checked)} id="privCheck" />
+                            <label className="form-check-label" htmlFor="privCheck">Make Room Private</label>
+                        </div>
+                        {isPriv ? (
+                            <>
+                                <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Max Players (Cost Base)</label>
+                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
+                                        <option value={2}>2 Players (2 Credits)</option>
+                                        <option value={3}>3 Players (3 Credits)</option>
+                                        <option value={4}>4 Players (4 Credits)</option>
+                                    </select>
+                                </div>
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Room Duration</label>
+                                    <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
+                                        <option value={2}>2 Hours (2 Credits)</option>
+                                        <option value={4}>4 Hours (4 Credits)</option>
+                                        <option value={12}>12 Hours (10 Credits)</option>
+                                    </select>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="mb-3">
+                                    <label className="form-label text-muted small mb-1">Max Players</label>
+                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
+                                        <option value={2}>2 Players</option>
+                                        <option value={3}>3 Players</option>
+                                        <option value={4}>4 Players</option>
+                                    </select>
+                                </div>
+                                <div className="alert alert-success py-2 small mb-3">
+                                    <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
+                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Joining usually costs 1 Credit</span>
+                                </div>
+                            </>
+                        )}
+                        
+                        <hr className="my-2" />
+                        <div className="form-check mb-3">
+                            <input className="form-check-input" type="checkbox" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} id="autoJoinCheck" />
+                            <label className="form-check-label text-dark fw-bold" htmlFor="autoJoinCheck">Join Room After Creating</label>
+                        </div>
+                        {autoJoin && !isPriv && (
+                            <div className="alert alert-info py-2 small mb-3">
+                                <i className="fas fa-info-circle me-1"></i> Cost: 1 Credit to auto-join this public room immediately.
+                            </div>
+                        )}
+                        {autoJoin && isPriv && (
+                            <div className="alert alert-success py-2 small mb-3">
+                                <i className="fas fa-info-circle me-1"></i> Auto-joining your private room is free!
+                            </div>
+                        )}
+
+                        {(isPriv || (autoJoin && !isPriv)) && (
+                            <div className="alert alert-warning py-2 small mb-3">
+                                <i className="fas fa-coins text-warning me-1"></i> Total Cost: {totalCostDisplay} Credits
+                            </div>
+                        )}
+
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers, expire_hours: expireHours, auto_join: autoJoin }); close(); }}>Create</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'change_password') {
+                content = (
+                    <>
+                        <p className="text-muted small">Set a new password (6-10 digits).</p>
+                        <input type="number" className="form-control mb-3" placeholder="New Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'prompt_pwd') {
+                content = (
+                    <>
+                        <p className="text-muted">Enter password to join Room {modal.room_id}</p>
+                        <input type="number" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_join') {
+                content = (
+                    <>
+                        <div className="text-center py-3">
+                            <span className="badge bg-warning text-dark fs-6 px-3 py-2 rounded-pill shadow-sm"><i className="fas fa-coins"></i> {modal.content}</span>
+                        </div>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'extend_room') {
+                content = (
+                    <>
+                        <div className="mb-3">
+                            <label className="form-label text-muted small mb-1">Add Duration</label>
+                            <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
+                                <option value={2}>+2 Hours (2 Credits)</option>
+                                <option value={4}>+4 Hours (4 Credits)</option>
+                                <option value={12}>+12 Hours (10 Credits)</option>
+                            </select>
+                        </div>
+                        <div className="alert alert-warning py-2 small mb-3">
+                            <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2)} Credits
+                        </div>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}><i className="fas fa-clock"></i> Extend</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'kick_player') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to remove this player from your room?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}><i className="fas fa-user-times"></i> Remove</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'call_warn') {
+                content = (
+                    <>
+                        <div className="alert alert-warning mb-3">
+                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit per minute</b> for the Caller.
+                        </div>
+                        <p className="text-muted text-center mb-4">Do you want to continue?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { initiateCall(modal.target_id); close(); }}><i className="fas fa-phone"></i> Call Now</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_leave') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_guess_credit') {
+                content = (
+                    <>
+                        <p className="text-muted">You have used your 5 free guesses this round. This guess will cost 1 Credit.</p>
+                        <div className="alert alert-warning">Your guess: <b>{modal.guess}</b></div>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_buy_hint') {
+                content = (
+                    <>
+                        <p className="text-muted">Reveal this hidden character for <b>2 Credits</b>?</p>
+                        <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 2 Credits</div>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (2 Cred)</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_drawer_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Are you sure you want to give up drawing? This will immediately end the round.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Give Up</button>
+                        </div>
+                    </>
+                );
+            } else if (modal.type === 'confirm_guesser_give_up') {
+                content = (
+                    <>
+                        <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
+                        <div className="d-flex gap-2">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Vote Give Up</button>
+                        </div>
+                    </>
+                );
             }
 
-            if (is_private) {
-                [insertRes] = await pool.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password, limit, currentUser, hours]);
-            } else {
-                [insertRes] = await pool.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
-            }
+            return (
+                <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
+                    <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
+                        <div className="d-flex justify-content-between align-items-center mb-3">
+                            <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
+                            {modal.type !== 'error_reload' && modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
+                        </div>
+                        {content}
+                    </div>
+                </div>
+            );
+        };
 
-            const newRoomId = insertRes.insertId;
+        const LobbyView = ({ user, rooms, setModal, socket }) => {
+            const [searchId, setSearchId] = useState('');
+            const [adState, setAdState] = useState({ show: false });
+            const [activeTab, setActiveTab] = useState('public');
             
-            if (is_private) {
-                scheduleRoomExpiration(newRoomId, hours * 3600 * 1000);
-            }
+            const [touchStartPos, setTouchStartPos] = useState(null);
 
-            if (auto_join) {
-                await performJoinRoom(currentUser, newRoomId, password, true);
-            } else {
-                socket.emit('room_created', { room_id: newRoomId });
-            }
-            
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-            broadcastRooms();
-        } catch (err) { console.error('Create room error:', err); }
-    });
+            const handleTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+            const handleTouchEnd = (e) => {
+                if (!touchStartPos) return;
+                const diffX = touchStartPos.x - e.changedTouches[0].clientX;
+                const diffY = touchStartPos.y - e.changedTouches[0].clientY;
 
-    socket.on('search_room', async ({ room_id }) => {
-        try {
-            startIdleTimer();
-            const [rows] = await pool.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
-            if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
-            socket.emit('search_result', rows[0]);
-        } catch (err) {}
-    });
+                if (Math.abs(diffY) > Math.abs(diffX)) {
+                    setTouchStartPos(null);
+                    return;
+                }
 
-    socket.on('join_room', async ({ room_id, password }) => {
-        try {
-            if (!currentUser) return;
-            startIdleTimer();
-            await performJoinRoom(currentUser, Number(room_id), password, false);
-        } catch (err) {}
-    });
+                if (diffX > 50) {
+                    if (activeTab === 'public') setActiveTab('private');
+                    else if (activeTab === 'private') setActiveTab('my_rooms');
+                } else if (diffX < -50) {
+                    if (activeTab === 'my_rooms') setActiveTab('private');
+                    else if (activeTab === 'private') setActiveTab('public');
+                }
+                setTouchStartPos(null);
+            };
 
-    socket.on('leave_room', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            await terminateCallsForUser(currentUser); 
-            await pool.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-            await checkRoomReset(currentRoom);
-            socket.leave(`room_${currentRoom}`);
-            const leftRoom = currentRoom;
-            currentRoom = null;
-            socket.currentRoom = null;
-            
-            syncRoom(leftRoom);
-            checkRoomReadiness(leftRoom);
-            broadcastRooms();
-        } catch (err) {}
-    });
+            const triggerAd = (adNum, prefix) => {
+                if (typeof window.show_10604686 !== 'function') {
+                    setModal({ type: 'error', title: 'Ad Loading', content: 'Ad system is still loading. Please try again or disable adblockers.' });
+                    return;
+                }
+                setAdState({ show: true });
 
-    socket.on('extend_room', async ({ expire_hours }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-            let cost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
-            
-            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
-            
-            await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
-            await pool.query('UPDATE rooms SET expire_at = DATE_ADD(expire_at, INTERVAL ? HOUR) WHERE id = ?', [hours, currentRoom]);
-            
-            scheduleRoomExpiration(currentRoom, hours * 3600 * 1000); 
-            
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
-            syncRoom(currentRoom);
-        } catch(err) { console.error('Extend room error:', err); }
-    });
+                if (adNum === 1) {
+                    window.show_10604686().then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'Failed to show ad. Try again later.' });
+                    });
+                } else {
+                    window.show_10604686('pop').then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now. Try again later.' });
+                    });
+                }
+            };
 
-    socket.on('change_password', async ({ password }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be 6-10 characters.');
-            
-            const [room] = await pool.query('SELECT creator_id FROM rooms WHERE id = ? AND is_private = 1', [currentRoom]);
-            if (room.length === 0 || room[0].creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
+            const renderAdBtn = (adNum, title) => {
+                const prefix = adNum === 1 ? 'ad' : 'ad2';
+                const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
+                const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
+                const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
 
-            await pool.query('UPDATE rooms SET password = ? WHERE id = ?', [currentRoom]);
-            socket.emit('reward_success', 'Room password updated successfully!');
-            broadcastRooms();
-            syncRoom(currentRoom);
-        } catch (err) { console.error('Change password error:', err); }
-    });
+                let btnText = title;
+                let disabled = false;
 
-    socket.on('kick_player', async ({ target_id }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            const [roomRows] = await pool.query('SELECT is_private, creator_id FROM rooms WHERE id = ?', [currentRoom]);
-            if (roomRows.length === 0 || !roomRows[0].is_private || roomRows[0].creator_id !== currentUser) return;
+                if (!isAvailable) {
+                    disabled = true;
+                    if (claims >= 3) { 
+                        btnText = `Max 3/3 Reached`; 
+                    } else { 
+                        const wH = Math.floor(waitMins / 60);
+                        const wM = waitMins % 60;
+                        btnText = `Wait ${wH > 0 ? wH + 'h ' : ''}${wM > 0 ? wM + 'm' : ''}`.trim(); 
+                    }
+                }
 
-            await pool.query('DELETE FROM room_members WHERE user_id = ? AND room_id = ?', [target_id, currentRoom]);
-            
-            io.to(`user_${target_id}`).emit('kicked_by_admin');
-            
-            const sockets = await io.in(`user_${target_id}`).fetchSockets();
-            sockets.forEach(s => {
-                s.leave(`room_${currentRoom}`);
-                if (s.currentRoom === currentRoom) s.currentRoom = null;
+                return (
+                    <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
+                        {btnText} ({claims}/3)
+                    </button>
+                );
+            };
+
+            let filteredRooms = rooms.filter(r => {
+                if (activeTab === 'my_rooms') return r.creator_id === user.tg_id;
+                return activeTab === 'private' ? r.is_private : !r.is_private;
             });
 
-            syncRoom(currentRoom);
-            checkRoomReadiness(currentRoom);
-            broadcastRooms();
-        } catch(err) { console.error('Kick player error:', err); }
-    });
-
-    socket.on('chat', async ({ message }) => {
-        try {
-            if (!currentUser || !currentRoom || !message.trim()) return;
-            startIdleTimer();
-            await pool.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
-            
-            const [countRes] = await pool.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
-            if (countRes[0].c >= 40) {
-                await pool.query(`
-                    DELETE FROM chats 
-                    WHERE room_id = ? AND id NOT IN (
-                        SELECT id FROM (
-                            SELECT id FROM chats WHERE room_id = ? ORDER BY id DESC LIMIT 20
-                        ) t
-                    )
-                `, [currentRoom, currentRoom]);
-            }
-
-            syncRoom(currentRoom);
-        } catch (err) {}
-    });
-
-    socket.on('give_up', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            const [room] = await pool.query('SELECT current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
-            if (room.length === 0 || room[0].status !== 'DRAWING') return;
-
-            const isDrawer = room[0].current_drawer_id === currentUser;
-
-            if (isDrawer) {
-                await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
-                scheduleBreakTransition(currentRoom);
-            } else {
-                await pool.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
-
-                const [members] = await pool.query('SELECT user_id, has_given_up FROM room_members WHERE room_id = ?', [currentRoom]);
-                const guessers = members.filter(m => m.user_id !== room[0].current_drawer_id);
-                const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
-
-                if (allGivenUp) {
-                    await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                    await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'All guessers gave up.']);
-                    scheduleBreakTransition(currentRoom);
+            if (searchId) {
+                const searchNum = searchId.replace(/\D/g, '');
+                if (searchNum) {
+                    filteredRooms.sort((a, b) => {
+                        const aStr = a.id.toString();
+                        const bStr = b.id.toString();
+                        const aExact = aStr === searchNum;
+                        const bExact = bStr === searchNum;
+                        const aPart = aStr.includes(searchNum);
+                        const bPart = bStr.includes(searchNum);
+                        
+                        if (aExact && !bExact) return -1;
+                        if (!aExact && bExact) return 1;
+                        if (aPart && !bPart) return -1;
+                        if (!aPart && bPart) return 1;
+                        return 0;
+                    });
                 }
             }
-            syncRoom(currentRoom);
-        } catch (err) {
-            console.error('Give Up Error:', err);
-        }
-    });
+            
+            const copyPassword = (pwd) => {
+                const el = document.createElement('textarea');
+                el.value = pwd;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+                setModal({ type: 'success', title: 'Copied', content: 'Password copied!' });
+            };
 
-    socket.on('guess', async ({ guess }) => {
-        try {
-            if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
-            if (!guess || !guess.trim()) return;
-            startIdleTimer();
+            return (
+                <div className="container mt-3">
+                    <div className="row mb-4">
+                        <div className="col-md-6 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
+                                <h5><i className="fas fa-calendar-check"></i> Daily Claim</h5>
+                                <p className="small mb-2">Get 1 Free Credit everyday!</p>
+                                <button className="btn btn-light text-success fw-bold rounded-pill btn-sm w-100 mt-2" disabled={!user.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                                    {user.daily_available ? 'Claim Now' : 'Claimed Today'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="col-md-6 mb-3">
+                            <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
+                                <h5><i className="fas fa-tv"></i> Ad Bonuses</h5>
+                                <p className="small mb-2">Watch to earn up to 12 Credits!</p>
+                                <div className="d-flex flex-column gap-2 mt-2">
+                                    {renderAdBtn(1, 'Watch Ad 1')}
+                                    {renderAdBtn(2, 'Watch Ad 2')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h3 className="fw-bold m-0">Game Lobbies</h3>
+                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
+                            <i className="fas fa-plus"></i> Create
+                        </button>
+                    </div>
+
+                    <div className="lobby-tabs-wrapper">
+                        <div className={`lobby-tab ${activeTab === 'public' ? 'active' : ''}`} onClick={() => setActiveTab('public')}>
+                            <i className="fas fa-globe me-2"></i>Public
+                        </div>
+                        <div className={`lobby-tab ${activeTab === 'private' ? 'active' : ''}`} onClick={() => setActiveTab('private')}>
+                            <i className="fas fa-lock me-2"></i>Private
+                        </div>
+                        <div className={`lobby-tab ${activeTab === 'my_rooms' ? 'active' : ''}`} onClick={() => setActiveTab('my_rooms')}>
+                            <i className="fas fa-user me-2"></i>My Rooms
+                        </div>
+                    </div>
+
+                    <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="swipe-container" style={{ minHeight: '300px' }}>
+                        <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
+                            <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} />
+                        </div>
+
+                        <div className="row g-3">
+                            {filteredRooms.length > 0 ? filteredRooms.map(r => {
+                                const isFull = r.member_count >= r.max_members;
+                                const isFree = r.id === 1 || r.id === 2;
+                                return (
+                                    <div key={r.id} className="col-md-4 col-sm-6 mb-2">
+                                        <div className="room-card bg-white rounded-4 p-3 border shadow-sm h-100 position-relative overflow-hidden hover-up">
+                                            <div className={`position-absolute top-0 start-0 w-100`} style={{height: '4px', background: r.is_private ? '#f43f5e' : (isFree ? '#10b981' : '#6366f1')}}></div>
+                                            
+                                            <div className="d-flex justify-content-between align-items-center mb-2 mt-1">
+                                                <h5 className="fw-bold m-0 text-dark d-flex align-items-center">
+                                                    <i className={`fas fa-${r.is_private ? 'lock text-danger' : 'globe text-primary'} me-2 fs-5`}></i>
+                                                    Room {r.id}
+                                                </h5>
+                                                {isFull ? (
+                                                    <span className="badge bg-secondary rounded-pill">Full</span>
+                                                ) : (
+                                                    <span className={`badge ${isFree ? 'bg-success' : (r.is_private ? 'bg-danger' : 'bg-primary')} rounded-pill px-2 py-1`}>
+                                                        {isFree ? <><i className="fas fa-gift"></i> Free</> : (r.is_private ? <><i className="fas fa-key"></i> Password</> : <><i className="fas fa-coins"></i> -1 Credit</>)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            
+                                            {activeTab === 'my_rooms' && r.password && (
+                                                <div className="mt-3 text-center">
+                                                    <span className="badge bg-light text-dark border p-2 cursor-pointer shadow-sm w-100" onClick={() => copyPassword(r.password)}>
+                                                        <i className="fas fa-copy text-primary me-1"></i> Pass: {r.password}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            
+                                            <div className="d-flex align-items-center justify-content-between mt-3">
+                                                <div className="text-muted small fw-bold bg-light px-2 py-1 rounded">
+                                                    <i className="fas fa-users text-secondary"></i> {r.member_count} / {r.max_members}
+                                                </div>
+                                                <button className={`btn btn-sm ${isFull ? 'btn-light text-muted' : (isFree ? 'btn-success' : 'btn-primary')} rounded-pill px-4 fw-bold shadow-sm`} 
+                                                    disabled={isFull}
+                                                    onClick={() => {
+                                                        if (r.is_private && activeTab !== 'my_rooms') {
+                                                            setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
+                                                        } else if (r.is_private && activeTab === 'my_rooms') {
+                                                            socket.emit('join_room', { room_id: r.id, password: r.password });
+                                                        } else if (isFree) {
+                                                            socket.emit('join_room', { room_id: r.id });
+                                                        } else {
+                                                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: r.id });
+                                                        }
+                                                    }}>
+                                                    {isFull ? 'Full' : 'Join'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            }) : (
+                                <div className="col-12 text-center py-5 text-muted">
+                                    <i className={`fas fa-${activeTab === 'public' ? 'globe' : (activeTab === 'private' ? 'lock' : 'user')} fs-1 mb-3 text-light`}></i>
+                                    <h5>No {activeTab.replace('_', ' ')} rooms found</h5>
+                                    <p className="small">Be the first to create one!</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {adState.show && (
+                        <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                            <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
+                            <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                            <p className="text-muted mt-5 small">Please wait, do not close.</p>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
+            const { room, members, activeCalls } = roomData;
+            const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
+
+            return (
+                <div className="row">
+                    <div className="col-12 col-lg-8 mx-auto">
+                        <div className="whiteboard-wrapper">
+                            
+                            {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
+                                <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
+                                    {roomData.masked_word.map((item, i) => (
+                                        <div 
+                                            key={i}
+                                            className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
+                                            style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                            onClick={() => {
+                                                if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                                    setModal({ type: 'confirm_buy_hint', index: item.index });
+                                                }
+                                            }}
+                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (2 Credits)" : ""}
+                                        >
+                                            {item.revealed ? item.char : '?'}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : null}
+
+                            <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
+                            
+                            {(activeCall && activeCall.status === 'ACTIVE') ? (
+                                <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
+                                    <div className="d-flex align-items-center justify-content-center w-100 px-2">
+                                        <div className="d-flex align-items-center gap-2">
+                                            <i className="fas fa-phone-volume heartbeat text-success"></i>
+                                            <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="d-flex align-items-center gap-4 justify-content-center w-100 pb-2">
+                                        <button className={`btn ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
+                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'} fs-5`}></i>
+                                        </button>
+                                        <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
+                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
+                                        </button>
+                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => socket.emit('end_call', {call_id: activeCall.id})} title="End Call">
+                                            <i className="fas fa-phone-slash fs-5"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : null}
+
+                            <div className="mt-4 w-100">
+                                <h6 className="fw-bold text-secondary mb-3">Player List</h6>
+                                {members.map(m => {
+                                    const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
+                                    
+                                    return (
+                                        <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                            <div className="d-flex align-items-center">
+                                                <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
+                                                    {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                                </div>
+                                                <div className="d-flex flex-column">
+                                                    <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
+                                                    <div className="d-flex align-items-center gap-1">
+                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : null}
+                                                        {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="d-flex align-items-center gap-2">
+                                                {(room.is_private === 1 && room.creator_id === tgId && m.user_id !== tgId) ? (
+                                                    <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
+                                                ) : null}
+
+                                                {(mCall && mCall.status === 'ACTIVE') ? <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span> : null}
+                                                
+                                                {(mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id) ? (
+                                                    <div className="d-flex align-items-center gap-2">
+                                                        <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
+                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
+                                                    </div>
+                                                ) : null}
+
+                                                {(m.user_id !== tgId && !mCall && !myCall) ? (
+                                                    <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Whiteboard = ({ roomData, tgId, socket }) => {
+            const canvasRef = useRef(null);
+            const { room, drawings, members } = roomData;
+            const isDrawer = room.current_drawer_id === tgId;
+            const isDrawingPhase = room.status === 'DRAWING';
             
-            const [room] = await pool.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
-            if (room.length === 0) return;
-            if (room[0].status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
-            if (room[0].current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
+            const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
+            const readyCount = members.filter(m => m.is_ready).length;
             
-            const [guessCount] = await pool.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            
-            if (guessCount[0].count >= 5) {
-                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 1) {
-                    return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
+            const [wordInput, setWordInput] = useState('');
+            let drawing = false;
+            let currentLine = [];
+            let lastPos = {x: 0, y: 0};
+
+            const redraw = useCallback(() => {
+                const canvas = canvasRef.current;
+                if(!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0,0, canvas.width, canvas.height);
+                ctx.strokeStyle = '#334155';
+                ctx.lineCap = 'round';
+                ctx.lineWidth = 5;
+                
+                drawings.forEach(jsonStr => {
+                    try {
+                        const lines = JSON.parse(jsonStr);
+                        lines.forEach(l => {
+                            ctx.beginPath();
+                            ctx.moveTo(l.x0, l.y0);
+                            ctx.lineTo(l.x1, l.y1);
+                            ctx.stroke();
+                        });
+                    } catch(e){}
+                });
+            }, [drawings]);
+
+            useEffect(() => { redraw(); }, [redraw]);
+
+            useEffect(() => {
+                const handleLiveDraw = (lines) => {
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    ctx.strokeStyle = '#334155';
+                    ctx.lineCap = 'round';
+                    ctx.lineWidth = 5;
+                    lines.forEach(l => {
+                        ctx.beginPath();
+                        ctx.moveTo(l.x0, l.y0);
+                        ctx.lineTo(l.x1, l.y1);
+                        ctx.stroke();
+                    });
+                };
+                socket.on('live_draw', handleLiveDraw);
+                return () => socket.off('live_draw', handleLiveDraw);
+            }, [socket]);
+
+            const getMousePos = (e) => {
+                const rect = canvasRef.current.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const scaleX = 500 / rect.width;
+                const scaleY = 500 / rect.height;
+                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+            };
+
+            const startDraw = (e) => {
+                if (!isDrawer || !isDrawingPhase) return;
+                e.preventDefault();
+                drawing = true;
+                currentLine = [];
+                lastPos = getMousePos(e);
+            };
+
+            const moveDraw = (e) => {
+                if (!drawing) return;
+                e.preventDefault();
+                const newPos = getMousePos(e);
+                
+                const ctx = canvasRef.current.getContext('2d');
+                ctx.beginPath();
+                ctx.moveTo(lastPos.x, lastPos.y);
+                ctx.lineTo(newPos.x, newPos.y);
+                ctx.stroke();
+
+                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
+                lastPos = newPos;
+            };
+
+            const stopDraw = () => {
+                if(!drawing) return;
+                drawing = false;
+                if(currentLine.length > 0) {
+                    socket.emit('draw', { lines: currentLine });
                 }
-                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-            }
+            };
+
+            return (
+                <div className="whiteboard-container">
+                    <canvas 
+                        ref={canvasRef} width="500" height="500"
+                        onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
+                        onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
+                    />
+                    
+                    {room.status === 'PRE_DRAW' && isDrawer && (
+                        <div className="wb-overlay">
+                            <h4 className="text-primary fw-bold">Your turn to draw!</h4>
+                            <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
+                            <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                        </div>
+                    )}
+                    
+                    {room.status === 'PRE_DRAW' && !isDrawer && (
+                        <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                    )}
+
+                    {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                        <div className="wb-overlay">
+                            {room.status !== 'WAITING' && (
+                                <>
+                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
+                                    {room.last_winner_id ? (
+                                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
+                                            {roomData.profiles[room.last_winner_id] ? (
+                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
+                                            ) : (
+                                                <i className="fas fa-user-circle fs-1 text-secondary"></i>
+                                            )}
+                                            <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
+                                        </div>
+                                    ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
+                                </>
+                            )}
+                            
+                            {isMeReady ? (
+                                <h5 className="mt-4 text-muted fw-bold">
+                                    {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                                </h5>
+                            ) : (
+                                <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                            )}
+                        </div>
+                    )}
+
+                    {isDrawer && isDrawingPhase && (
+                        <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
+                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ChatBox = ({ chats, profiles, socket, tgId }) => {
+            const [input, setInput] = useState('');
+            const messagesEndRef = useRef(null);
             
-            const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.trim().toLowerCase();
-            
-            await pool.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess.trim(), isCorrect]);
-            if (isCorrect) {
-                await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
-                scheduleBreakTransition(currentRoom);
-            }
-            
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [chats]);
 
-            syncRoom(currentRoom);
-        } catch (err) {
-            console.error('Guess Error:', err);
-        }
-    });
+            return (
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                        {chats.map(c => (
+                            <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                                {c.user_id !== 'System' && (
+                                    profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
+                                )}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {c.user_id === 'System' ? 'System' : toHex(c.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{c.message}</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    <div className="chat-input-wrapper d-flex mt-auto">
+                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
+                        <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
+            );
+        };
 
-    socket.on('buy_hint', async ({ index }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
+            const [input, setInput] = useState('');
+            const isDrawer = roomData.room.current_drawer_id === tgId;
+            const messagesEndRef = useRef(null);
 
-            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 2) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+            const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
+            const isFree = myGuessesCount < 5;
 
-            const [member] = await pool.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            if(member.length === 0) return;
+            const myMemberData = roomData.members.find(m => m.user_id === tgId);
+            const hasGivenUp = myMemberData?.has_given_up;
 
-            let purchased = JSON.parse(member[0].purchased_hints || '[]');
-            if (!purchased.includes(index)) {
-                purchased.push(index);
-                await pool.query('UPDATE users SET credits = credits - 2 WHERE tg_id = ?', [currentUser]);
-                await pool.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
-                
-                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 2 Credits!`]);
-                
-                const userState = await getUserState(currentUser);
-                if (userState) socket.emit('user_update', userState);
-                
-                syncRoom(currentRoom);
-            }
-        } catch (err) {
-            console.error('Buy Hint Error:', err);
-        }
-    });
+            const totalGuessers = Math.max(0, roomData.members.length - 1);
+            const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
 
-    socket.on('set_word', async ({ word }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            const wordClean = word.trim().toUpperCase();
-            if (wordClean.length < 3 || wordClean.length > 10) {
-                return socket.emit('create_error', 'Word must be between 3 and 10 characters.');
-            }
-
-            let hints = [];
-            let validIndices = [];
-            for (let i = 0; i < wordClean.length; i++) {
-                if (wordClean[i] !== ' ') validIndices.push(i);
-            }
-            const len = wordClean.length;
-            
-            if (len >= 3 && len <= 4) {
-                hints.push(Math.floor(len / 2));
-            } else {
-                let count = 0;
-                if (len >= 5 && len <= 6) count = 2;
-                else if (len >= 7 && len <= 9) count = 3;
-                else if (len === 10) count = 4;
-                
-                while (hints.length < count && validIndices.length > 0) {
-                    let randIdx = Math.floor(Math.random() * validIndices.length);
-                    hints.push(validIndices[randIdx]);
-                    validIndices.splice(randIdx, 1); 
-                }
-            }
-
-            const activeRoomId = currentRoom;
-
-            await pool.query("UPDATE rooms SET word_to_draw = ?, base_hints = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [wordClean, JSON.stringify(hints), currentRoom, currentUser]);
-            await pool.query("UPDATE room_members SET purchased_hints = '[]', has_given_up = 0 WHERE room_id = ?", [currentRoom]);
-            
-            await pool.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
-            await pool.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
-            await clearRedo(currentRoom);
-            syncRoom(currentRoom);
-
-            setTimeout(async () => {
-                const [r] = await pool.query("SELECT status, round_end_time FROM rooms WHERE id = ?", [activeRoomId]);
-                if (r.length > 0 && r[0].status === 'DRAWING' && new Date(r[0].round_end_time) <= new Date()) {
-                    await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [activeRoomId]);
-                    syncRoom(activeRoomId);
-                    scheduleBreakTransition(activeRoomId);
-                }
-            }, 120000);
-
-        } catch (err) {
-            console.error('Set Word Error:', err);
-        }
-    });
-
-    socket.on('set_ready', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            startIdleTimer();
-            await pool.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-            syncRoom(currentRoom);
-            checkRoomReadiness(currentRoom);
-        } catch (err) {}
-    });
-
-    socket.on('draw', async ({ lines }) => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            await clearRedo(currentRoom);
-            await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
-            socket.to(`room_${currentRoom}`).emit('live_draw', lines);
-        } catch (err) {}
-    });
-
-    socket.on('undo', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            const [last] = await pool.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
-            if (last.length > 0) {
-                await pushRedo(currentRoom, JSON.stringify(last[0]));
-                await pool.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
-                syncRoom(currentRoom);
-            }
-        } catch (err) {}
-    });
-
-    socket.on('redo', async () => {
-        try {
-            if (!currentUser || !currentRoom) return;
-            const toRestoreStr = await popRedo(currentRoom);
-            if (toRestoreStr) {
-                const toRestore = JSON.parse(toRestoreStr);
-                await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
-                syncRoom(currentRoom);
-            }
-        } catch (err) {}
-    });
-
-    socket.on('initiate_call', async ({ receiver_id }) => {
-        if (!currentUser || !currentRoom) return;
-        startIdleTimer();
-        
-        const allCallsMap = await getActiveCalls();
-        const isInCall = Object.values(allCallsMap).map(c => JSON.parse(c)).some(
-            c => c.caller === currentUser || c.receiver === currentUser ||
-                 c.caller === receiver_id || c.receiver === receiver_id
-        );
-        
-        if (isInCall) {
-            return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
-        }
-
-        const callId = `call_${Date.now()}_${Math.random()}`;
-        const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
-        
-        await setCall(callId, JSON.stringify(callObj));
-        io.to(`room_${currentRoom}`).emit('call_update', callObj);
-        syncRoom(currentRoom);
-    });
-
-    socket.on('accept_call', async ({ call_id }) => {
-        const callData = await getCall(call_id);
-        if(!callData) return;
-        const call = JSON.parse(callData);
-
-        if (call.receiver === currentUser) {
-            call.status = 'ACTIVE';
-            call.startTime = Date.now();
-            await setCall(call_id, JSON.stringify(call));
-            io.to(`room_${call.room_id}`).emit('call_update', call);
-            
-            socket.activeBillingIntervals = socket.activeBillingIntervals || {};
-            socket.activeBillingIntervals[call_id] = setInterval(async () => {
-                const cData = await getCall(call_id);
-                if(!cData) return clearInterval(socket.activeBillingIntervals[call_id]);
-                const c = JSON.parse(cData);
-                
-                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits > 0', [c.caller]);
-                const [u1] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
-                
-                if (u1[0].credits <= 0) {
-                    clearInterval(socket.activeBillingIntervals[call_id]);
-                    await delCall(call_id);
-                    io.to(`room_${c.room_id}`).emit('call_ended', call_id);
-                    syncRoom(c.room_id);
+            const handleGuessSubmit = () => {
+                if (!input.trim()) return;
+                if (isFree) {
+                    socket.emit('guess', {guess: input});
+                    setInput('');
                 } else {
-                    const uState1 = await getUserState(c.caller);
-                    if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
+                    setModal({ type: 'confirm_guess_credit', guess: input, title: 'Use Credit to Guess?' });
+                    setInput('');
                 }
-            }, 60000);
+            };
 
-            syncRoom(currentRoom);
-        }
-    });
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [guesses]);
 
-    socket.on('end_call', async ({ call_id }) => {
-        await delCall(call_id);
-        io.to(`room_${currentRoom || 'all'}`).emit('call_ended', call_id);
-        syncRoom(currentRoom);
-        
-        if (socket.activeBillingIntervals && socket.activeBillingIntervals[call_id]) {
-            clearInterval(socket.activeBillingIntervals[call_id]);
-            delete socket.activeBillingIntervals[call_id];
-        }
-    });
+            return (
+                <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+                    <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                        {guesses.map(g => (
+                            <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                                {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}}/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>}
+                                <div className="d-flex flex-column w-100">
+                                    <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                        {toHex(g.user_id)}
+                                    </small>
+                                    <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    
+                    {roomData.room.status === 'DRAWING' ? (
+                        <div className="chat-input-wrapper d-flex flex-column mt-auto">
+                            <button 
+                                className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                                onClick={() => {
+                                    setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                                }}
+                                disabled={!isDrawer && hasGivenUp}
+                            >
+                                <i className="fas fa-flag"></i> 
+                                {isDrawer ? 'Give Up Drawing' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                            </button>
 
-    socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-        socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
-    });
+                            {(!isDrawer && !hasGivenUp) ? (
+                                <div className="d-flex w-100">
+                                    <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
+                                        value={input} onChange={e=>setInput(e.target.value)} 
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
+                                        placeholder={isFree ? `Free Guess (${5 - myGuessesCount} left)...` : `Extra Guess (1 Credit)...`} />
+                                    <button className="btn btn-success rounded-end-pill px-3" onClick={handleGuessSubmit}>
+                                        <i className="fas fa-check"></i>
+                                    </button>
+                                </div>
+                            ) : null}
 
-    socket.on('disconnect', async () => {
-        if (socket.idleTimeout) clearTimeout(socket.idleTimeout);
-        if (socket.warnTimeout) clearTimeout(socket.warnTimeout);
-        
-        if (socket.activeBillingIntervals) {
-            Object.values(socket.activeBillingIntervals).forEach(clearInterval);
-        }
+                            {(!isDrawer && hasGivenUp) ? (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You've given up. Waiting for others ({givenUpCount}/{totalGuessers})
+                                </div>
+                            ) : null}
 
-        if (currentUser) {
-            await terminateCallsForUser(currentUser); 
-            if (currentRoom) {
-                await pool.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-                await checkRoomReset(currentRoom);
-                syncRoom(currentRoom);
-                checkRoomReadiness(currentRoom);
-                broadcastRooms();
-            }
-        }
-    });
-});
+                            {isDrawer ? (
+                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
+                                    You are the drawer. Use tools to draw!
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            );
+        };
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`DoodleDash instance listening on port ${PORT}`));
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
