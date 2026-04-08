@@ -46,11 +46,15 @@
         .interaction-panel { position: fixed; right: -340px; top: 80px; bottom: 0; width: 340px; height: calc(100vh - 80px); background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 20px 0 0 20px; transition: right 0.3s; box-shadow: -10px 0 30px rgba(0,0,0,0.1); z-index: 1000; display: flex; flex-direction: column; touch-action: pan-y; }
         .interaction-panel.open { right: 0; }
         .floating-toggle { position: absolute; left: -30px; top: 60%; transform: translateY(-50%); width: 30px; height: 60px; background: var(--primary); color: white; border-radius: 15px 0 0 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: -4px 0 15px rgba(99, 102, 241, 0.4); transition: 0.3s; }
+        
         .toggle-glow { background-color: #f59e0b !important; box-shadow: 0 0 20px #f59e0b !important; animation: pulseGlow 1s infinite alternate; }
         @keyframes pulseGlow { 0% { transform: translateY(-50%) scale(1); } 100% { transform: translateY(-50%) scale(1.15); } }
+
+        .tab-glow { background-color: #fef08a !important; color: #854d0e !important; animation: tabPulse 1s infinite alternate; }
+        @keyframes tabPulse { 0% { transform: scale(1); } 100% { transform: scale(1.05); } }
         
         .panel-header { display: flex; padding: 10px; gap: 8px; flex-shrink: 0; }
-        .panel-tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; font-weight: 600; font-size: 0.9rem; color: #64748b; border-radius: 12px; transition: 0.2s; display: flex; align-items: center; justify-content: center; }
+        .panel-tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; font-weight: 600; font-size: 0.9rem; color: #64748b; border-radius: 12px; transition: 0.2s; display: flex; align-items: center; justify-content: center; position: relative; }
         .panel-tab.active { background: var(--primary); color: white; }
         .panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 15px; display: flex; flex-direction: column; }
         .chat-input-wrapper { flex-shrink: 0; padding: 15px; background: white; border-top: 1px solid #e2e8f0; }
@@ -130,7 +134,6 @@
             const [glowToggle, setGlowToggle] = useState(false);
             const [modal, setModal] = useState(null);
             const [profileModal, setProfileModal] = useState(null);
-            const [sendAmount, setSendAmount] = useState(50);
             const [isOffline, setIsOffline] = useState(!navigator.onLine);
             const [openAcc, setOpenAcc] = useState('volumes');
             
@@ -139,12 +142,12 @@
             
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+            
+            const [unreadChat, setUnreadChat] = useState(false);
+            const [unreadGuess, setUnreadGuess] = useState(false);
 
-            // Volumes & Background Music settings (Defaults to loud notifications, quiet BGM)
-            const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
-            const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
-            const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
-            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15')); // Quiet BGM
+            // Single App Volume configures ALL notifications (calls, chats, guesses, bgm)
+            const [appVol, setAppVol] = useState(() => parseFloat(localStorage.getItem('appVol') ?? '1.0'));
             
             const defaultBGM = 'themesongdefault.mp3';
             const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
@@ -162,6 +165,8 @@
             const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
+            const prevChatsCount = useRef(0);
+            const prevGuessesCount = useRef(0);
 
             // Handle online/offline events explicitly
             useEffect(() => {
@@ -191,30 +196,49 @@
                 );
             }
 
-            // Sync audio volumes
+            // Sync master volume
             useEffect(() => {
-                const s = document.getElementById('mgsSound');
-                if (s) s.volume = msgVol;
-                localStorage.setItem('msgVol', msgVol);
-            }, [msgVol]);
+                ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
+                    const s = document.getElementById(id);
+                    if (s) s.volume = appVol;
+                });
+                localStorage.setItem('appVol', appVol);
+            }, [appVol]);
 
+            // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
-                const s = document.getElementById('guessSound');
-                if (s) s.volume = guessVol;
-                localStorage.setItem('guessVol', guessVol);
-            }, [guessVol]);
+                if (!roomData) return;
+                
+                // Track new chats
+                if (roomData.chats && roomData.chats.length > prevChatsCount.current) {
+                    const newChats = roomData.chats.slice(prevChatsCount.current);
+                    if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
+                        const s = document.getElementById('mgsSound');
+                        if (s) s.play().catch(()=>{});
+                        
+                        if (activeTab !== 'chat' || !panelOpen) {
+                            setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
+                            setUnreadChat(true);
+                        }
+                    }
+                    prevChatsCount.current = roomData.chats.length;
+                }
 
-            useEffect(() => {
-                const s = document.getElementById('callSound');
-                if (s) s.volume = ringVol;
-                localStorage.setItem('ringVol', ringVol);
-            }, [ringVol]);
-
-            useEffect(() => {
-                const s = document.getElementById('bgmSound');
-                if (s) s.volume = bgmVol;
-                localStorage.setItem('bgmVol', bgmVol);
-            }, [bgmVol]);
+                // Track new guesses
+                if (roomData.guesses && roomData.guesses.length > prevGuessesCount.current) {
+                    const newGuesses = roomData.guesses.slice(prevGuessesCount.current);
+                    if (newGuesses.some(g => g.user_id !== tgId)) {
+                        const s = document.getElementById('guessSound');
+                        if (s) s.play().catch(()=>{});
+                        
+                        if (activeTab !== 'guess' || !panelOpen) {
+                            setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
+                            setUnreadGuess(true);
+                        }
+                    }
+                    prevGuessesCount.current = roomData.guesses.length;
+                }
+            }, [roomData, activeTab, panelOpen, tgId]);
 
             // Set active track based on mode and room join
             useEffect(() => {
@@ -279,9 +303,7 @@
                                 p.then(() => {
                                     s.pause();
                                     s.currentTime = 0;
-                                    if (id === 'callSound') s.volume = ringVol;
-                                    else if (id === 'mgsSound') s.volume = msgVol;
-                                    else s.volume = guessVol;
+                                    s.volume = appVol;
                                 }).catch(() => {});
                             }
                         }
@@ -578,11 +600,11 @@
                 }
 
                 if (diffX > 50) {
-                    if (activeTab === 'guess') setActiveTab('chat');
-                    else if (activeTab === 'chat') setActiveTab('sounds');
+                    if (activeTab === 'guess') { setActiveTab('chat'); setUnreadChat(false); }
+                    else if (activeTab === 'chat') { setActiveTab('sounds'); }
                 } else if (diffX < -50) { 
-                    if (activeTab === 'sounds') setActiveTab('chat');
-                    else if (activeTab === 'chat') setActiveTab('guess');
+                    if (activeTab === 'sounds') { setActiveTab('chat'); setUnreadChat(false); }
+                    else if (activeTab === 'chat') { setActiveTab('guess'); setUnreadGuess(false); }
                     else if (activeTab === 'guess') setPanelOpen(false);
                 }
                 setTouchStartPos(null);
@@ -680,13 +702,17 @@
                                             <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                         </div>
                                         <div className="panel-header">
-                                            <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''}`} onClick={() => setActiveTab('guess')}>Guesses</div>
-                                            <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>Chat</div>
+                                            <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''} ${unreadGuess && activeTab !== 'guess' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('guess'); setUnreadGuess(false); }}>
+                                                Guesses {unreadGuess && activeTab !== 'guess' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                            </div>
+                                            <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''} ${unreadChat && activeTab !== 'chat' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('chat'); setUnreadChat(false); }}>
+                                                Chat {unreadChat && activeTab !== 'chat' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                            </div>
                                             <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                         </div>
                                         
-                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
-                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
+                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
+                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
                                         {activeTab === 'sounds' && (
                                             <div className="panel-body">
                                                 <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
@@ -697,67 +723,27 @@
                                                     <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
                                                         <h2 className="accordion-header">
                                                             <button className={`accordion-button fw-bold ${openAcc === 'volumes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'volumes' ? '' : 'volumes')} style={{backgroundColor: openAcc === 'volumes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
-                                                                <i className="fas fa-volume-up text-primary me-2"></i> Volume Controls
+                                                                <i className="fas fa-volume-up text-primary me-2"></i> Master Volume
                                                             </button>
                                                         </h2>
                                                         <div className={`accordion-collapse collapse ${openAcc === 'volumes' ? 'show' : ''}`}>
                                                             <div className="accordion-body bg-white pb-1">
                                                                 <div className="mb-3">
                                                                     <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Message Volume</span>
-                                                                        <span className="text-primary">{Math.round(msgVol * 100)}%</span>
+                                                                        <span>App Volume</span>
+                                                                        <span className="text-primary">{Math.round(appVol * 100)}%</span>
                                                                     </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
                                                                         onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
                                                                         onChange={e => {
                                                                             const v = parseFloat(e.target.value);
-                                                                            setMsgVol(v);
-                                                                            const s = document.getElementById('mgsSound');
-                                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                                        }} />
-                                                                </div>
-                                                                
-                                                                <div className="mb-3">
-                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Guess Volume</span>
-                                                                        <span className="text-primary">{Math.round(guessVol * 100)}%</span>
-                                                                    </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
-                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                        onChange={e => {
-                                                                            const v = parseFloat(e.target.value);
-                                                                            setGuessVol(v);
-                                                                            const s = document.getElementById('guessSound');
-                                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                                        }} />
-                                                                </div>
-
-                                                                <div className="mb-3">
-                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Call Ringtone</span>
-                                                                        <span className="text-warning">{Math.round(ringVol * 100)}%</span>
-                                                                    </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
-                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                        onChange={e => {
-                                                                            const v = parseFloat(e.target.value);
-                                                                            setRingVol(v);
+                                                                            setAppVol(v);
                                                                             const s = document.getElementById('callSound');
                                                                             if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
                                                                         }} />
                                                                 </div>
-
-                                                                <div className="mb-2">
-                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Background Music</span>
-                                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
-                                                                    </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
-                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                        onChange={e => {
-                                                                            const v = parseFloat(e.target.value);
-                                                                            setBgmVol(v);
-                                                                        }} />
+                                                                <div className="alert alert-light border small text-muted">
+                                                                    <i className="fas fa-info-circle text-primary"></i> This sets the volume for calls, notifications, and background music.
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -817,27 +803,6 @@
                                <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
                                    <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
                                    <h3>{toHex(profileModal.user_id)}</h3>
-                                   
-                                   {profileModal.user_id !== tgId && (
-                                       <div className="mt-4 bg-light p-3 rounded-4 border text-start shadow-sm">
-                                           <label className="fw-bold small text-muted mb-2"><i className="fas fa-gift text-primary"></i> Send Credits</label>
-                                           <select className="form-select mb-2 rounded-pill shadow-sm fw-bold text-dark" value={sendAmount} onChange={e=>setSendAmount(Number(e.target.value))}>
-                                               <option value={50}>50 Credits</option>
-                                               <option value={100}>100 Credits</option>
-                                               <option value={200}>200 Credits</option>
-                                               <option value={500}>500 Credits</option>
-                                               <option value={1000}>1000 Credits</option>
-                                           </select>
-                                           <p className="small text-danger mb-1" style={{fontSize: '0.75rem'}}>*2 Credits transaction fee applies</p>
-                                           <p className="small text-muted mb-0" style={{fontSize: '0.7rem'}}>- Receiver will get message with your telegram username for all credit.</p>
-                                           <p className="small text-muted mb-3" style={{fontSize: '0.7rem'}}>- You will get message with receiver's telegram username only when the credit is 200 or more.</p>
-                                           <button className="btn btn-warning w-100 rounded-pill shadow fw-bold text-dark border border-warning" onClick={() => {
-                                               socketRef.current.emit('transfer_credits', {target_id: profileModal.user_id, amount: sendAmount});
-                                               setProfileModal(null);
-                                           }}>Send {sendAmount} <i className="fas fa-paper-plane ms-1"></i></button>
-                                       </div>
-                                   )}
-                                   
                                    <button className="btn btn-secondary w-100 mt-3 rounded-pill fw-bold" onClick={() => setProfileModal(null)}>Close Profile</button>
                                </div>
                            ) : (
@@ -1605,25 +1570,13 @@
             );
         };
 
-        const ChatBox = ({ chats, profiles, socket, tgId, setGlowToggle }) => {
+        const ChatBox = ({ chats, profiles, socket, tgId }) => {
             const [input, setInput] = useState('');
-            const prevCount = useRef(chats.length);
             const messagesEndRef = useRef(null);
             
             useEffect(() => {
-                if (chats.length > prevCount.current) {
-                    const newChats = chats.slice(prevCount.current);
-                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
-                    if (isOthersMessage) {
-                        const s = document.getElementById('mgsSound');
-                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                        setGlowToggle(true);
-                        setTimeout(() => setGlowToggle(false), 3000);
-                    }
-                }
-                prevCount.current = chats.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [chats, tgId, setGlowToggle]);
+            }, [chats]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -1651,12 +1604,10 @@
             );
         };
 
-        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal, setGlowToggle }) => {
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
-            
-            const prevCount = useRef(guesses.length);
 
             const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
             const isFree = myGuessesCount < 5;
@@ -1679,19 +1630,8 @@
             };
 
             useEffect(() => {
-                if (guesses.length > prevCount.current) {
-                    const newGuesses = guesses.slice(prevCount.current);
-                    const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
-                    if (shouldPlaySound) {
-                        const s = document.getElementById('guessSound');
-                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                        setGlowToggle(true);
-                        setTimeout(() => setGlowToggle(false), 3000);
-                    }
-                }
-                prevCount.current = guesses.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [guesses, tgId, setGlowToggle]);
+            }, [guesses]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
