@@ -907,6 +907,8 @@ io.on('connection', (socket) => {
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
+                
+                syncRoom(currentRoom); // <-- Sync immediately to update the ink bar on the drawer's screen
             }
         } catch (err) {
             console.error('Buy Ink Error:', err);
@@ -1007,7 +1009,7 @@ io.on('connection', (socket) => {
                     broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
-            }, 120000); // Massive 2-minute grace period to completely hide TCP disconnections / Server Restarts from user.
+            }, 5000); // Massive 2-minute grace period reduced to 5 seconds.
 
             disconnectTimeouts.set(currentUser, timeoutId);
         }
