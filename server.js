@@ -87,7 +87,7 @@ async function initDB() {
         console.log('Connected to MySQL Database (Pool).');
 
         // Drop deprecated tables as requested
-        const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses'];
+        const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages'];
         for (let table of tablesToDrop) {
             await db.query(`DROP TABLE IF EXISTS ${table}`);
         }
@@ -183,16 +183,10 @@ app.post('/webhook', async (req, res) => {
             return;
         }
 
-        if (!username) {
-            sendMsg(chatId, "⚠️ You need a Telegram username to play and receive credits!\n\nPlease set a username in your Telegram profile Settings, then click 'Check' below.", {
-                inline_keyboard: [[{ text: '🔄 Check', callback_data: 'check_username' }]]
-            });
-        } else {
-            const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-            sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
-                inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-            });
-        }
+        const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
+        sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
+            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
+        });
     } else if (update?.callback_query) {
         const query = update.callback_query;
         const chatId = query.message.chat.id;
@@ -226,32 +220,6 @@ app.post('/webhook', async (req, res) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ callback_query_id: query.id })
             });
-        } else if (query.data === 'check_username') {
-            if (!username) {
-                fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ callback_query_id: query.id, text: "Username not set yet! Please set it in Settings.", show_alert: true })
-                });
-            } else {
-                try {
-                    await db.query('UPDATE users SET tg_username = ? WHERE tg_id = ?', [username, tgId.toString()]);
-                } catch(e) {}
-                
-                const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
-                fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: chatId,
-                        message_id: messageId,
-                        text: "Awesome! Your username is verified.\n\nWelcome to DoodleDash! Click below to play.",
-                        reply_markup: {
-                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-                        }
-                    })
-                });
-            }
         }
     }
 });
@@ -588,62 +556,6 @@ io.on('connection', (socket) => {
                 socket.emit('create_error', msg);
             }
         } catch (err) {}
-    });
-
-    socket.on('transfer_credits', async ({ target_id, amount }) => {
-        try {
-            if (!currentUser || currentUser === target_id) return;
-            const amt = Number(amount);
-            if (![50, 100, 200, 500, 1000].includes(amt)) return socket.emit('create_error', 'Invalid transfer amount.');
-
-            const totalCost = amt + 2; 
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            
-            if (u[0].credits < totalCost) {
-                return socket.emit('create_error', `Not enough credits! You need ${totalCost} credits (includes 2 credit fee).`);
-            }
-
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
-            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amt, target_id]);
-
-            socket.emit('reward_success', `Successfully sent ${amt} credits to ${toHex(target_id)}!`);
-            
-            const token = process.env.BOT_TOKEN;
-            const sendMsg = (chatId, text, replyMarkup) => {
-                if (!token) return;
-                fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
-                }).catch(console.error);
-            };
-
-            const [targetUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
-            const [senderUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [currentUser]);
-            
-            const targetUsername = targetUser.length > 0 ? targetUser[0].tg_username : null;
-            const senderUsername = senderUser.length > 0 ? senderUser[0].tg_username : null;
-
-            if (amt >= 200) {
-                let sMarkup = targetUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${targetUsername}` }]] } : {};
-                sendMsg(currentUser, `You successfully sent ${amt} credits to ${targetUsername ? '@' + targetUsername : toHex(target_id)}.`, sMarkup);
-            }
-
-            if (targetUser.length > 0) {
-                let rMarkup = senderUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${senderUsername}` }]] } : {};
-                sendMsg(target_id, `🎁 You received a gift of ${amt} credits from ${senderUsername ? '@' + senderUsername : toHex(currentUser)}!`, rMarkup);
-                
-                const targetState = await getUserState(target_id);
-                io.to(`user_${target_id}`).emit('user_update', targetState);
-                io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits!`);
-            }
-            
-            const myState = await getUserState(currentUser);
-            socket.emit('user_update', myState);
-
-        } catch (err) {
-            console.error('Transfer credits error:', err);
-        }
     });
 
     socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
