@@ -668,26 +668,26 @@
                                             <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
                                         </div>
                                         <div className="text-center w-100">
-                                            <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
-                                            <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
-                                        </div>
+                                        <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
+                                        <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
                                     </div>
+                                </div>
+                            
+                                <GameRoom 
+                                    roomData={roomData} 
+                                    tgId={tgId} 
+                                    onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
+                                    socket={socketRef.current}
+                                    setProfileModal={setProfileModal}
+                                    activeCall={activeCall}
+                                    isMicMuted={isMicMuted}
+                                    setIsMicMuted={setIsMicMuted}
+                                    isSpeakerMuted={isSpeakerMuted}
+                                    setIsSpeakerMuted={setIsSpeakerMuted}
+                                    setModal={setModal}
+                                />
                                 
-                                    <GameRoom 
-                                        roomData={roomData} 
-                                        tgId={tgId} 
-                                        onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
-                                        socket={socketRef.current}
-                                        setProfileModal={setProfileModal}
-                                        activeCall={activeCall}
-                                        isMicMuted={isMicMuted}
-                                        setIsMicMuted={setIsMicMuted}
-                                        isSpeakerMuted={isSpeakerMuted}
-                                        setIsSpeakerMuted={setIsSpeakerMuted}
-                                        setModal={setModal}
-                                    />
-                                    
-                                    <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+                                <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
                                         <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
                                             <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                         </div>
@@ -1339,29 +1339,29 @@
                         <div className="whiteboard-wrapper">
                             
                             {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
-                                <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
-                                    {roomData.masked_word.map((item, i) => (
-                                        <div 
-                                            key={i}
-                                            className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
-                                            style={{ width: '35px', height: '35px', transition: '0.2s' }}
-                                            onClick={() => {
-                                                if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
-                                                    setModal({ type: 'confirm_buy_hint', index: item.index });
-                                                }
-                                            }}
-                                            title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (2 Credits)" : ""}
-                                        >
-                                            {item.revealed ? item.char : '?'}
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : null}
+                            <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
+                                {roomData.masked_word.map((item, i) => (
+                                    <div 
+                                        key={i}
+                                        className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
+                                        style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                        onClick={() => {
+                                            if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                                setModal({ type: 'confirm_buy_hint', index: item.index });
+                                            }
+                                        }}
+                                        title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (2 Credits)" : ""}
+                                    >
+                                        {item.revealed ? item.char : '?'}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
 
-                            <Whiteboard roomData={roomData} tgId={tgId} socket={socket} />
-                            
-                            {(activeCall && activeCall.status === 'ACTIVE') ? (
-                                <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
+                        <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} />
+                        
+                        {(activeCall && activeCall.status === 'ACTIVE') ? (
+                            <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
                                     <div className="d-flex align-items-center justify-content-center w-100 px-2">
                                         <div className="d-flex align-items-center gap-2">
                                             <i className="fas fa-phone-volume heartbeat text-success"></i>
@@ -1431,7 +1431,7 @@
             );
         };
 
-        const Whiteboard = ({ roomData, tgId, socket }) => {
+        const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             const canvasRef = useRef(null);
             const lastStrokeTime = useRef(0);
             const { room, drawings, members } = roomData;
@@ -1445,6 +1445,13 @@
             let drawing = false;
             let currentLine = [];
             let lastPos = {x: 0, y: 0};
+
+            const myData = members.find(m => m.user_id === tgId) || {};
+            const [localStrokes, setLocalStrokes] = useState(myData.stroke_count || 0);
+
+            useEffect(() => {
+                setLocalStrokes(myData.stroke_count || 0);
+            }, [myData.stroke_count]);
 
             const redraw = useCallback(() => {
                 const canvas = canvasRef.current;
@@ -1531,45 +1538,45 @@
                 
                 if(currentLine.length > 0) {
                     socket.emit('draw', { lines: currentLine });
+                    setLocalStrokes(prev => prev + 1); // Track locally to update UI instantly
                     lastStrokeTime.current = now;
                 }
             };
 
+            const maxStrokes = 30 + (myData.extra_strokes || 0);
+            const inkLeft = Math.max(0, maxStrokes - localStrokes);
+            const inkPercent = (inkLeft / maxStrokes) * 100;
+
             return (
-                <div className="whiteboard-container">
-                    <canvas 
-                        ref={canvasRef} width="500" height="500"
-                        onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
-                        onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
-                    />
-                    
-                    {room.status === 'PRE_DRAW' && isDrawer && (
-                        <div className="wb-overlay">
-                            <h4 className="text-primary fw-bold">Your turn to draw!</h4>
-                            <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
-                            <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
-                            <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                <div className="w-100 d-flex flex-column align-items-center">
+                    {isDrawer && isDrawingPhase && (
+                        <div className="w-100 mb-3 px-2" style={{maxWidth: '500px'}}>
+                            <div className="d-flex justify-content-between small fw-bold mb-1">
+                                <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                                <span className={inkLeft <= 5 ? 'text-danger fw-bold' : 'text-muted'}>{inkLeft} / {maxStrokes} Strokes</span>
+                            </div>
+                            <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
+                                <div className={`progress-bar progress-bar-striped progress-bar-animated ${inkLeft <= 5 ? 'bg-danger' : (inkLeft <= 15 ? 'bg-warning' : 'bg-primary')}`} 
+                                     style={{width: `${inkPercent}%`, transition: 'width 0.3s'}}></div>
+                            </div>
+                            {inkLeft <= 0 && (
+                                <div className="text-center mt-3">
+                                    <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Ink Depleted' })}>
+                                        <i className="fas fa-plus-circle"></i> Buy More Ink (1 Cred)
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
-                    
-                    {room.status === 'PRE_DRAW' && !isDrawer && (
-                        <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
-                    )}
 
-                    {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
-                        <div className="wb-overlay">
-                            {room.status !== 'WAITING' && (
-                                <>
-                                    <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
-                                    {room.last_winner_id ? (
-                                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
-                                            {roomData.profiles[room.last_winner_id] ? (
-                                                <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
-                                            ) : (
-                                                <i className="fas fa-user-circle fs-1 text-secondary"></i>
-                                            )}
-                                            <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
-                                        </div>
+                    <div className="whiteboard-container">
+                        <canvas 
+                            ref={canvasRef} width="500" height="500"
+                            onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
+                            onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
+                        />
+                        
+                        {room.status === 'PRE_DRAW' && isDrawer && (
                                     ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
                                 </>
                             )}
@@ -1583,13 +1590,13 @@
                             )}
                         </div>
                     )}
-
-                    {isDrawer && isDrawingPhase && (
-                        <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
-                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
-                            <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
-                        </div>
-                    )}
+                        {isDrawer && isDrawingPhase && (
+                            <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
+                                <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
+                                <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         };
