@@ -20,10 +20,52 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
+let isRedisReady = false;
 Promise.all([pubClient.connect(), subClient.connect(), redisClient.connect()]).then(() => {
     io.adapter(createAdapter(pubClient, subClient));
+    isRedisReady = true;
     console.log('Redis connected and Socket.IO Adapter attached.');
-}).catch(e => console.error('Redis connection failed:', e));
+}).catch(e => console.error('Redis connection failed, falling back to in-memory state:', e.message));
+
+// Fallback in-memory stores for when Redis is unavailable
+const memCalls = new Map();
+const memRedo = new Map();
+
+const getActiveCalls = async () => {
+    if (isRedisReady) return await redisClient.hGetAll('activeCalls');
+    return Object.fromEntries(memCalls);
+};
+const setCall = async (id, val) => {
+    if (isRedisReady) await redisClient.hSet('activeCalls', id, val);
+    else memCalls.set(id, val);
+};
+const getCall = async (id) => {
+    if (isRedisReady) return await redisClient.hGet('activeCalls', id);
+    return memCalls.get(id);
+};
+const delCall = async (id) => {
+    if (isRedisReady) await redisClient.hDel('activeCalls', id);
+    else memCalls.delete(id);
+};
+const clearRedo = async (roomId) => {
+    if (isRedisReady) await redisClient.del(`redo:${roomId}`);
+    else memRedo.delete(roomId);
+};
+const pushRedo = async (roomId, val) => {
+    if (isRedisReady) await redisClient.rPush(`redo:${roomId}`, val);
+    else {
+        if(!memRedo.has(roomId)) memRedo.set(roomId, []);
+        memRedo.get(roomId).push(val);
+    }
+};
+const popRedo = async (roomId) => {
+    if (isRedisReady) return await redisClient.rPop(`redo:${roomId}`);
+    else {
+        const arr = memRedo.get(roomId);
+        if (arr && arr.length > 0) return arr.pop();
+        return null;
+    }
+};
 
 app.use(cors());
 app.use(express.json());
@@ -364,7 +406,7 @@ const deleteRoom = async (roomId) => {
         await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
         await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
         await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-        await redisClient.del(`redo:${roomId}`);
+        await clearRedo(roomId);
     } catch (e) {
         console.error("Error completely deleting room:", roomId, e);
     }
@@ -388,7 +430,7 @@ const checkRoomReset = async (roomId) => {
                 await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
                 await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
                 await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-                await redisClient.del(`redo:${roomId}`);
+                await clearRedo(roomId);
             }
         } else if (members[0].c < 2) {
             await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
@@ -417,7 +459,7 @@ const syncRoom = async (roomId) => {
             users.forEach(u => profiles[u.tg_id] = u.profile_pic);
         }
 
-        const allCallsMap = await redisClient.hGetAll('activeCalls');
+        const allCallsMap = await getActiveCalls();
         const activeCallsList = Object.values(allCallsMap)
             .map(c => JSON.parse(c))
             .filter(c => c.room_id === roomId)
@@ -473,11 +515,11 @@ const syncRoom = async (roomId) => {
 };
 
 const terminateCallsForUser = async (userId) => {
-    const allCallsMap = await redisClient.hGetAll('activeCalls');
+    const allCallsMap = await getActiveCalls();
     for (const [callId, callStr] of Object.entries(allCallsMap)) {
         const call = JSON.parse(callStr);
         if (call.caller === userId || call.receiver === userId) {
-            await redisClient.hDel('activeCalls', callId);
+            await delCall(callId);
             io.to(`room_${call.room_id}`).emit('call_ended', callId);
             syncRoom(call.room_id);
         }
@@ -499,7 +541,7 @@ const checkRoomReadiness = async (roomId) => {
             // Clear drawings and guesses for the upcoming round automatically
             await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
             await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-            await redisClient.del(`redo:${roomId}`);
+            await clearRedo(roomId);
             syncRoom(roomId);
         }
     } catch(e) { console.error('Room Readiness Error:', e); }
@@ -871,7 +913,7 @@ io.on('connection', (socket) => {
             const [room] = await pool.query('SELECT creator_id FROM rooms WHERE id = ? AND is_private = 1', [currentRoom]);
             if (room.length === 0 || room[0].creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
 
-            await pool.query('UPDATE rooms SET password = ? WHERE id = ?', [password, currentRoom]);
+            await pool.query('UPDATE rooms SET password = ? WHERE id = ?', [currentRoom]);
             socket.emit('reward_success', 'Room password updated successfully!');
             broadcastRooms();
             syncRoom(currentRoom);
@@ -1062,7 +1104,7 @@ io.on('connection', (socket) => {
             
             await pool.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
             await pool.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
-            await redisClient.del(`redo:${currentRoom}`);
+            await clearRedo(currentRoom);
             syncRoom(currentRoom);
 
             // Timeout protected against race conditions 
@@ -1093,7 +1135,7 @@ io.on('connection', (socket) => {
     socket.on('draw', async ({ lines }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            await redisClient.del(`redo:${currentRoom}`);
+            await clearRedo(currentRoom);
             await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
             socket.to(`room_${currentRoom}`).emit('live_draw', lines);
         } catch (err) {}
@@ -1104,7 +1146,7 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom) return;
             const [last] = await pool.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
             if (last.length > 0) {
-                await redisClient.rPush(`redo:${currentRoom}`, JSON.stringify(last[0]));
+                await pushRedo(currentRoom, JSON.stringify(last[0]));
                 await pool.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
                 syncRoom(currentRoom);
             }
@@ -1114,7 +1156,7 @@ io.on('connection', (socket) => {
     socket.on('redo', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            const toRestoreStr = await redisClient.rPop(`redo:${currentRoom}`);
+            const toRestoreStr = await popRedo(currentRoom);
             if (toRestoreStr) {
                 const toRestore = JSON.parse(toRestoreStr);
                 await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
@@ -1127,7 +1169,7 @@ io.on('connection', (socket) => {
         if (!currentUser || !currentRoom) return;
         startIdleTimer();
         
-        const allCallsMap = await redisClient.hGetAll('activeCalls');
+        const allCallsMap = await getActiveCalls();
         const isInCall = Object.values(allCallsMap).map(c => JSON.parse(c)).some(
             c => c.caller === currentUser || c.receiver === currentUser ||
                  c.caller === receiver_id || c.receiver === receiver_id
@@ -1140,26 +1182,26 @@ io.on('connection', (socket) => {
         const callId = `call_${Date.now()}_${Math.random()}`;
         const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
         
-        await redisClient.hSet('activeCalls', callId, JSON.stringify(callObj));
+        await setCall(callId, JSON.stringify(callObj));
         io.to(`room_${currentRoom}`).emit('call_update', callObj);
         syncRoom(currentRoom);
     });
 
     socket.on('accept_call', async ({ call_id }) => {
-        const callData = await redisClient.hGet('activeCalls', call_id);
+        const callData = await getCall(call_id);
         if(!callData) return;
         const call = JSON.parse(callData);
 
         if (call.receiver === currentUser) {
             call.status = 'ACTIVE';
             call.startTime = Date.now();
-            await redisClient.hSet('activeCalls', call_id, JSON.stringify(call));
+            await setCall(call_id, JSON.stringify(call));
             io.to(`room_${call.room_id}`).emit('call_update', call);
             
             // Assign billing responsibility locally to whichever server node accepted the call.
             socket.activeBillingIntervals = socket.activeBillingIntervals || {};
             socket.activeBillingIntervals[call_id] = setInterval(async () => {
-                const cData = await redisClient.hGet('activeCalls', call_id);
+                const cData = await getCall(call_id);
                 if(!cData) return clearInterval(socket.activeBillingIntervals[call_id]);
                 const c = JSON.parse(cData);
                 
@@ -1168,7 +1210,7 @@ io.on('connection', (socket) => {
                 
                 if (u1[0].credits <= 0) {
                     clearInterval(socket.activeBillingIntervals[call_id]);
-                    await redisClient.hDel('activeCalls', call_id);
+                    await delCall(call_id);
                     io.to(`room_${c.room_id}`).emit('call_ended', call_id);
                     syncRoom(c.room_id);
                 } else {
@@ -1182,7 +1224,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('end_call', async ({ call_id }) => {
-        await redisClient.hDel('activeCalls', call_id);
+        await delCall(call_id);
         io.to(`room_${currentRoom || 'all'}`).emit('call_ended', call_id);
         syncRoom(currentRoom);
         
