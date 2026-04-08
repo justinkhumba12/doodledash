@@ -120,6 +120,26 @@
             </div>
         );
 
+        const IdleWarningContent = ({ close, socket }) => {
+            const [timeLeft, setTimeLeft] = useState(10);
+            
+            useEffect(() => {
+                if (timeLeft <= 0) return;
+                const t = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
+                return () => clearTimeout(t);
+            }, [timeLeft]);
+
+            return (
+                <div className="text-center py-2">
+                    <i className="fas fa-clock fs-1 text-warning mb-3 heartbeat"></i>
+                    <h5 className="fw-bold">Are you still there?</h5>
+                    <p className="text-muted small">You will be removed for inactivity in:</p>
+                    <h2 className="fw-bold text-danger">{timeLeft}s</h2>
+                    <button className="btn btn-success w-100 rounded-pill mt-3 shadow" onClick={() => { socket.emit('active_event'); close(); }}>I'm here!</button>
+                </div>
+            );
+        };
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
@@ -138,16 +158,19 @@
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
-            // Volumes & Background Music settings (Defaults to loud notifications, quiet BGM)
+            const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+            // Volumes & Background Music settings
             const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
             const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
             const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
-            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15')); // Quiet BGM
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.05')); // Default quiet BGM
+            
+            const [isNotifying, setIsNotifying] = useState(false);
             
             const defaultBGM = 'themesongdefault.mp3';
             const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
             
-            // Mode can be 'random' or a specific filename
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
@@ -161,19 +184,48 @@
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
 
-            if (!tgId) {
-                return (
-                    <div className="container mt-5 text-center">
-                        <div className="alert alert-danger shadow-lg py-5 rounded-4">
-                            <h1><i className="fas fa-lock mb-3"></i></h1>
-                            <h3 className="fw-bold">Access Denied</h3>
-                            <p>You can only access DoodleDash directly through the official Telegram Bot.</p>
-                        </div>
-                    </div>
-                );
-            }
+            // Network Offline detection
+            useEffect(() => {
+                const handleOffline = () => setIsOffline(true);
+                const handleOnline = () => setIsOffline(false);
+                window.addEventListener('offline', handleOffline);
+                window.addEventListener('online', handleOnline);
+                return () => {
+                    window.removeEventListener('offline', handleOffline);
+                    window.removeEventListener('online', handleOnline);
+                };
+            }, []);
 
-            // Sync audio volumes
+            // Notification volume ducking tracker
+            useEffect(() => {
+                const updateNotify = () => {
+                    const mgs = document.getElementById('mgsSound');
+                    const guess = document.getElementById('guessSound');
+                    const call = document.getElementById('callSound');
+                    const playing = (mgs && !mgs.paused && mgs.currentTime > 0) || 
+                                    (guess && !guess.paused && guess.currentTime > 0) || 
+                                    (call && !call.paused && call.currentTime > 0);
+                    setIsNotifying(playing);
+                };
+                
+                const events = ['play', 'playing', 'ended', 'pause'];
+                const els = ['mgsSound', 'guessSound', 'callSound'];
+                
+                const handleEvent = () => updateNotify();
+
+                els.forEach(id => {
+                    const el = document.getElementById(id);
+                    if(el) events.forEach(e => el.addEventListener(e, handleEvent));
+                });
+                
+                return () => {
+                    els.forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) events.forEach(e => el.removeEventListener(e, handleEvent));
+                    });
+                };
+            }, []);
+
             useEffect(() => {
                 const s = document.getElementById('mgsSound');
                 if (s) s.volume = msgVol;
@@ -192,13 +244,16 @@
                 localStorage.setItem('ringVol', ringVol);
             }, [ringVol]);
 
+            // BGM Volume ducking logic
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
-                if (s) s.volume = bgmVol;
+                if (s) {
+                    const ducked = isNotifying || (activeCall && activeCall.status === 'ACTIVE');
+                    s.volume = ducked ? (bgmVol * 0.15) : bgmVol;
+                }
                 localStorage.setItem('bgmVol', bgmVol);
-            }, [bgmVol]);
+            }, [bgmVol, isNotifying, activeCall]);
 
-            // Set active track based on mode and room join
             useEffect(() => {
                 if (currentRoomId) {
                     if (currentBgmMode === 'random') {
@@ -210,7 +265,6 @@
                 }
             }, [currentRoomId, currentBgmMode]);
 
-            // BGM Player logic
             useEffect(() => {
                 const bgm = document.getElementById('bgmSound');
                 if (!bgm) return;
@@ -229,7 +283,6 @@
                 setPolicyAccepted(true);
                 localStorage.setItem('audioPolicy', 'true');
                 
-                // Unlock all native audio contexts silently
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
@@ -243,7 +296,6 @@
                 });
             };
 
-            // Mobile Safaris fallback interaction unlocker
             const handleGlobalInteraction = () => {
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
                     remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
@@ -271,7 +323,6 @@
                 }
             };
 
-            // Call receiving logic
             useEffect(() => {
                 const s = document.getElementById('callSound');
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
@@ -311,9 +362,7 @@
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
+                        { urls: 'stun:stun2.l.google.com:19302' }
                     ] 
                 });
                 
@@ -472,8 +521,7 @@
                 socket.on('room_sync', (data) => setRoomData(data));
                 
                 socket.on('kick_idle', () => {
-                    setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
-                    setCurrentRoomId(null);
+                    setModal({ type: 'error_reload', title: 'Idle Timeout', content: 'You were removed from the room for being inactive.' });
                 });
 
                 socket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
@@ -487,13 +535,11 @@
                 });
 
                 socket.on('kicked_by_admin', () => {
-                    setModal({ type: 'error', title: 'Kicked', content: 'You were removed from the private room by the creator.' });
-                    setCurrentRoomId(null);
+                    setModal({ type: 'error_reload', title: 'Kicked', content: 'You were removed from the private room by the creator.' });
                 });
 
                 socket.on('room_expired', () => {
-                    setModal({ type: 'error', title: 'Room Expired', content: 'The private room has expired and is now closed.' });
-                    setCurrentRoomId(null);
+                    setModal({ type: 'error_reload', title: 'Room Expired', content: 'The private room has expired and is now closed.' });
                 });
 
                 socket.on('room_created', ({ room_id }) => {
@@ -519,7 +565,7 @@
                 socket.on('call_ended', cleanupCall);
                 
                 const resetIdle = () => {
-                    socketRef.current.emit('active_event');
+                    if (socketRef.current) socketRef.current.emit('active_event');
                     setModal(prev => prev?.type === 'idle_warning' ? null : prev);
                 };
                 window.addEventListener('mousemove', resetIdle);
@@ -540,7 +586,6 @@
                 }
             }, [isMicMuted, localStream]);
 
-            // Track touch position safely preventing diagonal collision
             const [touchStartPos, setTouchStartPos] = useState(null);
             const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
             const onTouchEnd = (e) => {
@@ -548,7 +593,6 @@
                 const diffX = touchStartPos.x - e.changedTouches[0].clientX;
                 const diffY = touchStartPos.y - e.changedTouches[0].clientY;
                 
-                // If the user scrolled vertically more than horizontally, DO NOT swap tabs.
                 if (Math.abs(diffY) > Math.abs(diffX)) {
                     setTouchStartPos(null);
                     return;
@@ -589,6 +633,18 @@
             return (
                 <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100">
                     <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
+                    
+                    {isOffline && (
+                        <div className="wb-overlay" style={{zIndex: 99999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                            <div className="call-toast text-center text-white bg-dark border border-secondary" style={{maxWidth: '400px', width: '90%'}}>
+                                <i className="fas fa-wifi text-danger fs-1 mb-3 heartbeat"></i>
+                                <h4 className="fw-bold">You are Offline</h4>
+                                <p className="text-muted small">Please check your internet connection and try again.</p>
+                                <button className="btn btn-primary rounded-pill px-5 py-2 fw-bold w-100 shadow mt-3" onClick={() => window.location.reload()}>Refresh Page</button>
+                            </div>
+                        </div>
+                    )}
+                    
                     <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                         <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
@@ -599,7 +655,7 @@
                         </div>
                     </div>
 
-                    {!policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
+                    {!policyAccepted && currentRoomId && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
 
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
@@ -820,7 +876,12 @@
             const [expireHours, setExpireHours] = useState(2);
             const [autoJoin, setAutoJoin] = useState(false);
 
-            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); };
+            const close = () => { 
+                if (modal.type === 'idle_warning') {
+                    socket.emit('active_event');
+                }
+                setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); 
+            };
 
             let content = null;
             if (modal.type === 'success' || modal.type === 'error') {
@@ -830,6 +891,16 @@
                         <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
                     </>
                 );
+            } else if (modal.type === 'error_reload') {
+                content = (
+                    <div className="text-center py-3">
+                        <i className="fas fa-exclamation-triangle fs-1 text-danger mb-3"></i>
+                        <div className="mb-4 text-muted fw-bold">{modal.content}</div>
+                        <button className="btn btn-primary w-100 rounded-pill shadow fw-bold" onClick={() => window.location.reload()}>Refresh Page</button>
+                    </div>
+                );
+            } else if (modal.type === 'idle_warning') {
+                content = <IdleWarningContent close={close} socket={socket} />;
             } else if (modal.type === 'create_room') {
                 let baseRoomCost = isPriv ? (maxMembers + (expireHours === 12 ? 10 : (expireHours === 4 ? 4 : 2))) : 0;
                 let autoJoinCost = (autoJoin && !isPriv) ? 1 : 0;
@@ -1042,7 +1113,7 @@
                     <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
                         <div className="d-flex justify-content-between align-items-center mb-3">
                             <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
-                            <button className="btn-close" onClick={close}></button>
+                            {modal.type !== 'error_reload' && modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
                         </div>
                         {content}
                     </div>
