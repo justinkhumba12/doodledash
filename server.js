@@ -67,14 +67,15 @@ const getInitialInks = () => {
 };
 
 // ---------------------------------------------------------
-// RAM MEMORY STORAGE (Replacing Heavy MySQL Usage)
+// RAM MEMORY STORAGE
 // ---------------------------------------------------------
 const memoryRooms = new Map();
 const roomChats = {};
 const roomGuesses = {};
 const roomDrawings = {};
 const roomRedoStacks = {};
-const userProfiles = new Map(); // Cache profile pics to avoid DB lookups
+const userProfiles = new Map();
+const activeGuessPayments = new Set(); // Concurrency lock for payments
 
 let nextRoomId = 1;
 let chatCounter = 1;
@@ -86,7 +87,7 @@ for (let i = 1; i <= 5; i++) {
     memoryRooms.set(i, {
         id: i, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
         round_end_time: null, break_end_time: null, last_winner_id: null,
-        turn_index: 0, modified_at: new Date(), is_private: 0, // Using turn_index for Join Order turns
+        turn_index: 0, modified_at: new Date(), is_private: 0,
         password: null, max_members: 4, base_hints: '[]', creator_id: null, expire_at: null,
         members: [] 
     });
@@ -98,7 +99,7 @@ for (let i = 1; i <= 5; i++) {
 }
 
 // ---------------------------------------------------------
-// DATABASE CONNECTION (Only for Users / Credits)
+// DATABASE CONNECTION
 // ---------------------------------------------------------
 let db;
 async function initDB() {
@@ -252,7 +253,7 @@ async function getUserState(tg_id) {
     const [rows] = await db.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 60)) as ad1_available,
+        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 60)) as ad1_available,
         (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 45)) as ad2_available,
         GREATEST(0, 60 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 60)) as ad1_wait_mins,
         GREATEST(0, 45 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 45)) as ad2_wait_mins,
@@ -556,6 +557,7 @@ io.on('connection', (socket) => {
             else if (type === 'ad' || type === 'ad2') {
                 const prefix = type === 'ad' ? 'ad' : 'ad2';
                 const cooldown = prefix === 'ad' ? 60 : 45;
+                const maxClaims = prefix === 'ad' ? 3 : 5; // Enforce limits correctly
                 
                 const [u] = await db.query(`SELECT
                     ${prefix}_claims_today as claims,
@@ -569,13 +571,21 @@ io.on('connection', (socket) => {
                     const isToday = user.last_date === user.today;
 
                     if (!user.last_date || !isToday) {
-                        await db.query(`UPDATE users SET credits = credits + 1, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +1 Credit';
-                    } else if (user.claims < 5 && (user.mins_passed === null || user.mins_passed >= cooldown)) {
-                        await db.query(`UPDATE users SET credits = credits + 1, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +1 Credit';
+                        const reward = 1;
+                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [reward, currentUser]);
+                        success = true; msg = `Reward claimed! +${reward} Credit`;
+                    } else if (user.claims < maxClaims && (user.mins_passed === null || user.mins_passed >= cooldown)) {
+                        const newClaimCount = user.claims + 1;
+                        
+                        // Check for Tiered Bonuses
+                        let reward = 1;
+                        if (prefix === 'ad' && newClaimCount === 3) reward = 2;
+                        if (prefix === 'ad2' && (newClaimCount === 4 || newClaimCount === 5)) reward = 2;
+
+                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = ?, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [reward, newClaimCount, currentUser]);
+                        success = true; msg = `Reward claimed! +${reward} Credit${reward > 1 ? 's' : ''}`;
                     } else {
-                        msg = `Ad reward not available yet. Max 5 per day, ${cooldown} mins apart.`;
+                        msg = `Ad reward not available yet. Max ${maxClaims} per day, ${cooldown} mins apart.`;
                     }
                 }
             }
@@ -603,9 +613,10 @@ io.on('connection', (socket) => {
 
                 if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                 
+                // Base Cost depends exactly on user limit (2, 3, or 4 credits)
+                cost += limit; 
+                
                 const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
-                let timeCost = hours === 4 ? 2 : 1;
-                cost += timeCost;
                 expDate = new Date(Date.now() + hours * 3600000);
             }
 
@@ -808,16 +819,35 @@ io.on('connection', (socket) => {
             const currentGuesses = roomGuesses[currentRoom] || [];
             const myGuessCount = currentGuesses.filter(g => g.user_id === currentUser).length;
             
+            // Strictly enforce MAX 6 guesses
             if (myGuessCount >= 6) {
                 return socket.emit('create_error', 'No more guesses allowed this round.');
             }
 
-            if (myGuessCount >= 4) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+            // On the 5th guess attempt (index 4), require 1 Credit to unlock both #5 and #6.
+            if (myGuessCount === 4) {
+                if (activeGuessPayments.has(currentUser)) return;
+                activeGuessPayments.add(currentUser);
+                try {
+                    const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                    if (u[0].credits < 1) {
+                        activeGuessPayments.delete(currentUser);
+                        return socket.emit('create_error', 'Not enough credits to unlock extra guesses! (Cost: 1 Credit)');
+                    }
+                    await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                    
+                    const userState = await getUserState(currentUser);
+                    if (userState) socket.emit('user_update', userState);
+                } catch (e) {
+                    activeGuessPayments.delete(currentUser);
+                    return console.error('Guess Payment Error:', e);
+                }
+                activeGuessPayments.delete(currentUser);
             }
             
+            // Re-check count after potential async delay
+            if ((roomGuesses[currentRoom] || []).filter(g => g.user_id === currentUser).length >= 6) return;
+
             const isCorrect = room.word_to_draw && room.word_to_draw.toLowerCase() === guess.trim().toLowerCase();
             
             roomGuesses[currentRoom].push({ id: guessCounter++, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() });
@@ -828,9 +858,6 @@ io.on('connection', (socket) => {
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
             }
-            
-            const userState = await getUserState(currentUser);
-            if (userState) socket.emit('user_update', userState);
 
             syncRoom(currentRoom);
         } catch (err) {
