@@ -83,10 +83,10 @@
     </style>
 </head>
 <body>
-    <audio id="mgsSound" src="/audio/mgs_notification.mp3" preload="auto"></audio>
-    <audio id="guessSound" src="/audio/guess_notification.mp3" preload="auto"></audio>
-    <audio id="callSound" src="/audio/call.mp3" loop preload="auto"></audio>
-    <audio id="bgmSound" loop preload="auto"></audio>
+    <audio id="mgsSound" src="/audio/mgs_notification.mp3" playsinline preload="auto"></audio>
+    <audio id="guessSound" src="/audio/guess_notification.mp3" playsinline preload="auto"></audio>
+    <audio id="callSound" src="/audio/call.mp3" loop playsinline preload="auto"></audio>
+    <audio id="bgmSound" loop playsinline preload="auto"></audio>
 
     <div id="root"></div>
 
@@ -134,7 +134,6 @@
             const [glowToggle, setGlowToggle] = useState(false);
             const [modal, setModal] = useState(null);
             const [profileModal, setProfileModal] = useState(null);
-            const [isOffline, setIsOffline] = useState(!navigator.onLine);
             const [openAcc, setOpenAcc] = useState('volumes');
             
             const [activeCall, setActiveCall] = useState(null);
@@ -146,8 +145,9 @@
             const [unreadChat, setUnreadChat] = useState(false);
             const [unreadGuess, setUnreadGuess] = useState(false);
 
-            // Single App Volume configures ALL notifications (calls, chats, guesses, bgm)
+            // Audio volumes
             const [appVol, setAppVol] = useState(() => parseFloat(localStorage.getItem('appVol') ?? '1.0'));
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15'));
             
             const defaultBGM = 'themesongdefault.mp3';
             const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
@@ -168,22 +168,6 @@
             const prevChatsCount = useRef(0);
             const prevGuessesCount = useRef(0);
 
-            // Handle online/offline events explicitly
-            useEffect(() => {
-                const handleOffline = () => setIsOffline(true);
-                const handleOnline = () => {
-                    if (socketRef.current && socketRef.current.connected) {
-                        setIsOffline(false);
-                    }
-                };
-                window.addEventListener('offline', handleOffline);
-                window.addEventListener('online', handleOnline);
-                return () => {
-                    window.removeEventListener('offline', handleOffline);
-                    window.removeEventListener('online', handleOnline);
-                };
-            }, []);
-
             if (!tgId) {
                 return (
                     <div className="container mt-5 text-center">
@@ -198,12 +182,19 @@
 
             // Sync master volume
             useEffect(() => {
-                ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
+                ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
                     const s = document.getElementById(id);
                     if (s) s.volume = appVol;
                 });
                 localStorage.setItem('appVol', appVol);
             }, [appVol]);
+
+            // Sync BGM volume
+            useEffect(() => {
+                const s = document.getElementById('bgmSound');
+                if (s) s.volume = bgmVol;
+                localStorage.setItem('bgmVol', bgmVol);
+            }, [bgmVol]);
 
             // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
@@ -270,17 +261,25 @@
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
                 localStorage.setItem('audioPolicy', 'true');
-                
-                // Unlock all native audio contexts silently
+                audioUnlocked.current = true;
+
+                // Unlock all native audio contexts gracefully triggered by standard touch click.
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        el.play().then(() => {
-                            if(id !== 'bgmSound' && id !== 'callSound') {
-                                el.pause();
-                                el.currentTime = 0;
-                            }
-                        }).catch(()=>{});
+                        el.volume = (id === 'bgmSound') ? bgmVol : appVol;
+                        const p = el.play();
+                        if (p !== undefined) {
+                            p.then(() => {
+                                if(id !== 'bgmSound' && id !== 'callSound') {
+                                    el.pause();
+                                    el.currentTime = 0;
+                                } else if (id === 'callSound' && !(activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId)) {
+                                    el.pause();
+                                    el.currentTime = 0;
+                                }
+                            }).catch(()=>{});
+                        }
                     }
                 });
             };
@@ -289,25 +288,6 @@
             const handleGlobalInteraction = () => {
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
                     remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
-                }
-
-                if (!audioUnlocked.current && policyAccepted) {
-                    audioUnlocked.current = true;
-                    ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
-                        const s = document.getElementById(id);
-                        if (s && s.paused) {
-                            const originalVol = s.volume;
-                            s.volume = 0;
-                            const p = s.play();
-                            if (p !== undefined) {
-                                p.then(() => {
-                                    s.pause();
-                                    s.currentTime = 0;
-                                    s.volume = appVol;
-                                }).catch(() => {});
-                            }
-                        }
-                    });
                 }
             };
 
@@ -493,16 +473,17 @@
             };
 
             useEffect(() => {
-                const socket = io({ transports: ['websocket'], upgrade: false });
+                const socket = io({ 
+                    transports: ['websocket', 'polling'], 
+                    reconnection: true,
+                    reconnectionDelay: 1000,
+                    reconnectionDelayMax: 5000,
+                    reconnectionAttempts: Infinity
+                });
                 socketRef.current = socket;
 
                 socket.on('connect', () => {
-                    setIsOffline(false);
                     socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
-                });
-
-                socket.on('disconnect', () => {
-                    setIsOffline(true);
                 });
 
                 socket.on('lobby_data', (data) => {
@@ -644,18 +625,7 @@
                         </div>
                     </div>
 
-                    {isOffline && (
-                        <div className="wb-overlay" style={{zIndex: 99999, background: 'rgba(0,0,0,0.9)', position: 'fixed'}}>
-                            <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
-                                <i className="fas fa-wifi fa-slash fs-1 text-danger mb-3 heartbeat"></i>
-                                <h4 className="fw-bold text-dark">Connection Lost</h4>
-                                <p className="text-muted small">You are currently offline or disconnected from the server. Please check your internet connection. Reconnecting...</p>
-                                <div className="spinner-border text-danger mt-2" role="status"></div>
-                            </div>
-                        </div>
-                    )}
-
-                    {currentRoomId && !policyAccepted && !isOffline && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
+                    {currentRoomId && !policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
 
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
@@ -728,9 +698,9 @@
                                                         </h2>
                                                         <div className={`accordion-collapse collapse ${openAcc === 'volumes' ? 'show' : ''}`}>
                                                             <div className="accordion-body bg-white pb-1">
-                                                                <div className="mb-3">
+                                                                <div className="mb-3 mt-1">
                                                                     <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>App Volume</span>
+                                                                        <span>Notification & Calls</span>
                                                                         <span className="text-primary">{Math.round(appVol * 100)}%</span>
                                                                     </label>
                                                                     <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
@@ -743,7 +713,7 @@
                                                                         }} />
                                                                 </div>
                                                                 <div className="alert alert-light border small text-muted">
-                                                                    <i className="fas fa-info-circle text-primary"></i> This sets the volume for calls, notifications, and background music.
+                                                                    <i className="fas fa-info-circle text-primary"></i> Master volume for alerts, chats, and calls.
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -758,6 +728,19 @@
                                                         </h2>
                                                         <div className={`accordion-collapse collapse ${openAcc === 'themes' ? 'show' : ''}`}>
                                                             <div className="accordion-body bg-white">
+                                                                <div className="mb-4">
+                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                        <span>Music Volume</span>
+                                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
+                                                                    </label>
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
+                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                        onChange={e => {
+                                                                            const v = parseFloat(e.target.value);
+                                                                            setBgmVol(v);
+                                                                        }} />
+                                                                </div>
+
                                                                 <button 
                                                                     className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
                                                                     onClick={() => {
