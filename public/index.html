@@ -112,6 +112,17 @@
             };
             return map[status] || 'Unknown Phase';
         };
+        
+        // Custom Haptic Vibration function mapped to Telegram WebApp API
+        const triggerVibration = (style) => {
+            if (window.Telegram?.WebApp?.HapticFeedback) {
+                if (style === 'warning' || style === 'error' || style === 'success') {
+                    window.Telegram.WebApp.HapticFeedback.notificationOccurred(style);
+                } else {
+                    window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+                }
+            }
+        };
 
         const AudioPolicyModal = ({ onAccept }) => (
             <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
@@ -189,12 +200,15 @@
                 localStorage.setItem('appVol', appVol);
             }, [appVol]);
 
-            // Sync BGM volume
+            // Sync BGM volume & Apply 40% reduction when in ACTIVE call
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
-                if (s) s.volume = bgmVol;
+                if (s) {
+                    const isInCall = activeCall && activeCall.status === 'ACTIVE';
+                    s.volume = isInCall ? (bgmVol * 0.4) : bgmVol;
+                }
                 localStorage.setItem('bgmVol', bgmVol);
-            }, [bgmVol]);
+            }, [bgmVol, activeCall]);
 
             // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
@@ -206,6 +220,7 @@
                     if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
                         const s = document.getElementById('mgsSound');
                         if (s) s.play().catch(()=>{});
+                        triggerVibration('medium'); // Haptic feedback trigger for Message
                         
                         if (activeTab !== 'chat' || !panelOpen) {
                             setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
@@ -221,6 +236,7 @@
                     if (newGuesses.some(g => g.user_id !== tgId)) {
                         const s = document.getElementById('guessSound');
                         if (s) s.play().catch(()=>{});
+                        triggerVibration('light'); // Haptic feedback trigger for Guess
                         
                         if (activeTab !== 'guess' || !panelOpen) {
                             setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
@@ -267,7 +283,7 @@
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        el.volume = (id === 'bgmSound') ? bgmVol : appVol;
+                        el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
                         const p = el.play();
                         if (p !== undefined) {
                             p.then(() => {
@@ -291,23 +307,26 @@
                 }
             };
 
-            // Call receiving logic
+            // Call receiving logic with Interval Vibration
             useEffect(() => {
                 const s = document.getElementById('callSound');
+                let vibInterval;
+                
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
                     if(s && policyAccepted) {
-                        s.play().catch(() => {
-                            if (window.Telegram?.WebApp?.HapticFeedback) {
-                                window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
-                            }
-                        });
+                        s.play().catch(() => {});
                     }
+                    triggerVibration('warning'); // Vibrate upon incoming call immediately
+                    vibInterval = setInterval(() => triggerVibration('warning'), 1500); // Continuous vibration pattern
                 } else {
                     if(s) {
                         s.pause();
                         s.currentTime = 0;
                     }
+                    if (vibInterval) clearInterval(vibInterval);
                 }
+                
+                return () => { if (vibInterval) clearInterval(vibInterval); };
             }, [activeCall, tgId, policyAccepted]);
 
             const requestMic = async () => {
