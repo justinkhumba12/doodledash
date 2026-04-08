@@ -124,23 +124,37 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200); 
 
     const token = process.env.BOT_TOKEN; 
-    const webAppUrl = process.env.WEBAPP_URL; 
-    if (!token || !webAppUrl) return;
+    if (!token) return;
+
+    // Build WebApp URL dynamically (Fallback for missing ENV)
+    const host = req.get('host');
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const fallbackUrl = `${protocol}://${host}/`;
+    const webAppUrl = process.env.WEBAPP_URL || fallbackUrl; 
+
+    // Native Node.js request wrapper (100% compatible & avoids fetch() crashes on older node environments)
+    const tgApiCall = (method, data) => {
+        const https = require('https');
+        const payload = JSON.stringify(data);
+        const options = {
+            hostname: 'api.telegram.org',
+            port: 443,
+            path: `/bot${token}/${method}`,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+        };
+        const request = https.request(options);
+        request.on('error', console.error);
+        request.write(payload);
+        request.end();
+    };
 
     const sendMsg = (chatId, text, replyMarkup) => {
-        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
-        }).catch(console.error);
+        tgApiCall('sendMessage', { chat_id: chatId, text, reply_markup: replyMarkup });
     };
 
     if (update?.pre_checkout_query) {
-        fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true })
-        });
+        tgApiCall('answerPreCheckoutQuery', { pre_checkout_query_id: update.pre_checkout_query.id, ok: true });
         return;
     }
 
@@ -165,19 +179,22 @@ app.post('/webhook', async (req, res) => {
         const username = update.message.from.username;
         
         try {
-            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
+            // Guarantee user registers ONCE, granting 5 credits.
+            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
+            // Update activity state safely without resetting their credits.
+            await db.query('UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?', [username || null, tgId.toString()]);
         } catch (e) {
             console.error('Webhook DB Error:', e);
         }
 
         if (update.message.text === '/start load_balance') {
-            sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1000 Credits = 500 Telegram Stars*", {
+            sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1 Credit = 1 Telegram Star*", {
                 inline_keyboard: [
-                    [{ text: '50 Credits (25 ⭐️)', callback_data: 'buy_50' }],
-                    [{ text: '100 Credits (50 ⭐️)', callback_data: 'buy_100' }],
-                    [{ text: '200 Credits (100 ⭐️)', callback_data: 'buy_200' }],
-                    [{ text: '500 Credits (250 ⭐️)', callback_data: 'buy_500' }],
-                    [{ text: '1000 Credits (500 ⭐️)', callback_data: 'buy_1000' }]
+                    [{ text: '1 Credit (1 ⭐️)', callback_data: 'buy_1' }, { text: '10 Credits (10 ⭐️)', callback_data: 'buy_10' }],
+                    [{ text: '20 Credits (20 ⭐️)', callback_data: 'buy_20' }, { text: '50 Credits (50 ⭐️)', callback_data: 'buy_50' }],
+                    [{ text: '100 Credits (100 ⭐️)', callback_data: 'buy_100' }],
+                    [{ text: '500 Credits (500 ⭐️)', callback_data: 'buy_500' }],
+                    [{ text: '1000 Credits (1000 ⭐️)', callback_data: 'buy_1000' }]
                 ]
             });
             return;
@@ -191,15 +208,14 @@ app.post('/webhook', async (req, res) => {
         const query = update.callback_query;
         const chatId = query.message.chat.id;
         const tgId = query.from.id;
-        const username = query.from.username;
-        const messageId = query.message.message_id;
 
         if (query.data.startsWith('buy_')) {
             const amount = parseInt(query.data.split('_')[1]);
-            const stars = amount / 2; // 1000 creds = 500 stars
+            const stars = amount; // 1 cred = 1 star
             
             const payload = JSON.stringify({ tgId: tgId.toString(), amount: amount });
-            const invoice = {
+            
+            tgApiCall('sendInvoice', {
                 chat_id: chatId,
                 title: `${amount} DoodleDash Credits`,
                 description: `Top up your account with ${amount} credits.`,
@@ -207,19 +223,9 @@ app.post('/webhook', async (req, res) => {
                 provider_token: "", // Empty for Telegram Stars
                 currency: "XTR",
                 prices: [{ label: `${amount} Credits`, amount: stars }]
-            };
-            
-            fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(invoice)
-            }).catch(console.error);
-            
-            fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ callback_query_id: query.id })
             });
+            
+            tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
         }
     }
 });
