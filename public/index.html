@@ -525,6 +525,7 @@
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
                 socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
                 socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
+                socket.on('ink_empty', () => setModal({ type: 'confirm_buy_ink', title: 'Ink Depleted' }));
                 
                 socket.on('join_success', (roomId) => {
                     setCurrentRoomId(roomId);
@@ -1061,6 +1062,19 @@
                         </div>
                     </>
                 );
+            } else if (modal.type === 'confirm_buy_ink') {
+                content = (
+                    <>
+                        <div className="alert alert-warning text-center fw-bold">
+                            <i className="fas fa-pen-slash fs-2 mb-2"></i><br/>Out of Ink!
+                        </div>
+                        <p className="text-muted text-center">You've reached the drawing limit for this round. Buy 30 more strokes for 1 Credit?</p>
+                        <div className="d-flex gap-2 mt-4">
+                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy (1 Cred)</button>
+                        </div>
+                    </>
+                );
             }
 
             return (
@@ -1419,6 +1433,7 @@
 
         const Whiteboard = ({ roomData, tgId, socket }) => {
             const canvasRef = useRef(null);
+            const lastStrokeTime = useRef(0);
             const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
             const isDrawingPhase = room.status === 'DRAWING';
@@ -1508,8 +1523,15 @@
             const stopDraw = () => {
                 if(!drawing) return;
                 drawing = false;
+                
+                const now = Date.now();
+                if (now - lastStrokeTime.current < 250) {
+                    return; 
+                }
+                
                 if(currentLine.length > 0) {
                     socket.emit('draw', { lines: currentLine });
+                    lastStrokeTime.current = now;
                 }
             };
 
