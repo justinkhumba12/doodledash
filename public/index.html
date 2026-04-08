@@ -91,6 +91,17 @@
     <div id="root"></div>
 
     <script type="text/babel">
+        const INK_CONFIG = {
+            black: { free: 1500, extra: 1500, cost: 0.5 },
+            white: { free: 500, extra: 1000, cost: 0.5 },
+            red: { free: 200, extra: 1000, cost: 0.5 },
+            blue: { free: 300, extra: 1000, cost: 0.5 },
+            green: { free: 300, extra: 1000, cost: 0.5 },
+            yellow: { free: 300, extra: 1000, cost: 0.5 },
+            purple: { free: 300, extra: 1000, cost: 0.5 },
+            orange: { free: 300, extra: 1000, cost: 0.5 }
+        };
+
         const { useState, useEffect, useRef, useCallback } = React;
         
         const tg = window.Telegram.WebApp;
@@ -872,7 +883,9 @@
                     </>
                 );
             } else if (modal.type === 'create_room') {
-                let baseRoomCost = isPriv ? maxMembers : 0;
+                let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
+                let durationCost = expireHours === 2 ? 1 : 2;
+                let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
                 let autoJoinCost = (autoJoin && !isPriv) ? 1 : 0;
                 let totalCostDisplay = baseRoomCost + autoJoinCost;
 
@@ -886,9 +899,9 @@
                             <>
                                 <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
                                 <div className="mb-3">
-                                    <label className="form-label text-muted small mb-1">Max Players (Cost equals players)</label>
+                                    <label className="form-label text-muted small mb-1">Max Players</label>
                                     <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
-                                        <option value={2}>2 Players (2 Credits)</option>
+                                        <option value={2}>2 Players (1 Credit)</option>
                                         <option value={3}>3 Players (3 Credits)</option>
                                         <option value={4}>4 Players (4 Credits)</option>
                                     </select>
@@ -896,8 +909,8 @@
                                 <div className="mb-3">
                                     <label className="form-label text-muted small mb-1">Room Duration</label>
                                     <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                                        <option value={2}>2 Hours</option>
-                                        <option value={4}>4 Hours</option>
+                                        <option value={2}>2 Hours (1 Credit)</option>
+                                        <option value={4}>4 Hours (2 Credits)</option>
                                     </select>
                                 </div>
                             </>
@@ -1067,7 +1080,7 @@
             } else if (modal.type === 'confirm_drawer_give_up') {
                 content = (
                     <>
-                        <p className="text-muted text-center mb-4">Are you sure you want to give up drawing? This will immediately end the round.</p>
+                        <p className="text-muted text-center mb-4">Are you sure you want to give up? This will skip your turn immediately.</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Give Up</button>
@@ -1087,10 +1100,10 @@
             } else if (modal.type === 'confirm_buy_ink') {
                 content = (
                     <>
-                        <p className="text-muted text-center mb-4">Refill your ink to keep drawing? (Cost: 1 Credit)</p>
+                        <p className="text-muted text-center mb-4">Refill your <span style={{color: modal.color === 'white' ? '#94a3b8' : modal.color, fontWeight: 'bold'}}>{modal.color}</span> ink to keep drawing?</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy (1 Cred)</button>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: modal.color }); close(); }}>Buy ({modal.cost} Cred)</button>
                         </div>
                     </>
                 );
@@ -1163,14 +1176,14 @@
                 }
             };
 
-            const renderAdBtn = (adNum, title) => {
+            const renderAdBtn = (adNum) => {
                 const prefix = adNum === 1 ? 'ad' : 'ad2';
                 const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
                 const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
                 const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
                 const maxClaims = adNum === 1 ? 3 : 5;
 
-                let btnText = title;
+                let btnText = `Watch ad (${claims}/${maxClaims})`;
                 let disabled = false;
                 
                 let bonusText = '';
@@ -1193,7 +1206,7 @@
 
                 return (
                     <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
-                        {btnText}{bonusText} ({claims}/${maxClaims})
+                        {btnText}{bonusText}
                     </button>
                 );
             };
@@ -1248,10 +1261,10 @@
                         <div className="col-md-6 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
                                 <h5><i className="fas fa-tv"></i> Ad Bonuses</h5>
-                                <p className="small mb-2">Watch ads to earn Credits!</p>
+                                <p className="small mb-2">Watch ads to earn Credits! (Bonus credits on final views)</p>
                                 <div className="d-flex flex-column gap-2 mt-2">
-                                    {renderAdBtn(1, 'Watch Ad 1')}
-                                    {renderAdBtn(2, 'Watch Ad 2')}
+                                    {renderAdBtn(1)}
+                                    {renderAdBtn(2)}
                                 </div>
                             </div>
                         </div>
@@ -1461,6 +1474,8 @@
         const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             const canvasRef = useRef(null);
             const [localTimeLeft, setLocalTimeLeft] = useState(0);
+            const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
+            const [activeColor, setActiveColor] = useState('black');
             
             // Refs prevent unnecessary React re-renders while drawing and tracking fast movements
             const drawingRef = useRef(false);
@@ -1480,12 +1495,13 @@
             const myData = members.find(m => m.user_id === tgId) || {};
             
             // Max Ink allowed (length in px)
-            const maxInk = 4000 + (myData.extra_ink || 0);
+            const inkStats = myData.inks?.[activeColor] || {used: 0, extra: 0};
+            const maxInk = (INK_CONFIG[activeColor]?.free || 1500) + (inkStats.extra || 0);
 
             useEffect(() => {
-                inkUsedRef.current = myData.ink_used || 0;
+                inkUsedRef.current = inkStats.used || 0;
                 updateInkUI();
-            }, [myData.ink_used, myData.extra_ink]);
+            }, [inkStats.used, inkStats.extra, activeColor]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1503,6 +1519,22 @@
                 }
             }, [room.status, room.break_end_time, roomData.server_time]);
 
+            // Timer for PreDraw Choice
+            useEffect(() => {
+                if (room.status === 'PRE_DRAW' && room.round_end_time) {
+                    const offset = Date.now() - new Date(roomData.server_time).getTime();
+                    const targetTime = new Date(room.round_end_time).getTime() + offset;
+                    
+                    const updateTime = () => {
+                        const diff = targetTime - Date.now();
+                        setPreDrawTimeLeft(Math.max(0, Math.ceil(diff / 1000)));
+                    };
+                    updateTime();
+                    const intv = setInterval(updateTime, 1000);
+                    return () => clearInterval(intv);
+                }
+            }, [room.status, room.round_end_time, roomData.server_time]);
+
             const updateInkUI = () => {
                 if (!isDrawer || !isDrawingPhase) return;
                 const inkLeft = Math.max(0, maxInk - inkUsedRef.current);
@@ -1514,10 +1546,16 @@
                 
                 if (bar) {
                     bar.style.width = `${inkPercent}%`;
-                    bar.className = `progress-bar progress-bar-striped progress-bar-animated ${inkLeft <= 500 ? 'bg-danger' : (inkLeft <= 1500 ? 'bg-warning' : 'bg-primary')}`;
+                    if (inkLeft <= (maxInk * 0.2)) {
+                        bar.style.backgroundColor = '';
+                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+                    } else {
+                        bar.style.backgroundColor = activeColor === 'white' ? '#e2e8f0' : activeColor;
+                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+                    }
                 }
                 if (text) {
-                    text.className = inkLeft <= 500 ? 'text-danger fw-bold' : 'text-muted';
+                    text.className = inkLeft <= (maxInk * 0.2) ? 'text-danger fw-bold' : 'text-muted';
                     text.innerText = `${Math.floor(inkLeft)} / ${maxInk}`;
                 }
                 if (buyBtn) {
@@ -1530,14 +1568,14 @@
                 if(!canvas) return;
                 const ctx = canvas.getContext('2d');
                 ctx.clearRect(0,0, canvas.width, canvas.height);
-                ctx.strokeStyle = '#334155';
                 ctx.lineCap = 'round';
                 ctx.lineWidth = 5;
                 
                 drawings.forEach(jsonStr => {
                     try {
-                        const lines = JSON.parse(jsonStr);
-                        lines.forEach(l => {
+                        const data = JSON.parse(jsonStr);
+                        ctx.strokeStyle = data.color === 'white' ? '#ffffff' : (data.color || 'black');
+                        data.lines.forEach(l => {
                             ctx.beginPath();
                             ctx.moveTo(l.x0, l.y0);
                             ctx.lineTo(l.x1, l.y1);
@@ -1550,10 +1588,16 @@
             useEffect(() => { redraw(); }, [redraw]);
 
             useEffect(() => {
-                const handleLiveDraw = (lines) => {
+                const handleLiveDraw = (data) => {
+                    let lines, color;
+                    if (Array.isArray(data)) {
+                        lines = data; color = 'black';
+                    } else {
+                        lines = data.lines; color = data.color;
+                    }
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = '#334155';
+                    ctx.strokeStyle = color === 'white' ? '#ffffff' : (color || '#334155');
                     ctx.lineCap = 'round';
                     ctx.lineWidth = 5;
                     lines.forEach(l => {
@@ -1594,7 +1638,7 @@
                 
                 if (inkUsedRef.current + dist > maxInk) {
                     stopDraw(); 
-                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' });
+                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor, cost: INK_CONFIG[activeColor].cost });
                     return;
                 }
                 
@@ -1605,6 +1649,7 @@
                 ctx.beginPath();
                 ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
                 ctx.lineTo(newPos.x, newPos.y);
+                ctx.strokeStyle = activeColor === 'white' ? '#ffffff' : activeColor;
                 ctx.stroke();
 
                 currentLineRef.current.push({x0: lastPosRef.current.x, y0: lastPosRef.current.y, x1: newPos.x, y1: newPos.y});
@@ -1619,7 +1664,7 @@
                 if (now - lastStrokeTime.current < 100) return; 
                 
                 if(currentLineRef.current.length > 0) {
-                    socket.emit('draw', { lines: currentLineRef.current });
+                    socket.emit('draw', { lines: currentLineRef.current, color: activeColor });
                     lastStrokeTime.current = now;
                 }
             };
@@ -1627,18 +1672,37 @@
             return (
                 <div className="w-100 d-flex flex-column align-items-center">
                     {isDrawer && isDrawingPhase && (
-                        <div className="w-100 mb-3 px-2" style={{maxWidth: '500px'}}>
+                        <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
+                            
+                            <div className="d-flex justify-content-center gap-2 mb-2 flex-wrap">
+                                {Object.keys(INK_CONFIG).map(c => (
+                                    <div 
+                                        key={c}
+                                        onClick={() => setActiveColor(c)}
+                                        style={{
+                                            backgroundColor: c === 'white' ? '#f8fafc' : c,
+                                            width: '30px', height: '30px', 
+                                            borderRadius: '50%',
+                                            border: activeColor === c ? '3px solid #6366f1' : '2px solid #cbd5e1',
+                                            cursor: 'pointer',
+                                            boxShadow: activeColor === c ? '0 0 10px rgba(99,102,241,0.5)' : 'none'
+                                        }}
+                                        title={c}
+                                    />
+                                ))}
+                            </div>
+
                             <div className="d-flex justify-content-between small fw-bold mb-1">
-                                <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - (myData.ink_used || 0)))} / {maxInk}</span>
+                                <span className="text-primary"><i className="fas fa-tint"></i> <span style={{textTransform: 'capitalize'}}>{activeColor}</span> Ink Level</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - (inkStats.used || 0)))} / {maxInk}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
                                 <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                                      style={{width: '100%', transition: 'width 0.1s'}}></div>
                             </div>
                             <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' })}>
-                                    <i className="fas fa-plus-circle"></i> Refill Ink (1 Cred)
+                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor, cost: INK_CONFIG[activeColor].cost })}>
+                                    <i className="fas fa-plus-circle"></i> Refill {activeColor} ({INK_CONFIG[activeColor].cost} Cred)
                                 </button>
                             </div>
                         </div>
@@ -1654,6 +1718,7 @@
                         {room.status === 'PRE_DRAW' && isDrawer && (
                             <div className="wb-overlay">
                                 <h4 className="text-primary fw-bold">Your turn to draw!</h4>
+                                <h5 className="text-danger fw-bold">{preDrawTimeLeft}s</h5>
                                 <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
                                 <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
                                 <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
@@ -1795,7 +1860,7 @@
                         <div ref={messagesEndRef} />
                     </div>
                     
-                    {roomData.room.status === 'DRAWING' ? (
+                    {roomData.room.status === 'DRAWING' || roomData.room.status === 'PRE_DRAW' ? (
                         <div className="chat-input-wrapper d-flex flex-column mt-auto">
                             <button 
                                 className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
@@ -1805,10 +1870,10 @@
                                 disabled={!isDrawer && hasGivenUp}
                             >
                                 <i className="fas fa-flag"></i> 
-                                {isDrawer ? 'Give Up Drawing' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                                {isDrawer ? 'Give Up Turn' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
                             </button>
 
-                            {(!isDrawer && !hasGivenUp) ? (
+                            {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
                                 <div className="d-flex w-100">
                                     <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
                                         value={input} onChange={e=>setInput(e.target.value)} 
@@ -1829,7 +1894,7 @@
 
                             {isDrawer ? (
                                 <div className="text-center text-muted p-2 fst-italic small fw-bold">
-                                    You are the drawer. Use tools to draw!
+                                    {roomData.room.status === 'PRE_DRAW' ? 'Choose a word to draw!' : 'You are the drawer. Use tools to draw!'}
                                 </div>
                             ) : null}
                         </div>
