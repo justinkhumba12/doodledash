@@ -115,7 +115,9 @@
                     <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
                     <h4 className="fw-bold">Enable Notifications</h4>
                     <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically, please accept our audio policy.</p>
-                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Continue</button>
+                    <button className="btn btn-success rounded-pill px-5 py-3 fw-bold w-100 shadow mt-3 fs-5" onClick={onAccept}>
+                        <i className="fas fa-volume-up me-2"></i> Accept & Enable Audio
+                    </button>
                 </div>
             </div>
         );
@@ -159,12 +161,13 @@
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
             const [isOffline, setIsOffline] = useState(!navigator.onLine);
+            const [openAccordion, setOpenAccordion] = useState(null);
 
             // Volumes & Background Music settings
             const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
             const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
             const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
-            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.05')); // Default quiet BGM
+            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.05')); 
             
             const [isNotifying, setIsNotifying] = useState(false);
             
@@ -174,7 +177,8 @@
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
-            const [policyAccepted, setPolicyAccepted] = useState(() => localStorage.getItem('audioPolicy') === 'true');
+            // Tracking policy in sessionStorage to guarantee one interaction per session/reload
+            const [policyAccepted, setPolicyAccepted] = useState(() => sessionStorage.getItem('audioPolicy') === 'true');
 
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
@@ -183,6 +187,38 @@
             const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
+
+            const prevCountChats = useRef(0);
+            const prevCountGuesses = useRef(0);
+
+            // Global Notification Observers
+            useEffect(() => {
+                if (roomData && roomData.chats) {
+                    if (roomData.chats.length > prevCountChats.current) {
+                        const newChats = roomData.chats.slice(prevCountChats.current);
+                        if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
+                            const s = document.getElementById('mgsSound');
+                            if (s) { s.currentTime = 0; s.play().catch(()=>{}); }
+                            if (activeTab !== 'chat') setGlowToggle(true);
+                        }
+                    }
+                    prevCountChats.current = roomData.chats.length;
+                }
+            }, [roomData?.chats, tgId, activeTab]);
+
+            useEffect(() => {
+                if (roomData && roomData.guesses) {
+                    if (roomData.guesses.length > prevCountGuesses.current) {
+                        const newGuesses = roomData.guesses.slice(prevCountGuesses.current);
+                        if (newGuesses.some(g => g.user_id !== tgId)) {
+                            const s = document.getElementById('guessSound');
+                            if (s) { s.currentTime = 0; s.play().catch(()=>{}); }
+                            if (activeTab !== 'guess') setGlowToggle(true);
+                        }
+                    }
+                    prevCountGuesses.current = roomData.guesses.length;
+                }
+            }, [roomData?.guesses, tgId, activeTab]);
 
             // Network Offline detection
             useEffect(() => {
@@ -281,6 +317,7 @@
 
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
+                sessionStorage.setItem('audioPolicy', 'true');
                 localStorage.setItem('audioPolicy', 'true');
                 
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
@@ -707,71 +744,95 @@
                                             <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                         </div>
                                         
-                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} setGlowToggle={setGlowToggle} />}
-                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} setGlowToggle={setGlowToggle} />}
+                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
+                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
                                         {activeTab === 'sounds' && (
                                             <div className="panel-body">
                                                 <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
                                                 
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Message Volume</span>
-                                                        <span className="text-primary">{Math.round(msgVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setMsgVol(v);
-                                                            const s = document.getElementById('mgsSound');
-                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                        }} />
-                                                </div>
-                                                
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Guess Volume</span>
-                                                        <span className="text-primary">{Math.round(guessVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setGuessVol(v);
-                                                            const s = document.getElementById('guessSound');
-                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                        }} />
+                                                <div className="accordion mb-4" id="soundAccordion">
+                                                    
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'msg' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'msg' ? null : 'msg')}>
+                                                                <i className="fas fa-comment-dots text-primary me-2"></i> Message Volume <span className="ms-auto text-primary me-2">{Math.round(msgVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'msg' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setMsgVol(v);
+                                                                        const s = document.getElementById('mgsSound');
+                                                                        if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'guess' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'guess' ? null : 'guess')}>
+                                                                <i className="fas fa-question-circle text-success me-2"></i> Guess Volume <span className="ms-auto text-success me-2">{Math.round(guessVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'guess' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setGuessVol(v);
+                                                                        const s = document.getElementById('guessSound');
+                                                                        if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'ring' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'ring' ? null : 'ring')}>
+                                                                <i className="fas fa-phone-alt text-warning me-2"></i> Call Ringtone <span className="ms-auto text-warning me-2">{Math.round(ringVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'ring' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3 border-start border-warning border-4">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setRingVol(v);
+                                                                        const s = document.getElementById('callSound');
+                                                                        if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="accordion-item border-0 shadow-sm mb-2 rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAccordion === 'bgm' ? '' : 'collapsed'} bg-light text-dark`} type="button" onClick={() => setOpenAccordion(openAccordion === 'bgm' ? null : 'bgm')}>
+                                                                <i className="fas fa-music text-info me-2"></i> Background Music <span className="ms-auto text-info me-2">{Math.round(bgmVol * 100)}%</span>
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAccordion === 'bgm' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white py-3 border-start border-info border-4">
+                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
+                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                    onChange={e => {
+                                                                        const v = parseFloat(e.target.value);
+                                                                        setBgmVol(v);
+                                                                    }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
                                                 </div>
 
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm border-start border-warning border-4">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Call Ringtone</span>
-                                                        <span className="text-warning">{Math.round(ringVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setRingVol(v);
-                                                            const s = document.getElementById('callSound');
-                                                            if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
-                                                        }} />
-                                                </div>
-
-                                                <div className="mb-4 bg-light p-3 rounded-4 shadow-sm border-start border-info border-4">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Background Music</span>
-                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setBgmVol(v);
-                                                        }} />
-                                                </div>
-
-                                                <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-music text-primary"></i> Theme Music</h6>
+                                                <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-record-vinyl text-primary"></i> Theme Music</h6>
                                                 
                                                 <button 
                                                     className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
@@ -1617,25 +1678,13 @@
             );
         };
 
-        const ChatBox = ({ chats, profiles, socket, tgId, setGlowToggle }) => {
+        const ChatBox = ({ chats, profiles, socket, tgId }) => {
             const [input, setInput] = useState('');
-            const prevCount = useRef(chats.length);
             const messagesEndRef = useRef(null);
             
             useEffect(() => {
-                if (chats.length > prevCount.current) {
-                    const newChats = chats.slice(prevCount.current);
-                    const isOthersMessage = newChats.some(c => c.user_id !== tgId && c.user_id !== 'System');
-                    if (isOthersMessage) {
-                        const s = document.getElementById('mgsSound');
-                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                        setGlowToggle(true);
-                        setTimeout(() => setGlowToggle(false), 3000);
-                    }
-                }
-                prevCount.current = chats.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [chats, tgId, setGlowToggle]);
+            }, [chats]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -1663,12 +1712,10 @@
             );
         };
 
-        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal, setGlowToggle }) => {
+        const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
             const [input, setInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
-            
-            const prevCount = useRef(guesses.length);
 
             const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
             const isFree = myGuessesCount < 5;
@@ -1691,19 +1738,8 @@
             };
 
             useEffect(() => {
-                if (guesses.length > prevCount.current) {
-                    const newGuesses = guesses.slice(prevCount.current);
-                    const shouldPlaySound = newGuesses.some(g => g.user_id !== tgId);
-                    if (shouldPlaySound) {
-                        const s = document.getElementById('guessSound');
-                        if (s) s.play().catch(e => console.log('Audio Autoplay Blocked:', e));
-                        setGlowToggle(true);
-                        setTimeout(() => setGlowToggle(false), 3000);
-                    }
-                }
-                prevCount.current = guesses.length;
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [guesses, tgId, setGlowToggle]);
+            }, [guesses]);
 
             return (
                 <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
