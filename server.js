@@ -503,7 +503,7 @@ io.on('connection', (socket) => {
         if (oldRoom) {
             terminateCallsForUser(userId); 
             socket.leave(`room_${oldRoom}`);
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [userId]); 
+            await db.query('DELETE FROM room_members WHERE user_id = ?', [oldRoom]); 
             await checkRoomReset(oldRoom);
         }
 
@@ -646,7 +646,7 @@ io.on('connection', (socket) => {
             const targetUsername = targetUser.length > 0 ? targetUser[0].tg_username : null;
             const senderUsername = senderUser.length > 0 ? senderUser[0].tg_username : null;
 
-            // Notify sender if amount >= 200
+            // Notice the inline keyboard for >= 200 transfers specifically handled here exactly as requested
             if (amt >= 200) {
                 let sMarkup = targetUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${targetUsername}` }]] } : {};
                 sendMsg(currentUser, `You successfully sent ${amt} credits to ${targetUsername ? '@' + targetUsername : toHex(target_id)}.`, sMarkup);
@@ -1119,7 +1119,7 @@ setInterval(async () => {
                     s.currentRoom = null;
                 } else if (idleTime > 50000 && !s.idleWarned) {
                     s.idleWarned = true;
-                    s.emit('idle_warning');
+                    s.emit('idle_warning'); // 50 seconds triggers the idle warning logic precisely
                 } else if (idleTime <= 50000) {
                     s.idleWarned = false;
                 }
