@@ -4,12 +4,26 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
+const { createClient } = require('redis');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 const app = express();
 const server = http.createServer(app);
+
+// Use Redis to support massive scaling across Node.js replicas
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const pubClient = createClient({ url: redisUrl });
+const subClient = pubClient.duplicate();
+const redisClient = pubClient.duplicate(); // Generic client for caching state
+
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
+
+Promise.all([pubClient.connect(), subClient.connect(), redisClient.connect()]).then(() => {
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('Redis connected and Socket.IO Adapter attached.');
+}).catch(e => console.error('Redis connection failed:', e));
 
 app.use(cors());
 app.use(express.json());
@@ -44,15 +58,21 @@ app.get('/sw.js', (req, res) => {
 
 const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
-// Database Connection
-let db;
+// Database Connection Pooling for Scalability
+let pool;
 async function initDB() {
     const dbUrl = process.env.MYSQL_URL || 'mysql://root:dKIKDNsnObjDvJlZawBHjzaEsoetaATX@mysql.railway.internal:3306/railway';
     try {
-        db = await mysql.createConnection({ uri: dbUrl, timezone: 'Z' });
-        console.log('Connected to MySQL Database.');
+        pool = mysql.createPool({ 
+            uri: dbUrl, 
+            timezone: 'Z',
+            connectionLimit: 100, // Handle high concurrency seamlessly
+            queueLimit: 0,
+            waitForConnections: true
+        });
+        console.log('Connected to MySQL Database via Pool.');
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 tg_id VARCHAR(50) PRIMARY KEY,
                 credits INT DEFAULT 0,
@@ -67,7 +87,7 @@ async function initDB() {
             )
         `);
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS rooms (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 status VARCHAR(20) DEFAULT 'WAITING',
@@ -81,7 +101,9 @@ async function initDB() {
                 is_private BOOLEAN DEFAULT FALSE,
                 password VARCHAR(255),
                 max_members INT DEFAULT 4,
-                base_hints VARCHAR(255) DEFAULT '[]'
+                base_hints VARCHAR(255) DEFAULT '[]',
+                creator_id VARCHAR(50),
+                expire_at DATETIME
             )
         `);
 
@@ -100,10 +122,10 @@ async function initDB() {
         ];
         
         for (let query of migrations) {
-            try { await db.query(query); } catch (e) { /* Ignore if column already exists */ }
+            try { await pool.query(query); } catch (e) { /* Ignore if column already exists */ }
         }
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS room_members (
                 room_id INT,
                 user_id VARCHAR(50),
@@ -116,7 +138,7 @@ async function initDB() {
             )
         `);
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS drawings (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 room_id INT,
@@ -124,7 +146,7 @@ async function initDB() {
             )
         `);
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS chats (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 room_id INT,
@@ -134,7 +156,7 @@ async function initDB() {
             )
         `);
 
-        await db.query(`
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS guesses (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 room_id INT,
@@ -145,10 +167,10 @@ async function initDB() {
             )
         `);
 
-        const [rooms] = await db.query('SELECT COUNT(*) as count FROM rooms');
+        const [rooms] = await pool.query('SELECT COUNT(*) as count FROM rooms');
         if (rooms[0].count === 0) {
             for (let i = 0; i < 5; i++) {
-                await db.query(`INSERT INTO rooms (status, modified_at, is_private, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, 4)`);
+                await pool.query(`INSERT INTO rooms (status, modified_at, is_private, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, 4)`);
             }
         }
     } catch (err) {
@@ -188,7 +210,7 @@ app.post('/webhook', async (req, res) => {
             const addedCredits = payload.amount;
             const buyerId = payload.tgId;
             
-            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
+            await pool.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
             sendMsg(update.message.chat.id, `✅ Successfully purchased ${addedCredits} Credits! Your balance has been updated.`);
             
             const userState = await getUserState(buyerId);
@@ -203,7 +225,7 @@ app.post('/webhook', async (req, res) => {
         const username = update.message.from.username;
         
         try {
-            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
+            await pool.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?) ON DUPLICATE KEY UPDATE tg_username = ?', [tgId.toString(), username || null, username || null]);
         } catch (e) {
             console.error('Webhook DB Error:', e);
         }
@@ -273,7 +295,7 @@ app.post('/webhook', async (req, res) => {
                 });
             } else {
                 try {
-                    await db.query('UPDATE users SET tg_username = ? WHERE tg_id = ?', [username, tgId.toString()]);
+                    await pool.query('UPDATE users SET tg_username = ? WHERE tg_id = ?', [username, tgId.toString()]);
                 } catch(e) {}
                 
                 const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
@@ -295,7 +317,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 async function getUserState(tg_id) {
-    const [rows] = await db.query(`
+    const [rows] = await pool.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
         (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
@@ -314,16 +336,13 @@ async function getUserState(tg_id) {
     return u;
 }
 
-const activeCalls = new Map(); 
-const roomRedoStacks = {}; 
-const disconnectTimeouts = new Map(); 
-let lastCleanupDay = new Date().getUTCDate(); 
-
 const broadcastRooms = async () => {
     // Send both Private and Public Rooms
-    const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+    const [rooms] = await pool.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
     
-    io.sockets.sockets.forEach(s => {
+    // Iterating sockets globally works effectively via adapter
+    const sockets = await io.fetchSockets();
+    sockets.forEach(s => {
         const userId = s.currentUser;
         const customizedRooms = rooms.map(r => {
             if (r.creator_id === userId) {
@@ -340,12 +359,12 @@ const broadcastRooms = async () => {
 const deleteRoom = async (roomId) => {
     if (!roomId) return;
     try {
-        await db.query("DELETE FROM rooms WHERE id = ?", [roomId]);
-        await db.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
-        await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-        await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
-        await db.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-        delete roomRedoStacks[roomId];
+        await pool.query("DELETE FROM rooms WHERE id = ?", [roomId]);
+        await pool.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
+        await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
+        await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
+        await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
+        await redisClient.del(`redo:${roomId}`);
     } catch (e) {
         console.error("Error completely deleting room:", roomId, e);
     }
@@ -355,25 +374,25 @@ const deleteRoom = async (roomId) => {
 const checkRoomReset = async (roomId) => {
     if (!roomId) return;
     try {
-        const [members] = await db.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
+        const [members] = await pool.query('SELECT COUNT(*) as c FROM room_members WHERE room_id = ?', [roomId]);
         if (members[0].c === 0) {
-            const [roomInfo] = await db.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
+            const [roomInfo] = await pool.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
             const isPrivate = roomInfo.length > 0 && roomInfo[0].is_private;
 
             // Delete room completely if empty unless it's the fallback base rooms (1 or 2) OR it's a private room (let expire_at handle it)
             if (roomId !== 1 && roomId !== 2 && !isPrivate) {
                 await deleteRoom(roomId);
             } else {
-                await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-                await db.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
-                await db.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
-                await db.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
-                await db.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
-                delete roomRedoStacks[roomId];
+                await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+                await pool.query("DELETE FROM room_members WHERE room_id = ?", [roomId]);
+                await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
+                await pool.query("DELETE FROM chats WHERE room_id = ?", [roomId]);
+                await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
+                await redisClient.del(`redo:${roomId}`);
             }
         } else if (members[0].c < 2) {
-            await db.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
-            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
+            await pool.query("UPDATE rooms SET status = 'WAITING', current_drawer_id = NULL, word_to_draw = NULL WHERE id = ?", [roomId]);
+            await pool.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
         }
     } catch(err) {
         console.error("Auto delete room error:", err);
@@ -383,107 +402,179 @@ const checkRoomReset = async (roomId) => {
 const syncRoom = async (roomId) => {
     if (!roomId) return;
     try {
-        const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
+        const [roomData] = await pool.query('SELECT * FROM rooms WHERE id = ?', [roomId]);
         if (roomData.length === 0) return; 
 
-        const [members] = await db.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
-        const [chats] = await db.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id ASC', [roomId]); 
-        const [guesses] = await db.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
-        const [drawings] = await db.query('SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC', [roomId]);
+        const [members] = await pool.query('SELECT * FROM room_members WHERE room_id = ?', [roomId]);
+        const [chats] = await pool.query('SELECT * FROM chats WHERE room_id = ? ORDER BY id ASC', [roomId]); 
+        const [guesses] = await pool.query('SELECT * FROM guesses WHERE room_id = ? ORDER BY id ASC', [roomId]);
+        const [drawings] = await pool.query('SELECT line_data FROM drawings WHERE room_id = ? ORDER BY id ASC', [roomId]);
         
         const userIds = [...new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)])];
         let profiles = {};
         if (userIds.length > 0) {
-            const [users] = await db.query(`SELECT tg_id, profile_pic FROM users WHERE tg_id IN (?)`, [userIds]);
+            const [users] = await pool.query(`SELECT tg_id, profile_pic FROM users WHERE tg_id IN (?)`, [userIds]);
             users.forEach(u => profiles[u.tg_id] = u.profile_pic);
         }
 
-        const activeCallsList = Array.from(activeCalls.values())
+        const allCallsMap = await redisClient.hGetAll('activeCalls');
+        const activeCallsList = Object.values(allCallsMap)
+            .map(c => JSON.parse(c))
             .filter(c => c.room_id === roomId)
             .map(c => ({
                 id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id
             }));
 
-        const roomSockets = io.sockets.adapter.rooms.get(`room_${roomId}`);
-        if (roomSockets) {
-            for (const socketId of roomSockets) {
-                const s = io.sockets.sockets.get(socketId);
-                if (s) {
-                    const userId = s.currentUser;
-                    const isDrawer = roomData[0].current_drawer_id === userId;
-                    
-                    const sanitizedGuesses = guesses.map(g => {
-                        if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
-                            return g;
-                        }
-                        return { ...g, guess_text: '••••••••' };
-                    });
-
-                    let masked_word = null;
-                    if (['DRAWING', 'REVEAL', 'BREAK'].includes(roomData[0].status)) {
-                        const base_hints = JSON.parse(roomData[0].base_hints || '[]');
-                        const actual_word = roomData[0].word_to_draw || '';
-                        const memberData = members.find(m => m.user_id === userId);
-                        const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
-                        const isReveal = roomData[0].status !== 'DRAWING';
-                        
-                        masked_word = actual_word.split('').map((char, index) => {
-                            if (char === ' ') return { char: ' ', index, revealed: true };
-                            if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
-                                return { char, index, revealed: true };
-                            }
-                            return { char: null, index, revealed: false };
-                        });
-                    }
-
-                    s.emit('room_sync', {
-                        room: roomData[0],
-                        members,
-                        chats, 
-                        guesses: sanitizedGuesses,
-                        drawings: drawings.map(d => d.line_data),
-                        profiles,
-                        activeCalls: activeCallsList,
-                        masked_word: masked_word,
-                        server_time: new Date()
-                    });
+        const socketsInRoom = await io.in(`room_${roomId}`).fetchSockets();
+        
+        for (const s of socketsInRoom) {
+            const userId = s.currentUser;
+            const isDrawer = roomData[0].current_drawer_id === userId;
+            
+            const sanitizedGuesses = guesses.map(g => {
+                if (isDrawer || g.user_id === userId || roomData[0].status === 'REVEAL' || roomData[0].status === 'BREAK') {
+                    return g;
                 }
+                return { ...g, guess_text: '••••••••' };
+            });
+
+            let masked_word = null;
+            if (['DRAWING', 'REVEAL', 'BREAK'].includes(roomData[0].status)) {
+                const base_hints = JSON.parse(roomData[0].base_hints || '[]');
+                const actual_word = roomData[0].word_to_draw || '';
+                const memberData = members.find(m => m.user_id === userId);
+                const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
+                const isReveal = roomData[0].status !== 'DRAWING';
+                
+                masked_word = actual_word.split('').map((char, index) => {
+                    if (char === ' ') return { char: ' ', index, revealed: true };
+                    if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
+                        return { char, index, revealed: true };
+                    }
+                    return { char: null, index, revealed: false };
+                });
             }
+
+            s.emit('room_sync', {
+                room: roomData[0],
+                members,
+                chats, 
+                guesses: sanitizedGuesses,
+                drawings: drawings.map(d => d.line_data),
+                profiles,
+                activeCalls: activeCallsList,
+                masked_word: masked_word,
+                server_time: new Date()
+            });
         }
     } catch (error) {
         console.error("syncRoom error:", error);
     }
 };
 
-const terminateCallsForUser = (userId) => {
-    for (const [callId, call] of activeCalls.entries()) {
+const terminateCallsForUser = async (userId) => {
+    const allCallsMap = await redisClient.hGetAll('activeCalls');
+    for (const [callId, callStr] of Object.entries(allCallsMap)) {
+        const call = JSON.parse(callStr);
         if (call.caller === userId || call.receiver === userId) {
-            if (call.interval) clearInterval(call.interval);
-            activeCalls.delete(callId);
+            await redisClient.hDel('activeCalls', callId);
             io.to(`room_${call.room_id}`).emit('call_ended', callId);
             syncRoom(call.room_id);
         }
     }
 };
 
+// Architectural Event-Driven Revisions
+const checkRoomReadiness = async (roomId) => {
+    try {
+        const [room] = await pool.query("SELECT status FROM rooms WHERE id = ?", [roomId]);
+        if (room.length === 0 || !['WAITING', 'BREAK'].includes(room[0].status)) return;
+
+        const [members] = await pool.query("SELECT user_id, is_ready FROM room_members WHERE room_id = ?", [roomId]);
+        if (members.length >= 2 && members.every(m => m.is_ready)) {
+            const nextDrawer = members[Math.floor(Math.random() * members.length)].user_id;
+            await pool.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, roomId]);
+            await pool.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [roomId]);
+            
+            // Clear drawings and guesses for the upcoming round automatically
+            await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
+            await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
+            await redisClient.del(`redo:${roomId}`);
+            syncRoom(roomId);
+        }
+    } catch(e) { console.error('Room Readiness Error:', e); }
+};
+
+const scheduleBreakTransition = (roomId) => {
+    setTimeout(async () => {
+        const [room] = await pool.query("SELECT status, break_end_time FROM rooms WHERE id = ?", [roomId]);
+        if (room.length > 0 && room[0].status === 'REVEAL' && new Date(room[0].break_end_time) <= new Date()) {
+            await pool.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [roomId]);
+            await pool.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
+            syncRoom(roomId);
+            checkRoomReadiness(roomId); // Check immediately if players got antsy
+        }
+    }, 5500); 
+};
+
+const scheduleRoomExpiration = (roomId, expireMs) => {
+    setTimeout(async () => {
+        const [r] = await pool.query("SELECT is_private, expire_at FROM rooms WHERE id = ?", [roomId]);
+        if (r.length > 0 && r[0].is_private) {
+            if (new Date(r[0].expire_at) <= new Date()) {
+                io.to(`room_${roomId}`).emit('room_expired');
+                await deleteRoom(roomId); 
+                const sockets = await io.in(`room_${roomId}`).fetchSockets();
+                sockets.forEach(s => { s.leave(`room_${roomId}`); s.currentRoom = null; });
+                broadcastRooms();
+            }
+        }
+    }, expireMs);
+};
+
 io.on('connection', (socket) => {
     let currentUser = null;
     let currentRoom = null;
-    socket.lastActiveEvent = Date.now();
-    socket.idleWarned = false;
+
+    // Distributive Scaling: Track localized socket interactions with event-driven timeouts
+    const startIdleTimer = () => {
+        if (socket.idleTimeout) clearTimeout(socket.idleTimeout);
+        if (socket.warnTimeout) clearTimeout(socket.warnTimeout);
+        socket.idleWarned = false;
+
+        socket.warnTimeout = setTimeout(() => {
+            if (socket.currentRoom) {
+                socket.idleWarned = true;
+                socket.emit('idle_warning');
+            }
+        }, 50000); 
+
+        socket.idleTimeout = setTimeout(async () => {
+            if (socket.currentRoom) {
+                socket.emit('kick_idle');
+                await pool.query('DELETE FROM room_members WHERE user_id = ?', [socket.currentUser]);
+                await checkRoomReset(socket.currentRoom);
+                syncRoom(socket.currentRoom);
+                broadcastRooms();
+                socket.leave(`room_${socket.currentRoom}`);
+                socket.currentRoom = null;
+            }
+        }, 60000); 
+    };
 
     // Extracted robust helper logic for joining rooms gracefully behind the scenes
     const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
-        const [roomData] = await db.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
+        const [roomData] = await pool.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
         if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
         const room = roomData[0];
 
-        const [members] = await db.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
+        const [members] = await pool.query('SELECT COUNT(*) as count FROM room_members WHERE room_id = ?', [roomIdNum]);
         if (members[0].count >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
-        const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [userId]);
+        const [existing] = await pool.query('SELECT room_id FROM room_members WHERE user_id = ?', [userId]);
         if (existing.length > 0 && existing[0].room_id === roomIdNum) {
             currentRoom = roomIdNum;
+            socket.currentRoom = roomIdNum;
             socket.join(`room_${roomIdNum}`);
             socket.emit('join_success', roomIdNum);
             return syncRoom(roomIdNum);
@@ -493,28 +584,33 @@ io.on('connection', (socket) => {
             if (room.is_private) {
                 if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
             } else if (roomIdNum !== 1 && roomIdNum !== 2) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
+                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
                 if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]);
+                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]);
             }
         }
 
         const oldRoom = currentRoom;
         if (oldRoom) {
-            terminateCallsForUser(userId); 
+            await terminateCallsForUser(userId); 
             socket.leave(`room_${oldRoom}`);
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [oldRoom]); 
+            await pool.query('DELETE FROM room_members WHERE user_id = ?', [oldRoom]); 
             await checkRoomReset(oldRoom);
         }
 
-        await db.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, userId]);
+        await pool.query('INSERT INTO room_members (room_id, user_id) VALUES (?, ?)', [roomIdNum, userId]);
         currentRoom = roomIdNum;
+        socket.currentRoom = roomIdNum;
         socket.join(`room_${currentRoom}`);
         
         socket.emit('join_success', currentRoom);
         
-        if (oldRoom) syncRoom(oldRoom);
+        if (oldRoom) {
+            syncRoom(oldRoom);
+            checkRoomReadiness(oldRoom);
+        }
         syncRoom(currentRoom);
+        checkRoomReadiness(currentRoom);
         broadcastRooms();
 
         const userState = await getUserState(userId);
@@ -527,27 +623,24 @@ io.on('connection', (socket) => {
             currentUser = tg_id;
             socket.currentUser = tg_id; 
             
-            if (disconnectTimeouts.has(tg_id)) {
-                clearTimeout(disconnectTimeouts.get(tg_id));
-                disconnectTimeouts.delete(tg_id);
-            }
-
             socket.join(`user_${tg_id}`);
+            startIdleTimer();
             
-            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
+            await pool.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
             if (profile_pic) {
-                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
+                await pool.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
             } else {
-                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
+                await pool.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
             }
 
             const userState = await getUserState(tg_id);
-            const [rooms] = await db.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
+            const [rooms] = await pool.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
             const customizedRooms = rooms.map(r => r.creator_id === tg_id ? r : { ...r, password: null });
             
-            const [existing] = await db.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
+            const [existing] = await pool.query('SELECT room_id FROM room_members WHERE user_id = ?', [tg_id]);
             if (existing.length > 0) {
                 currentRoom = existing[0].room_id;
+                socket.currentRoom = currentRoom;
                 socket.join(`room_${currentRoom}`);
                 syncRoom(currentRoom);
             }
@@ -556,19 +649,17 @@ io.on('connection', (socket) => {
         } catch (err) {}
     });
 
-    socket.on('active_event', () => {
-        socket.lastActiveEvent = Date.now();
-        socket.idleWarned = false;
-    });
+    socket.on('active_event', () => startIdleTimer());
 
     socket.on('claim_reward', async ({ type }) => {
         try {
             if (!currentUser) return;
+            startIdleTimer();
             let success = false;
             let msg = '';
 
             if (type === 'daily') {
-                const [res] = await db.query(`
+                const [res] = await pool.query(`
                     UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
                     WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
                 `, [currentUser]);
@@ -577,7 +668,7 @@ io.on('connection', (socket) => {
             } 
             else if (type === 'ad' || type === 'ad2') {
                 const prefix = type === 'ad' ? 'ad' : 'ad2';
-                const [u] = await db.query(`SELECT
+                const [u] = await pool.query(`SELECT
                     ${prefix}_claims_today as claims,
                     DATE_FORMAT(last_${prefix}_claim_time, '%Y-%m-%d') as last_date,
                     DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') as today,
@@ -589,10 +680,10 @@ io.on('connection', (socket) => {
                     const isToday = user.last_date === user.today;
 
                     if (!user.last_date || !isToday) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        await pool.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
                     } else if (user.claims < 3 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        await pool.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                         success = true; msg = 'Reward claimed! +2 Credits';
                     } else {
                         msg = 'Ad reward not available yet. Max 3 per day, 3 hours apart.';
@@ -613,23 +704,22 @@ io.on('connection', (socket) => {
     socket.on('transfer_credits', async ({ target_id, amount }) => {
         try {
             if (!currentUser || currentUser === target_id) return;
+            startIdleTimer();
             const amt = Number(amount);
             if (![50, 100, 200, 500, 1000].includes(amt)) return socket.emit('create_error', 'Invalid transfer amount.');
 
-            const totalCost = amt + 2; // Including 2 credit transaction fee
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            const totalCost = amt + 2; 
+            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             
             if (u[0].credits < totalCost) {
                 return socket.emit('create_error', `Not enough credits! You need ${totalCost} credits (includes 2 credit fee).`);
             }
 
-            // Perform transaction
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
-            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amt, target_id]);
+            await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
+            await pool.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amt, target_id]);
 
             socket.emit('reward_success', `Successfully sent ${amt} credits to ${toHex(target_id)}!`);
             
-            // Notification Logic via Bot API
             const token = process.env.BOT_TOKEN;
             const sendMsg = (chatId, text, replyMarkup) => {
                 if (!token) return;
@@ -640,19 +730,17 @@ io.on('connection', (socket) => {
                 }).catch(console.error);
             };
 
-            const [targetUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
-            const [senderUser] = await db.query('SELECT * FROM users WHERE tg_id = ?', [currentUser]);
+            const [targetUser] = await pool.query('SELECT * FROM users WHERE tg_id = ?', [target_id]);
+            const [senderUser] = await pool.query('SELECT * FROM users WHERE tg_id = ?', [currentUser]);
             
             const targetUsername = targetUser.length > 0 ? targetUser[0].tg_username : null;
             const senderUsername = senderUser.length > 0 ? senderUser[0].tg_username : null;
 
-            // Notice the inline keyboard for >= 200 transfers specifically handled here exactly as requested
             if (amt >= 200) {
                 let sMarkup = targetUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${targetUsername}` }]] } : {};
                 sendMsg(currentUser, `You successfully sent ${amt} credits to ${targetUsername ? '@' + targetUsername : toHex(target_id)}.`, sMarkup);
             }
 
-            // Notify receiver
             if (targetUser.length > 0) {
                 let rMarkup = senderUsername ? { inline_keyboard: [[{ text: '💬 Start Chatting', url: `https://t.me/${senderUsername}` }]] } : {};
                 sendMsg(target_id, `🎁 You received a gift of ${amt} credits from ${senderUsername ? '@' + senderUsername : toHex(currentUser)}!`, rMarkup);
@@ -662,7 +750,6 @@ io.on('connection', (socket) => {
                 io.to(`user_${target_id}`).emit('reward_success', `🎁 You received a gift of ${amt} credits!`);
             }
             
-            // Update sender's balance
             const myState = await getUserState(currentUser);
             socket.emit('user_update', myState);
 
@@ -674,35 +761,38 @@ io.on('connection', (socket) => {
     socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
         try {
             if (!currentUser) return;
+            startIdleTimer();
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
             let insertRes;
             
             let cost = (auto_join && !is_private) ? 1 : 0;
+            const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
             
             if (is_private) {
                 if (!password || password.length < 6 || password.length > 10) {
                     return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                 }
-
-                const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
                 let timeCost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
                 cost += limit + timeCost;
             }
 
             if (cost > 0) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
-                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
             }
 
             if (is_private) {
-                const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password, limit, currentUser, hours]);
+                [insertRes] = await pool.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members, creator_id, expire_at) VALUES ('WAITING', UTC_TIMESTAMP(), 1, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? HOUR))`, [password, limit, currentUser, hours]);
             } else {
-                [insertRes] = await db.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
+                [insertRes] = await pool.query(`INSERT INTO rooms (status, modified_at, is_private, password, max_members) VALUES ('WAITING', UTC_TIMESTAMP(), 0, NULL, ?)`, [limit]);
             }
 
             const newRoomId = insertRes.insertId;
+            
+            if (is_private) {
+                scheduleRoomExpiration(newRoomId, hours * 3600 * 1000);
+            }
 
             if (auto_join) {
                 await performJoinRoom(currentUser, newRoomId, password, true);
@@ -718,7 +808,8 @@ io.on('connection', (socket) => {
 
     socket.on('search_room', async ({ room_id }) => {
         try {
-            const [rows] = await db.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
+            startIdleTimer();
+            const [rows] = await pool.query('SELECT id, is_private FROM rooms WHERE id = ?', [Number(room_id)]);
             if (rows.length === 0) return socket.emit('join_error', 'Room not found.');
             socket.emit('search_result', rows[0]);
         } catch (err) {}
@@ -727,6 +818,7 @@ io.on('connection', (socket) => {
     socket.on('join_room', async ({ room_id, password }) => {
         try {
             if (!currentUser) return;
+            startIdleTimer();
             await performJoinRoom(currentUser, Number(room_id), password, false);
         } catch (err) {}
     });
@@ -734,12 +826,17 @@ io.on('connection', (socket) => {
     socket.on('leave_room', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            terminateCallsForUser(currentUser); 
-            await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+            startIdleTimer();
+            await terminateCallsForUser(currentUser); 
+            await pool.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
             await checkRoomReset(currentRoom);
             socket.leave(`room_${currentRoom}`);
-            syncRoom(currentRoom);
+            const leftRoom = currentRoom;
             currentRoom = null;
+            socket.currentRoom = null;
+            
+            syncRoom(leftRoom);
+            checkRoomReadiness(leftRoom);
             broadcastRooms();
         } catch (err) {}
     });
@@ -747,14 +844,17 @@ io.on('connection', (socket) => {
     socket.on('extend_room', async ({ expire_hours }) => {
         try {
             if (!currentUser || !currentRoom) return;
+            startIdleTimer();
             const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
             let cost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
             
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
             
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
-            await db.query('UPDATE rooms SET expire_at = DATE_ADD(expire_at, INTERVAL ? HOUR) WHERE id = ?', [hours, currentRoom]);
+            await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+            await pool.query('UPDATE rooms SET expire_at = DATE_ADD(expire_at, INTERVAL ? HOUR) WHERE id = ?', [hours, currentRoom]);
+            
+            scheduleRoomExpiration(currentRoom, hours * 3600 * 1000); // Overlay robust new duration
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
@@ -765,12 +865,13 @@ io.on('connection', (socket) => {
     socket.on('change_password', async ({ password }) => {
         try {
             if (!currentUser || !currentRoom) return;
+            startIdleTimer();
             if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be 6-10 characters.');
             
-            const [room] = await db.query('SELECT creator_id FROM rooms WHERE id = ? AND is_private = 1', [currentRoom]);
+            const [room] = await pool.query('SELECT creator_id FROM rooms WHERE id = ? AND is_private = 1', [currentRoom]);
             if (room.length === 0 || room[0].creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
 
-            await db.query('UPDATE rooms SET password = ? WHERE id = ?', [password, currentRoom]);
+            await pool.query('UPDATE rooms SET password = ? WHERE id = ?', [password, currentRoom]);
             socket.emit('reward_success', 'Room password updated successfully!');
             broadcastRooms();
             syncRoom(currentRoom);
@@ -780,10 +881,11 @@ io.on('connection', (socket) => {
     socket.on('kick_player', async ({ target_id }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            const [roomRows] = await db.query('SELECT is_private, creator_id FROM rooms WHERE id = ?', [currentRoom]);
+            startIdleTimer();
+            const [roomRows] = await pool.query('SELECT is_private, creator_id FROM rooms WHERE id = ?', [currentRoom]);
             if (roomRows.length === 0 || !roomRows[0].is_private || roomRows[0].creator_id !== currentUser) return;
 
-            await db.query('DELETE FROM room_members WHERE user_id = ? AND room_id = ?', [target_id, currentRoom]);
+            await pool.query('DELETE FROM room_members WHERE user_id = ? AND room_id = ?', [target_id, currentRoom]);
             
             io.to(`user_${target_id}`).emit('kicked_by_admin');
             
@@ -794,6 +896,7 @@ io.on('connection', (socket) => {
             });
 
             syncRoom(currentRoom);
+            checkRoomReadiness(currentRoom);
             broadcastRooms();
         } catch(err) { console.error('Kick player error:', err); }
     });
@@ -801,11 +904,13 @@ io.on('connection', (socket) => {
     socket.on('chat', async ({ message }) => {
         try {
             if (!currentUser || !currentRoom || !message.trim()) return;
-            await db.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
+            startIdleTimer();
+            await pool.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
             
-            const [countRes] = await db.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
+            // Inline Database Garbage collection for Chats
+            const [countRes] = await pool.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
             if (countRes[0].c >= 40) {
-                await db.query(`
+                await pool.query(`
                     DELETE FROM chats 
                     WHERE room_id = ? AND id NOT IN (
                         SELECT id FROM (
@@ -822,25 +927,28 @@ io.on('connection', (socket) => {
     socket.on('give_up', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            const [room] = await db.query('SELECT current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
+            startIdleTimer();
+            const [room] = await pool.query('SELECT current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
             if (room.length === 0 || room[0].status !== 'DRAWING') return;
 
             const isDrawer = room[0].current_drawer_id === currentUser;
 
             if (isDrawer) {
-                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
+                await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
+                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'The drawer gave up.']);
+                scheduleBreakTransition(currentRoom);
             } else {
-                await db.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
+                await pool.query('UPDATE room_members SET has_given_up = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} voted to give up.`]);
 
-                const [members] = await db.query('SELECT user_id, has_given_up FROM room_members WHERE room_id = ?', [currentRoom]);
+                const [members] = await pool.query('SELECT user_id, has_given_up FROM room_members WHERE room_id = ?', [currentRoom]);
                 const guessers = members.filter(m => m.user_id !== room[0].current_drawer_id);
                 const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
 
                 if (allGivenUp) {
-                    await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
-                    await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'All guessers gave up.']);
+                    await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [currentRoom]);
+                    await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', 'All guessers gave up.']);
+                    scheduleBreakTransition(currentRoom);
                 }
             }
             syncRoom(currentRoom);
@@ -853,27 +961,29 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
             if (!guess || !guess.trim()) return;
+            startIdleTimer();
             
-            const [room] = await db.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
+            const [room] = await pool.query('SELECT word_to_draw, current_drawer_id, status FROM rooms WHERE id = ?', [currentRoom]);
             if (room.length === 0) return;
             if (room[0].status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
             if (room[0].current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
             
-            const [guessCount] = await db.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            const [guessCount] = await pool.query('SELECT COUNT(*) as count FROM guesses WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             
             if (guessCount[0].count >= 5) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < 1) {
                     return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
                 }
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
             }
             
             const isCorrect = room[0].word_to_draw && room[0].word_to_draw.toLowerCase() === guess.trim().toLowerCase();
             
-            await db.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess.trim(), isCorrect]);
+            await pool.query('INSERT INTO guesses (room_id, user_id, guess_text, is_correct) VALUES (?, ?, ?, ?)', [currentRoom, currentUser, guess.trim(), isCorrect]);
             if (isCorrect) {
-                await db.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
+                await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = ? WHERE id = ?", [currentUser, currentRoom]);
+                scheduleBreakTransition(currentRoom);
             }
             
             const userState = await getUserState(currentUser);
@@ -888,20 +998,21 @@ io.on('connection', (socket) => {
     socket.on('buy_hint', async ({ index }) => {
         try {
             if (!currentUser || !currentRoom) return;
+            startIdleTimer();
 
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            const [u] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (u[0].credits < 2) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
-            const [member] = await db.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            const [member] = await pool.query('SELECT purchased_hints FROM room_members WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             if(member.length === 0) return;
 
             let purchased = JSON.parse(member[0].purchased_hints || '[]');
             if (!purchased.includes(index)) {
                 purchased.push(index);
-                await db.query('UPDATE users SET credits = credits - 2 WHERE tg_id = ?', [currentUser]);
-                await db.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
+                await pool.query('UPDATE users SET credits = credits - 2 WHERE tg_id = ?', [currentUser]);
+                await pool.query('UPDATE room_members SET purchased_hints = ? WHERE room_id = ? AND user_id = ?', [JSON.stringify(purchased), currentRoom, currentUser]);
                 
-                await db.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 2 Credits!`]);
+                await pool.query("INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)", [currentRoom, 'System', `${toHex(currentUser)} used a hint for 2 Credits!`]);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
@@ -916,6 +1027,7 @@ io.on('connection', (socket) => {
     socket.on('set_word', async ({ word }) => {
         try {
             if (!currentUser || !currentRoom) return;
+            startIdleTimer();
             const wordClean = word.trim().toUpperCase();
             if (wordClean.length < 3 || wordClean.length > 10) {
                 return socket.emit('create_error', 'Word must be between 3 and 10 characters.');
@@ -943,14 +1055,26 @@ io.on('connection', (socket) => {
                 }
             }
 
-            await db.query("UPDATE rooms SET word_to_draw = ?, base_hints = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [wordClean, JSON.stringify(hints), currentRoom, currentUser]);
-            await db.query("UPDATE room_members SET purchased_hints = '[]', has_given_up = 0 WHERE room_id = ?", [currentRoom]);
+            const activeRoomId = currentRoom;
+
+            await pool.query("UPDATE rooms SET word_to_draw = ?, base_hints = ?, status = 'DRAWING', round_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND) WHERE id = ? AND current_drawer_id = ?", [wordClean, JSON.stringify(hints), currentRoom, currentUser]);
+            await pool.query("UPDATE room_members SET purchased_hints = '[]', has_given_up = 0 WHERE room_id = ?", [currentRoom]);
             
-            // Clean up drawing traces and guesses for the new round
-            await db.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
-            await db.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
-            roomRedoStacks[currentRoom] = [];
+            await pool.query("DELETE FROM drawings WHERE room_id = ?", [currentRoom]);
+            await pool.query("DELETE FROM guesses WHERE room_id = ?", [currentRoom]);
+            await redisClient.del(`redo:${currentRoom}`);
             syncRoom(currentRoom);
+
+            // Timeout protected against race conditions 
+            setTimeout(async () => {
+                const [r] = await pool.query("SELECT status, round_end_time FROM rooms WHERE id = ?", [activeRoomId]);
+                if (r.length > 0 && r[0].status === 'DRAWING' && new Date(r[0].round_end_time) <= new Date()) {
+                    await pool.query("UPDATE rooms SET status = 'REVEAL', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 SECOND), last_winner_id = NULL WHERE id = ?", [activeRoomId]);
+                    syncRoom(activeRoomId);
+                    scheduleBreakTransition(activeRoomId);
+                }
+            }, 120000);
+
         } catch (err) {
             console.error('Set Word Error:', err);
         }
@@ -959,16 +1083,18 @@ io.on('connection', (socket) => {
     socket.on('set_ready', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            await db.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
+            startIdleTimer();
+            await pool.query('UPDATE room_members SET is_ready = 1 WHERE room_id = ? AND user_id = ?', [currentRoom, currentUser]);
             syncRoom(currentRoom);
+            checkRoomReadiness(currentRoom);
         } catch (err) {}
     });
 
     socket.on('draw', async ({ lines }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            roomRedoStacks[currentRoom] = []; 
-            await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
+            await redisClient.del(`redo:${currentRoom}`);
+            await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, JSON.stringify(lines)]);
             socket.to(`room_${currentRoom}`).emit('live_draw', lines);
         } catch (err) {}
     });
@@ -976,11 +1102,10 @@ io.on('connection', (socket) => {
     socket.on('undo', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            const [last] = await db.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
+            const [last] = await pool.query('SELECT * FROM drawings WHERE room_id = ? ORDER BY id DESC LIMIT 1', [currentRoom]);
             if (last.length > 0) {
-                if(!roomRedoStacks[currentRoom]) roomRedoStacks[currentRoom] = [];
-                roomRedoStacks[currentRoom].push(last[0]);
-                await db.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
+                await redisClient.rPush(`redo:${currentRoom}`, JSON.stringify(last[0]));
+                await pool.query('DELETE FROM drawings WHERE id = ?', [last[0].id]);
                 syncRoom(currentRoom);
             }
         } catch (err) {}
@@ -989,9 +1114,10 @@ io.on('connection', (socket) => {
     socket.on('redo', async () => {
         try {
             if (!currentUser || !currentRoom) return;
-            if(roomRedoStacks[currentRoom] && roomRedoStacks[currentRoom].length > 0) {
-                const toRestore = roomRedoStacks[currentRoom].pop();
-                await db.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
+            const toRestoreStr = await redisClient.rPop(`redo:${currentRoom}`);
+            if (toRestoreStr) {
+                const toRestore = JSON.parse(toRestoreStr);
+                await pool.query('INSERT INTO drawings (room_id, line_data) VALUES (?, ?)', [currentRoom, toRestore.line_data]);
                 syncRoom(currentRoom);
             }
         } catch (err) {}
@@ -999,8 +1125,10 @@ io.on('connection', (socket) => {
 
     socket.on('initiate_call', async ({ receiver_id }) => {
         if (!currentUser || !currentRoom) return;
+        startIdleTimer();
         
-        const isInCall = Array.from(activeCalls.values()).some(
+        const allCallsMap = await redisClient.hGetAll('activeCalls');
+        const isInCall = Object.values(allCallsMap).map(c => JSON.parse(c)).some(
             c => c.caller === currentUser || c.receiver === currentUser ||
                  c.caller === receiver_id || c.receiver === receiver_id
         );
@@ -1011,29 +1139,36 @@ io.on('connection', (socket) => {
 
         const callId = `call_${Date.now()}_${Math.random()}`;
         const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
-        activeCalls.set(callId, callObj);
+        
+        await redisClient.hSet('activeCalls', callId, JSON.stringify(callObj));
         io.to(`room_${currentRoom}`).emit('call_update', callObj);
         syncRoom(currentRoom);
     });
 
     socket.on('accept_call', async ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call && call.receiver === currentUser) {
+        const callData = await redisClient.hGet('activeCalls', call_id);
+        if(!callData) return;
+        const call = JSON.parse(callData);
+
+        if (call.receiver === currentUser) {
             call.status = 'ACTIVE';
             call.startTime = Date.now();
-            activeCalls.set(call_id, call);
+            await redisClient.hSet('activeCalls', call_id, JSON.stringify(call));
             io.to(`room_${call.room_id}`).emit('call_update', call);
             
-            call.interval = setInterval(async () => {
-                const c = activeCalls.get(call_id);
-                if(!c) return clearInterval(call.interval);
+            // Assign billing responsibility locally to whichever server node accepted the call.
+            socket.activeBillingIntervals = socket.activeBillingIntervals || {};
+            socket.activeBillingIntervals[call_id] = setInterval(async () => {
+                const cData = await redisClient.hGet('activeCalls', call_id);
+                if(!cData) return clearInterval(socket.activeBillingIntervals[call_id]);
+                const c = JSON.parse(cData);
                 
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits > 0', [c.caller]);
-                const [u1] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
+                await pool.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits > 0', [c.caller]);
+                const [u1] = await pool.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
                 
                 if (u1[0].credits <= 0) {
-                    clearInterval(call.interval);
-                    activeCalls.delete(call_id);
+                    clearInterval(socket.activeBillingIntervals[call_id]);
+                    await redisClient.hDel('activeCalls', call_id);
                     io.to(`room_${c.room_id}`).emit('call_ended', call_id);
                     syncRoom(c.room_id);
                 } else {
@@ -1046,13 +1181,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('end_call', ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call) {
-            if(call.interval) clearInterval(call.interval);
-            activeCalls.delete(call_id);
-            io.to(`room_${currentRoom || call.room_id}`).emit('call_ended', call_id);
-            syncRoom(currentRoom || call.room_id);
+    socket.on('end_call', async ({ call_id }) => {
+        await redisClient.hDel('activeCalls', call_id);
+        io.to(`room_${currentRoom || 'all'}`).emit('call_ended', call_id);
+        syncRoom(currentRoom);
+        
+        if (socket.activeBillingIntervals && socket.activeBillingIntervals[call_id]) {
+            clearInterval(socket.activeBillingIntervals[call_id]);
+            delete socket.activeBillingIntervals[call_id];
         }
     });
 
@@ -1060,94 +1196,26 @@ io.on('connection', (socket) => {
         socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
 
-    socket.on('disconnect', () => {
-        if (currentUser) {
-            const timeoutId = setTimeout(async () => {
-                terminateCallsForUser(currentUser); 
-                if (currentRoom) {
-                    await db.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
-                    await checkRoomReset(currentRoom);
-                    syncRoom(currentRoom);
-                    broadcastRooms();
-                }
-                disconnectTimeouts.delete(currentUser);
-            }, 10000);
+    socket.on('disconnect', async () => {
+        if (socket.idleTimeout) clearTimeout(socket.idleTimeout);
+        if (socket.warnTimeout) clearTimeout(socket.warnTimeout);
+        
+        if (socket.activeBillingIntervals) {
+            Object.values(socket.activeBillingIntervals).forEach(clearInterval);
+        }
 
-            disconnectTimeouts.set(currentUser, timeoutId);
+        if (currentUser) {
+            await terminateCallsForUser(currentUser); 
+            if (currentRoom) {
+                await pool.query('DELETE FROM room_members WHERE user_id = ?', [currentUser]);
+                await checkRoomReset(currentRoom);
+                syncRoom(currentRoom);
+                checkRoomReadiness(currentRoom);
+                broadcastRooms();
+            }
         }
     });
 });
 
-setInterval(async () => {
-    try {
-        const [revealRooms] = await db.query("SELECT id FROM rooms WHERE status = 'REVEAL' AND break_end_time <= UTC_TIMESTAMP()");
-        for (let r of revealRooms) {
-            await db.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [r.id]);
-            await db.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [r.id]);
-            syncRoom(r.id);
-        }
-
-        const [waitingRooms] = await db.query("SELECT * FROM rooms WHERE status IN ('WAITING', 'BREAK')");
-        for (let r of waitingRooms) {
-            const [members] = await db.query("SELECT user_id, is_ready FROM room_members WHERE room_id = ?", [r.id]);
-            if (members.length >= 2 && members.every(m => m.is_ready)) {
-                const nextDrawer = members[Math.floor(Math.random() * members.length)].user_id;
-                await db.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, r.id]);
-                await db.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [r.id]);
-                
-                // Clear drawings and guesses for the upcoming round automatically
-                await db.query("DELETE FROM guesses WHERE room_id = ?", [r.id]);
-                await db.query("DELETE FROM drawings WHERE room_id = ?", [r.id]);
-                roomRedoStacks[r.id] = [];
-                syncRoom(r.id);
-            }
-        }
-        
-        const now = Date.now();
-        io.sockets.sockets.forEach(s => {
-            if (s.currentRoom) {
-                const idleTime = now - (s.lastActiveEvent || now);
-                if (idleTime > 60000) {
-                    s.emit('kick_idle');
-                    db.query('DELETE FROM room_members WHERE user_id = ?', [s.currentUser]).then(() => {
-                        checkRoomReset(s.currentRoom).then(() => {
-                            syncRoom(s.currentRoom);
-                            broadcastRooms();
-                        });
-                    });
-                    s.leave(`room_${s.currentRoom}`);
-                    s.currentRoom = null;
-                } else if (idleTime > 50000 && !s.idleWarned) {
-                    s.idleWarned = true;
-                    s.emit('idle_warning'); // 50 seconds triggers the idle warning logic precisely
-                } else if (idleTime <= 50000) {
-                    s.idleWarned = false;
-                }
-            }
-        });
-
-        const currentDay = new Date().getUTCDate();
-        if (currentDay !== lastCleanupDay) {
-            lastCleanupDay = currentDay;
-            db.query("DELETE FROM chats WHERE DATE(created_at) < UTC_DATE()").catch(console.error);
-        }
-
-        // Expiration check for private rooms
-        const [expiredRooms] = await db.query("SELECT id FROM rooms WHERE is_private = 1 AND expire_at <= UTC_TIMESTAMP()");
-        for (let r of expiredRooms) {
-            io.to(`room_${r.id}`).emit('room_expired');
-            await deleteRoom(r.id); 
-            
-            const sockets = await io.in(`room_${r.id}`).fetchSockets();
-            sockets.forEach(s => {
-                s.leave(`room_${r.id}`);
-                s.currentRoom = null;
-            });
-            broadcastRooms();
-        }
-
-    } catch (e) { console.error("Game Loop Error:", e); }
-}, 1000);
-
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`DoodleDash Scalable Cluster instance listening on port ${PORT}`));
