@@ -113,7 +113,6 @@
             return map[status] || 'Unknown Phase';
         };
         
-        // Custom Haptic Vibration function mapped to Telegram WebApp API
         const triggerVibration = (style) => {
             if (window.Telegram?.WebApp?.HapticFeedback) {
                 if (style === 'warning' || style === 'error' || style === 'success') {
@@ -163,7 +162,6 @@
             const defaultBGM = 'themesongdefault.mp3';
             const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
             
-            // Mode can be 'random' or a specific filename
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
@@ -210,6 +208,19 @@
                 localStorage.setItem('bgmVol', bgmVol);
             }, [bgmVol, activeCall]);
 
+            // Robust mobile audio player function
+            const playAudioSafe = (id) => {
+                if (localStorage.getItem('audioPolicy') !== 'true') return;
+                const el = document.getElementById(id);
+                if (el) {
+                    el.currentTime = 0;
+                    const p = el.play();
+                    if (p !== undefined) {
+                        p.catch(e => console.warn('Audio blocked by browser policy:', e));
+                    }
+                }
+            };
+
             // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
                 if (!roomData) return;
@@ -218,9 +229,8 @@
                 if (roomData.chats && roomData.chats.length > prevChatsCount.current) {
                     const newChats = roomData.chats.slice(prevChatsCount.current);
                     if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
-                        const s = document.getElementById('mgsSound');
-                        if (s) s.play().catch(()=>{});
-                        triggerVibration('medium'); // Haptic feedback trigger for Message
+                        playAudioSafe('mgsSound');
+                        triggerVibration('medium'); 
                         
                         if (activeTab !== 'chat' || !panelOpen) {
                             setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
@@ -234,9 +244,8 @@
                 if (roomData.guesses && roomData.guesses.length > prevGuessesCount.current) {
                     const newGuesses = roomData.guesses.slice(prevGuessesCount.current);
                     if (newGuesses.some(g => g.user_id !== tgId)) {
-                        const s = document.getElementById('guessSound');
-                        if (s) s.play().catch(()=>{});
-                        triggerVibration('light'); // Haptic feedback trigger for Guess
+                        playAudioSafe('guessSound');
+                        triggerVibration('light'); 
                         
                         if (activeTab !== 'guess' || !panelOpen) {
                             setGlowToggle(true); setTimeout(() => setGlowToggle(false), 3000);
@@ -247,7 +256,6 @@
                 }
             }, [roomData, activeTab, panelOpen, tgId]);
 
-            // Set active track based on mode and room join
             useEffect(() => {
                 if (currentRoomId) {
                     if (currentBgmMode === 'random') {
@@ -259,7 +267,6 @@
                 }
             }, [currentRoomId, currentBgmMode]);
 
-            // BGM Player logic
             useEffect(() => {
                 const bgm = document.getElementById('bgmSound');
                 if (!bgm) return;
@@ -274,50 +281,57 @@
                 }
             }, [currentRoomId, policyAccepted, activeTrack]);
 
+            // Fix for Mobile Safari/Chrome Audio Policies
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
                 localStorage.setItem('audioPolicy', 'true');
                 audioUnlocked.current = true;
 
-                // Unlock all native audio contexts gracefully triggered by standard touch click.
                 ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
+                        // Play completely muted to initialize context
+                        el.volume = 0.01; 
                         const p = el.play();
                         if (p !== undefined) {
                             p.then(() => {
-                                if(id !== 'bgmSound' && id !== 'callSound') {
-                                    el.pause();
-                                    el.currentTime = 0;
-                                } else if (id === 'callSound' && !(activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId)) {
-                                    el.pause();
-                                    el.currentTime = 0;
-                                }
+                                setTimeout(() => {
+                                    if(id !== 'bgmSound' && id !== 'callSound') {
+                                        el.pause();
+                                        el.currentTime = 0;
+                                    } else if (id === 'callSound' && !(activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId)) {
+                                        el.pause();
+                                        el.currentTime = 0;
+                                    }
+                                    el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
+                                }, 50); // Pause immediately after audio context is registered active
                             }).catch(()=>{});
                         }
                     }
                 });
             };
 
-            // Mobile Safaris fallback interaction unlocker
             const handleGlobalInteraction = () => {
                 if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
                     remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
                 }
+                const bgm = document.getElementById('bgmSound');
+                if (bgm && bgm.paused && policyAccepted && currentRoomId) {
+                    bgm.play().catch(()=>{});
+                }
             };
 
-            // Call receiving logic with Interval Vibration
             useEffect(() => {
                 const s = document.getElementById('callSound');
                 let vibInterval;
                 
                 if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
                     if(s && policyAccepted) {
+                        s.currentTime = 0;
                         s.play().catch(() => {});
                     }
-                    triggerVibration('warning'); // Vibrate upon incoming call immediately
-                    vibInterval = setInterval(() => triggerVibration('warning'), 1500); // Continuous vibration pattern
+                    triggerVibration('warning'); 
+                    vibInterval = setInterval(() => triggerVibration('warning'), 1500); 
                 } else {
                     if(s) {
                         s.pause();
@@ -525,7 +539,6 @@
                 socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
                 socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
                 socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
-                socket.on('ink_empty', () => setModal({ type: 'confirm_buy_ink', title: 'Ink Depleted' }));
                 
                 socket.on('join_success', (roomId) => {
                     setCurrentRoomId(roomId);
@@ -586,7 +599,6 @@
                 }
             }, [isMicMuted, localStream]);
 
-            // Track touch position safely preventing diagonal collision
             const [touchStartPos, setTouchStartPos] = useState(null);
             const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
             const onTouchEnd = (e) => {
@@ -594,7 +606,6 @@
                 const diffX = touchStartPos.x - e.changedTouches[0].clientX;
                 const diffY = touchStartPos.y - e.changedTouches[0].clientY;
                 
-                // If the user scrolled vertically more than horizontally, DO NOT swap tabs.
                 if (Math.abs(diffY) > Math.abs(diffX)) {
                     setTouchStartPos(null);
                     return;
@@ -1065,11 +1076,8 @@
             } else if (modal.type === 'confirm_buy_ink') {
                 content = (
                     <>
-                        <div className="alert alert-warning text-center fw-bold">
-                            <i className="fas fa-pen-slash fs-2 mb-2"></i><br/>Out of Ink!
-                        </div>
-                        <p className="text-muted text-center">You've reached the drawing limit for this round. Buy 30 more strokes for 1 Credit?</p>
-                        <div className="d-flex gap-2 mt-4">
+                        <p className="text-muted text-center mb-4">Refill your ink to keep drawing? (Cost: 1 Credit)</p>
+                        <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy (1 Cred)</button>
                         </div>
@@ -1433,7 +1441,14 @@
 
         const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             const canvasRef = useRef(null);
+            
+            // Refs prevent unnecessary React re-renders while drawing and tracking fast movements
+            const drawingRef = useRef(false);
+            const currentLineRef = useRef([]);
+            const lastPosRef = useRef({x: 0, y: 0});
             const lastStrokeTime = useRef(0);
+            const inkUsedRef = useRef(0);
+
             const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
             const isDrawingPhase = room.status === 'DRAWING';
@@ -1442,16 +1457,37 @@
             const readyCount = members.filter(m => m.is_ready).length;
             
             const [wordInput, setWordInput] = useState('');
-            let drawing = false;
-            let currentLine = [];
-            let lastPos = {x: 0, y: 0};
-
             const myData = members.find(m => m.user_id === tgId) || {};
-            const [localStrokes, setLocalStrokes] = useState(myData.stroke_count || 0);
+            
+            // Max Ink allowed (length in px)
+            const maxInk = 4000 + (myData.extra_ink || 0);
 
             useEffect(() => {
-                setLocalStrokes(myData.stroke_count || 0);
-            }, [myData.stroke_count]);
+                inkUsedRef.current = myData.ink_used || 0;
+                updateInkUI();
+            }, [myData.ink_used, myData.extra_ink]);
+
+            const updateInkUI = () => {
+                if (!isDrawer || !isDrawingPhase) return;
+                const inkLeft = Math.max(0, maxInk - inkUsedRef.current);
+                const inkPercent = (inkLeft / maxInk) * 100;
+                
+                const bar = document.getElementById('inkProgressBar');
+                const text = document.getElementById('inkProgressText');
+                const buyBtn = document.getElementById('buyInkBtn');
+                
+                if (bar) {
+                    bar.style.width = `${inkPercent}%`;
+                    bar.className = `progress-bar progress-bar-striped progress-bar-animated ${inkLeft <= 500 ? 'bg-danger' : (inkLeft <= 1500 ? 'bg-warning' : 'bg-primary')}`;
+                }
+                if (text) {
+                    text.className = inkLeft <= 500 ? 'text-danger fw-bold' : 'text-muted';
+                    text.innerText = `${Math.floor(inkLeft)} / ${maxInk}`;
+                }
+                if (buyBtn) {
+                    buyBtn.style.display = inkLeft <= 0 ? 'inline-block' : 'none';
+                }
+            };
 
             const redraw = useCallback(() => {
                 const canvas = canvasRef.current;
@@ -1507,45 +1543,50 @@
             const startDraw = (e) => {
                 if (!isDrawer || !isDrawingPhase) return;
                 e.preventDefault();
-                drawing = true;
-                currentLine = [];
-                lastPos = getMousePos(e);
+                drawingRef.current = true;
+                currentLineRef.current = [];
+                lastPosRef.current = getMousePos(e);
             };
 
             const moveDraw = (e) => {
-                if (!drawing) return;
+                if (!drawingRef.current) return;
                 e.preventDefault();
                 const newPos = getMousePos(e);
                 
+                // Track physical length distance drawn
+                const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
+                
+                if (inkUsedRef.current + dist > maxInk) {
+                    stopDraw(); 
+                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' });
+                    return;
+                }
+                
+                inkUsedRef.current += dist;
+                updateInkUI();
+                
                 const ctx = canvasRef.current.getContext('2d');
                 ctx.beginPath();
-                ctx.moveTo(lastPos.x, lastPos.y);
+                ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
                 ctx.lineTo(newPos.x, newPos.y);
                 ctx.stroke();
 
-                currentLine.push({x0: lastPos.x, y0: lastPos.y, x1: newPos.x, y1: newPos.y});
-                lastPos = newPos;
+                currentLineRef.current.push({x0: lastPosRef.current.x, y0: lastPosRef.current.y, x1: newPos.x, y1: newPos.y});
+                lastPosRef.current = newPos;
             };
 
             const stopDraw = () => {
-                if(!drawing) return;
-                drawing = false;
+                if(!drawingRef.current) return;
+                drawingRef.current = false;
                 
                 const now = Date.now();
-                if (now - lastStrokeTime.current < 250) {
-                    return; 
-                }
+                if (now - lastStrokeTime.current < 100) return; 
                 
-                if(currentLine.length > 0) {
-                    socket.emit('draw', { lines: currentLine });
-                    setLocalStrokes(prev => prev + 1); // Track locally to update UI instantly
+                if(currentLineRef.current.length > 0) {
+                    socket.emit('draw', { lines: currentLineRef.current });
                     lastStrokeTime.current = now;
                 }
             };
-
-            const maxStrokes = 30 + (myData.extra_strokes || 0);
-            const inkLeft = Math.max(0, maxStrokes - localStrokes);
-            const inkPercent = (inkLeft / maxStrokes) * 100;
 
             return (
                 <div className="w-100 d-flex flex-column align-items-center">
@@ -1553,19 +1594,17 @@
                         <div className="w-100 mb-3 px-2" style={{maxWidth: '500px'}}>
                             <div className="d-flex justify-content-between small fw-bold mb-1">
                                 <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span className={inkLeft <= 5 ? 'text-danger fw-bold' : 'text-muted'}>{inkLeft} / {maxStrokes} Strokes</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - (myData.ink_used || 0)))} / {maxInk}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
-                                <div className={`progress-bar progress-bar-striped progress-bar-animated ${inkLeft <= 5 ? 'bg-danger' : (inkLeft <= 15 ? 'bg-warning' : 'bg-primary')}`} 
-                                     style={{width: `${inkPercent}%`, transition: 'width 0.3s'}}></div>
+                                <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                                     style={{width: '100%', transition: 'width 0.1s'}}></div>
                             </div>
-                            {inkLeft <= 0 && (
-                                <div className="text-center mt-3">
-                                    <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Ink Depleted' })}>
-                                        <i className="fas fa-plus-circle"></i> Buy More Ink (1 Cred)
-                                    </button>
-                                </div>
-                            )}
+                            <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink' })}>
+                                    <i className="fas fa-plus-circle"></i> Refill Ink (1 Cred)
+                                </button>
+                            </div>
                         </div>
                     )}
 
