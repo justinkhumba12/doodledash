@@ -86,6 +86,13 @@ async function initDB() {
         db = mysql.createPool({ uri: dbUrl, timezone: 'Z', waitForConnections: true, connectionLimit: 10 });
         console.log('Connected to MySQL Database (Pool).');
 
+        // Drop deprecated tables as requested
+        const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses'];
+        for (let table of tablesToDrop) {
+            await db.query(`DROP TABLE IF EXISTS ${table}`);
+        }
+        console.log('Cleaned up deprecated tables.');
+
         await db.query(`
             CREATE TABLE IF NOT EXISTS users (
                 tg_id VARCHAR(50) PRIMARY KEY,
