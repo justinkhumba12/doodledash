@@ -17,9 +17,6 @@
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
-    <!-- Use local Socket.IO provided by the Express server to prevent CDN blocking -->
-    <script src="/socket.io/socket.io.js"></script>
-    
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -89,6 +86,47 @@
 
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback } = React;
+
+        // Custom Native WebSocket wrapper simulating core Socket.io behaviors
+        class EventEmitter {
+            constructor() { this.events = {}; }
+            on(event, listener) {
+                if (!this.events[event]) this.events[event] = [];
+                this.events[event].push(listener);
+            }
+            off(event, listener) {
+                if (!this.events[event]) return;
+                this.events[event] = this.events[event].filter(l => l !== listener);
+            }
+            trigger(event, data) {
+                if (this.events[event]) this.events[event].forEach(l => l(data));
+            }
+        }
+
+        class WSClient extends EventEmitter {
+            constructor() {
+                super();
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(protocol + '//' + window.location.host);
+                
+                this.ws.onopen = () => this.trigger('connect');
+                this.ws.onclose = () => this.trigger('disconnect');
+                this.ws.onmessage = (e) => {
+                    try {
+                        const { event, data } = JSON.parse(e.data);
+                        this.trigger(event, data);
+                    } catch(err){}
+                };
+            }
+            emit(event, data) {
+                if (this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ event, data }));
+                }
+            }
+            disconnect() {
+                this.ws.close();
+            }
+        }
         
         const tg = window.Telegram.WebApp;
         tg.expand();
@@ -390,7 +428,6 @@
             };
 
             const initPeerConnection = (stream, targetId, callId) => {
-                // Incorporating strong IPv4/IPv6 TURN & STUN servers
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
@@ -554,14 +591,7 @@
             };
 
             useEffect(() => {
-                // Safely load window.io to prevent initialization crashes
-                if (!window.io) {
-                    console.error("Socket.IO client library failed to load.");
-                    setModal({ type: 'error_reload', title: 'Connection Error', content: 'Game connection could not be established. Please check your connection and reload.'});
-                    return;
-                }
-
-                const socket = window.io({ transports: ['websocket'], upgrade: false });
+                const socket = new WSClient();
                 socketRef.current = socket;
 
                 socket.on('connect', () => {
@@ -623,6 +653,11 @@
                 socket.on('call_update', handleCallUpdate);
                 socket.on('call_ended', cleanupCall);
                 
+                socket.on('live_draw', (lines) => {
+                    // Pass to event listener logic mapped lower down in canvas hooks if needed.
+                    // This is handled in the Whiteboard useEffect listening to socket.
+                });
+
                 const resetIdle = () => {
                     if (socketRef.current) socketRef.current.emit('active_event');
                     setModal(prev => prev?.type === 'idle_warning' ? null : prev);
