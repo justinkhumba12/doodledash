@@ -465,6 +465,7 @@ io.on('connection', (socket) => {
             
             if (profile_pic) userProfiles.set(tg_id, profile_pic);
 
+            // Clear disconnect timeouts upon smooth reconnect
             if (disconnectTimeouts.has(tg_id)) {
                 clearTimeout(disconnectTimeouts.get(tg_id));
                 disconnectTimeouts.delete(tg_id);
@@ -481,7 +482,7 @@ io.on('connection', (socket) => {
 
             const userState = await getUserState(tg_id);
             
-            // Check RAM for existing room
+            // Re-bind to RAM Room seamlessly without dropping calls
             for (const [id, room] of memoryRooms.entries()) {
                 if (room.members.some(m => m.user_id === tg_id)) {
                     currentRoom = id;
@@ -959,7 +960,7 @@ io.on('connection', (socket) => {
                     broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
-            }, 10000);
+            }, 120000); // Massive 2-minute grace period to completely hide TCP disconnections / Server Restarts from user.
 
             disconnectTimeouts.set(currentUser, timeoutId);
         }
