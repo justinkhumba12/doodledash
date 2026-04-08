@@ -448,7 +448,9 @@ io.on('connection', (socket) => {
             consecutive_turns: 0,
             total_turns: 0,
             has_given_up: 0,
-            purchased_hints: '[]'
+            purchased_hints: '[]',
+            stroke_count: 0,
+            extra_strokes: 0
         });
 
         currentRoom = roomIdNum;
@@ -843,6 +845,8 @@ io.on('connection', (socket) => {
         room.members.forEach(m => {
             m.purchased_hints = '[]';
             m.has_given_up = 0;
+            m.stroke_count = 0;
+            m.extra_strokes = 0;
         });
         
         // RAM Clearing for new round
@@ -866,10 +870,47 @@ io.on('connection', (socket) => {
 
     socket.on('draw', ({ lines }) => {
         if (!currentUser || !currentRoom) return;
+        const room = memoryRooms.get(currentRoom);
+        if (!room) return;
+
+        const member = room.members.find(m => m.user_id === currentUser);
+        if (member) {
+            const maxStrokes = 30 + (member.extra_strokes || 0); // Cap at 30 strokes
+            
+            if ((member.stroke_count || 0) >= maxStrokes) {
+                return socket.emit('ink_empty'); // Tell client they are out of ink
+            }
+            member.stroke_count = (member.stroke_count || 0) + 1;
+        }
+
         roomRedoStacks[currentRoom] = []; 
         if (!roomDrawings[currentRoom]) roomDrawings[currentRoom] = [];
         roomDrawings[currentRoom].push({ id: drawingCounter++, line_data: JSON.stringify(lines) });
         socket.to(`room_${currentRoom}`).emit('live_draw', lines);
+    });
+
+    socket.on('buy_ink', async () => {
+        try {
+            if (!currentUser || !currentRoom) return;
+            const room = memoryRooms.get(currentRoom);
+            if (!room || room.status !== 'DRAWING') return;
+
+            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits to buy more ink.');
+
+            await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (member) {
+                member.extra_strokes = (member.extra_strokes || 0) + 30; // Grant 30 more strokes
+                socket.emit('reward_success', '+30 Extra Strokes added!');
+                
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            }
+        } catch (err) {
+            console.error('Buy Ink Error:', err);
+        }
     });
 
     socket.on('undo', () => {
@@ -1048,7 +1089,7 @@ setInterval(() => {
         });
 
     } catch (e) { console.error("Game Loop Error:", e); }
-}, 1000);
+}, 5000); // 5-second interval instead of 1-second to drastically reduce CPU load.
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
