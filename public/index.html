@@ -16,6 +16,8 @@
     
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Use local Socket.IO provided by the Express server to prevent CDN blocking -->
     <script src="/socket.io/socket.io.js"></script>
     
     <script>
@@ -552,7 +554,14 @@
             };
 
             useEffect(() => {
-                const socket = io({ transports: ['websocket'], upgrade: false });
+                // Safely load window.io to prevent initialization crashes
+                if (!window.io) {
+                    console.error("Socket.IO client library failed to load.");
+                    setModal({ type: 'error_reload', title: 'Connection Error', content: 'Game connection could not be established. Please check your connection and reload.'});
+                    return;
+                }
+
+                const socket = window.io({ transports: ['websocket'], upgrade: false });
                 socketRef.current = socket;
 
                 socket.on('connect', () => {
