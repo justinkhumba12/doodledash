@@ -440,7 +440,7 @@ io.on('connection', (socket) => {
             }
         }
 
-        // Add to RAM Room
+        // Add to RAM Room (Tracking ink length instead of counts)
         room.members.push({
             room_id: roomIdNum,
             user_id: userId,
@@ -449,8 +449,8 @@ io.on('connection', (socket) => {
             total_turns: 0,
             has_given_up: 0,
             purchased_hints: '[]',
-            stroke_count: 0,
-            extra_strokes: 0
+            ink_used: 0,
+            extra_ink: 0
         });
 
         currentRoom = roomIdNum;
@@ -845,8 +845,8 @@ io.on('connection', (socket) => {
         room.members.forEach(m => {
             m.purchased_hints = '[]';
             m.has_given_up = 0;
-            m.stroke_count = 0;
-            m.extra_strokes = 0;
+            m.ink_used = 0; // Reset ink usages
+            m.extra_ink = 0; 
         });
         
         // RAM Clearing for new round
@@ -874,18 +874,36 @@ io.on('connection', (socket) => {
         if (!room) return;
 
         const member = room.members.find(m => m.user_id === currentUser);
-        if (member) {
-            const maxStrokes = 30 + (member.extra_strokes || 0); // Cap at 30 strokes
-            
-            if ((member.stroke_count || 0) >= maxStrokes) {
-                return socket.emit('ink_empty'); // Tell client they are out of ink
+        
+        // Calculate the physical length of the strokes
+        let strokeLength = 0;
+        if (lines && lines.length > 0) {
+            for (let i = 0; i < lines.length; i++) {
+                const l = lines[i];
+                strokeLength += Math.sqrt(Math.pow(l.x1 - l.x0, 2) + Math.pow(l.y1 - l.y0, 2));
             }
-            member.stroke_count = (member.stroke_count || 0) + 1;
+        }
+
+        if (member) {
+            const maxInk = 4000 + (member.extra_ink || 0); // Cap at 4000 pixels length
+            member.ink_used = (member.ink_used || 0) + strokeLength;
+            
+            if (member.ink_used > maxInk) {
+                // Ignore the drawing or emit empty to force them to refill
+                // (Frontend will preemptively block drawing anyway)
+            }
         }
 
         roomRedoStacks[currentRoom] = []; 
         if (!roomDrawings[currentRoom]) roomDrawings[currentRoom] = [];
-        roomDrawings[currentRoom].push({ id: drawingCounter++, line_data: JSON.stringify(lines) });
+        
+        roomDrawings[currentRoom].push({ 
+            id: drawingCounter++, 
+            line_data: JSON.stringify(lines),
+            ink_cost: strokeLength,
+            user_id: currentUser
+        });
+        
         socket.to(`room_${currentRoom}`).emit('live_draw', lines);
     });
 
@@ -902,13 +920,13 @@ io.on('connection', (socket) => {
 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
-                member.extra_strokes = (member.extra_strokes || 0) + 30; // Grant 30 more strokes
-                socket.emit('reward_success', '+30 Extra Strokes added!');
+                member.extra_ink = (member.extra_ink || 0) + 4000; // Grant 4000 more length
+                socket.emit('reward_success', '+4000 Extra Ink added!');
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
                 
-                syncRoom(currentRoom); // <-- Sync immediately to update the ink bar on the drawer's screen
+                syncRoom(currentRoom); // Sync instantly to update UI
             }
         } catch (err) {
             console.error('Buy Ink Error:', err);
@@ -919,8 +937,17 @@ io.on('connection', (socket) => {
         if (!currentUser || !currentRoom) return;
         if (roomDrawings[currentRoom] && roomDrawings[currentRoom].length > 0) {
             if (!roomRedoStacks[currentRoom]) roomRedoStacks[currentRoom] = [];
+            
             const toRestore = roomDrawings[currentRoom].pop();
             roomRedoStacks[currentRoom].push(toRestore);
+            
+            const room = memoryRooms.get(currentRoom);
+            if (room) {
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                // Restore ink length for undo
+                if (member) member.ink_used = Math.max(0, (member.ink_used || 0) - (toRestore.ink_cost || 0));
+            }
+            
             syncRoom(currentRoom);
         }
     });
@@ -930,6 +957,14 @@ io.on('connection', (socket) => {
         if (roomRedoStacks[currentRoom] && roomRedoStacks[currentRoom].length > 0) {
             const toRestore = roomRedoStacks[currentRoom].pop();
             roomDrawings[currentRoom].push(toRestore);
+            
+            const room = memoryRooms.get(currentRoom);
+            if (room) {
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                // Consume ink length back for redo
+                if (member) member.ink_used = (member.ink_used || 0) + (toRestore.ink_cost || 0);
+            }
+            
             syncRoom(currentRoom);
         }
     });
