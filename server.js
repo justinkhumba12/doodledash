@@ -4,67 +4,41 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
-const { createClient } = require('redis');
-const { createAdapter } = require('@socket.io/redis-adapter');
 
 const app = express();
 const server = http.createServer(app);
-
-// Use Redis to support massive scaling across Node.js replicas
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-const pubClient = createClient({ url: redisUrl });
-const subClient = pubClient.duplicate();
-const redisClient = pubClient.duplicate(); // Generic client for caching state
 
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-let isRedisReady = false;
-Promise.all([pubClient.connect(), subClient.connect(), redisClient.connect()]).then(() => {
-    io.adapter(createAdapter(pubClient, subClient));
-    isRedisReady = true;
-    console.log('Redis connected and Socket.IO Adapter attached.');
-}).catch(e => console.error('Redis connection failed, falling back to in-memory state:', e.message));
-
-// Fallback in-memory stores for when Redis is unavailable
+// In-memory stores (Redis removed)
 const memCalls = new Map();
 const memRedo = new Map();
 
 const getActiveCalls = async () => {
-    if (isRedisReady) return await redisClient.hGetAll('activeCalls');
     return Object.fromEntries(memCalls);
 };
 const setCall = async (id, val) => {
-    if (isRedisReady) await redisClient.hSet('activeCalls', id, val);
-    else memCalls.set(id, val);
+    memCalls.set(id, val);
 };
 const getCall = async (id) => {
-    if (isRedisReady) return await redisClient.hGet('activeCalls', id);
     return memCalls.get(id);
 };
 const delCall = async (id) => {
-    if (isRedisReady) await redisClient.hDel('activeCalls', id);
-    else memCalls.delete(id);
+    memCalls.delete(id);
 };
 const clearRedo = async (roomId) => {
-    if (isRedisReady) await redisClient.del(`redo:${roomId}`);
-    else memRedo.delete(roomId);
+    memRedo.delete(roomId);
 };
 const pushRedo = async (roomId, val) => {
-    if (isRedisReady) await redisClient.rPush(`redo:${roomId}`, val);
-    else {
-        if(!memRedo.has(roomId)) memRedo.set(roomId, []);
-        memRedo.get(roomId).push(val);
-    }
+    if(!memRedo.has(roomId)) memRedo.set(roomId, []);
+    memRedo.get(roomId).push(val);
 };
 const popRedo = async (roomId) => {
-    if (isRedisReady) return await redisClient.rPop(`redo:${roomId}`);
-    else {
-        const arr = memRedo.get(roomId);
-        if (arr && arr.length > 0) return arr.pop();
-        return null;
-    }
+    const arr = memRedo.get(roomId);
+    if (arr && arr.length > 0) return arr.pop();
+    return null;
 };
 
 app.use(cors());
@@ -108,7 +82,7 @@ async function initDB() {
         pool = mysql.createPool({ 
             uri: dbUrl, 
             timezone: 'Z',
-            connectionLimit: 100, // Handle high concurrency seamlessly
+            connectionLimit: 100, 
             queueLimit: 0,
             waitForConnections: true
         });
@@ -149,7 +123,6 @@ async function initDB() {
             )
         `);
 
-        // Migration logic for modifying existing tables
         const migrations = [
             "ALTER TABLE rooms ADD COLUMN is_private BOOLEAN DEFAULT FALSE",
             "ALTER TABLE rooms ADD COLUMN password VARCHAR(255)",
@@ -223,7 +196,7 @@ initDB();
 
 app.post('/webhook', async (req, res) => {
     const update = req.body;
-    res.sendStatus(200); // Acknowledge early
+    res.sendStatus(200); 
 
     const token = process.env.BOT_TOKEN; 
     const webAppUrl = process.env.WEBAPP_URL; 
@@ -304,7 +277,7 @@ app.post('/webhook', async (req, res) => {
 
         if (query.data.startsWith('buy_')) {
             const amount = parseInt(query.data.split('_')[1]);
-            const stars = amount / 2; // 1000 creds = 500 stars
+            const stars = amount / 2; 
             
             const payload = JSON.stringify({ tgId: tgId.toString(), amount: amount });
             const invoice = {
@@ -312,7 +285,7 @@ app.post('/webhook', async (req, res) => {
                 title: `${amount} DoodleDash Credits`,
                 description: `Top up your account with ${amount} credits.`,
                 payload: payload,
-                provider_token: "", // Empty for Telegram Stars
+                provider_token: "", 
                 currency: "XTR",
                 prices: [{ label: `${amount} Credits`, amount: stars }]
             };
@@ -379,16 +352,14 @@ async function getUserState(tg_id) {
 }
 
 const broadcastRooms = async () => {
-    // Send both Private and Public Rooms
     const [rooms] = await pool.query('SELECT r.id, r.status, r.is_private, r.max_members, r.creator_id, r.password, COUNT(rm.user_id) as member_count FROM rooms r LEFT JOIN room_members rm ON r.id = rm.room_id GROUP BY r.id');
     
-    // Iterating sockets globally works effectively via adapter
     const sockets = await io.fetchSockets();
     sockets.forEach(s => {
         const userId = s.currentUser;
         const customizedRooms = rooms.map(r => {
             if (r.creator_id === userId) {
-                return r; // Send password if they created it
+                return r; 
             } else {
                 const { password, ...safeRoom } = r;
                 return safeRoom;
@@ -412,7 +383,6 @@ const deleteRoom = async (roomId) => {
     }
 };
 
-// Auto Room Resetter and Deleter
 const checkRoomReset = async (roomId) => {
     if (!roomId) return;
     try {
@@ -421,7 +391,6 @@ const checkRoomReset = async (roomId) => {
             const [roomInfo] = await pool.query('SELECT is_private FROM rooms WHERE id = ?', [roomId]);
             const isPrivate = roomInfo.length > 0 && roomInfo[0].is_private;
 
-            // Delete room completely if empty unless it's the fallback base rooms (1 or 2) OR it's a private room (let expire_at handle it)
             if (roomId !== 1 && roomId !== 2 && !isPrivate) {
                 await deleteRoom(roomId);
             } else {
@@ -526,7 +495,6 @@ const terminateCallsForUser = async (userId) => {
     }
 };
 
-// Architectural Event-Driven Revisions
 const checkRoomReadiness = async (roomId) => {
     try {
         const [room] = await pool.query("SELECT status FROM rooms WHERE id = ?", [roomId]);
@@ -538,7 +506,6 @@ const checkRoomReadiness = async (roomId) => {
             await pool.query("UPDATE rooms SET status = 'PRE_DRAW', current_drawer_id = ?, word_to_draw = NULL WHERE id = ?", [nextDrawer, roomId]);
             await pool.query("UPDATE room_members SET is_ready = 0 WHERE room_id = ?", [roomId]);
             
-            // Clear drawings and guesses for the upcoming round automatically
             await pool.query("DELETE FROM guesses WHERE room_id = ?", [roomId]);
             await pool.query("DELETE FROM drawings WHERE room_id = ?", [roomId]);
             await clearRedo(roomId);
@@ -554,7 +521,7 @@ const scheduleBreakTransition = (roomId) => {
             await pool.query("UPDATE rooms SET status = 'BREAK', break_end_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND) WHERE id = ?", [roomId]);
             await pool.query("UPDATE room_members SET has_given_up = 0 WHERE room_id = ?", [roomId]);
             syncRoom(roomId);
-            checkRoomReadiness(roomId); // Check immediately if players got antsy
+            checkRoomReadiness(roomId); 
         }
     }, 5500); 
 };
@@ -578,7 +545,6 @@ io.on('connection', (socket) => {
     let currentUser = null;
     let currentRoom = null;
 
-    // Distributive Scaling: Track localized socket interactions with event-driven timeouts
     const startIdleTimer = () => {
         if (socket.idleTimeout) clearTimeout(socket.idleTimeout);
         if (socket.warnTimeout) clearTimeout(socket.warnTimeout);
@@ -604,7 +570,6 @@ io.on('connection', (socket) => {
         }, 60000); 
     };
 
-    // Extracted robust helper logic for joining rooms gracefully behind the scenes
     const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
         const [roomData] = await pool.query('SELECT * FROM rooms WHERE id = ?', [roomIdNum]);
         if (roomData.length === 0) return socket.emit('join_error', 'Room not found.');
@@ -896,7 +861,7 @@ io.on('connection', (socket) => {
             await pool.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
             await pool.query('UPDATE rooms SET expire_at = DATE_ADD(expire_at, INTERVAL ? HOUR) WHERE id = ?', [hours, currentRoom]);
             
-            scheduleRoomExpiration(currentRoom, hours * 3600 * 1000); // Overlay robust new duration
+            scheduleRoomExpiration(currentRoom, hours * 3600 * 1000); 
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
@@ -949,7 +914,6 @@ io.on('connection', (socket) => {
             startIdleTimer();
             await pool.query('INSERT INTO chats (room_id, user_id, message) VALUES (?, ?, ?)', [currentRoom, currentUser, message]);
             
-            // Inline Database Garbage collection for Chats
             const [countRes] = await pool.query('SELECT COUNT(*) as c FROM chats WHERE room_id = ?', [currentRoom]);
             if (countRes[0].c >= 40) {
                 await pool.query(`
@@ -1107,7 +1071,6 @@ io.on('connection', (socket) => {
             await clearRedo(currentRoom);
             syncRoom(currentRoom);
 
-            // Timeout protected against race conditions 
             setTimeout(async () => {
                 const [r] = await pool.query("SELECT status, round_end_time FROM rooms WHERE id = ?", [activeRoomId]);
                 if (r.length > 0 && r[0].status === 'DRAWING' && new Date(r[0].round_end_time) <= new Date()) {
@@ -1198,7 +1161,6 @@ io.on('connection', (socket) => {
             await setCall(call_id, JSON.stringify(call));
             io.to(`room_${call.room_id}`).emit('call_update', call);
             
-            // Assign billing responsibility locally to whichever server node accepted the call.
             socket.activeBillingIntervals = socket.activeBillingIntervals || {};
             socket.activeBillingIntervals[call_id] = setInterval(async () => {
                 const cData = await getCall(call_id);
@@ -1260,4 +1222,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`DoodleDash Scalable Cluster instance listening on port ${PORT}`));
+server.listen(PORT, () => console.log(`DoodleDash instance listening on port ${PORT}`));
