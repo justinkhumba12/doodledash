@@ -114,7 +114,7 @@
                 <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
                     <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
                     <h4 className="fw-bold">Enable Notifications</h4>
-                    <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically, please accept our audio policy.</p>
+                    <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically while playing, please accept our audio policy.</p>
                     <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Continue</button>
                 </div>
             </div>
@@ -131,6 +131,8 @@
             const [modal, setModal] = useState(null);
             const [profileModal, setProfileModal] = useState(null);
             const [sendAmount, setSendAmount] = useState(50);
+            const [isOffline, setIsOffline] = useState(!navigator.onLine);
+            const [openAcc, setOpenAcc] = useState('volumes');
             
             const [activeCall, setActiveCall] = useState(null);
             const [localStream, setLocalStream] = useState(null);
@@ -160,6 +162,22 @@
             const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
+
+            // Handle online/offline events explicitly
+            useEffect(() => {
+                const handleOffline = () => setIsOffline(true);
+                const handleOnline = () => {
+                    if (socketRef.current && socketRef.current.connected) {
+                        setIsOffline(false);
+                    }
+                };
+                window.addEventListener('offline', handleOffline);
+                window.addEventListener('online', handleOnline);
+                return () => {
+                    window.removeEventListener('offline', handleOffline);
+                    window.removeEventListener('online', handleOnline);
+                };
+            }, []);
 
             if (!tgId) {
                 return (
@@ -457,7 +475,12 @@
                 socketRef.current = socket;
 
                 socket.on('connect', () => {
+                    setIsOffline(false);
                     socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                });
+
+                socket.on('disconnect', () => {
+                    setIsOffline(true);
                 });
 
                 socket.on('lobby_data', (data) => {
@@ -599,7 +622,18 @@
                         </div>
                     </div>
 
-                    {!policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
+                    {isOffline && (
+                        <div className="wb-overlay" style={{zIndex: 99999, background: 'rgba(0,0,0,0.9)', position: 'fixed'}}>
+                            <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
+                                <i className="fas fa-wifi fa-slash fs-1 text-danger mb-3 heartbeat"></i>
+                                <h4 className="fw-bold text-dark">Connection Lost</h4>
+                                <p className="text-muted small">You are currently offline or disconnected from the server. Please check your internet connection. Reconnecting...</p>
+                                <div className="spinner-border text-danger mt-2" role="status"></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {currentRoomId && !policyAccepted && !isOffline && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
 
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
@@ -657,91 +691,116 @@
                                             <div className="panel-body">
                                                 <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
                                                 
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Message Volume</span>
-                                                        <span className="text-primary">{Math.round(msgVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setMsgVol(v);
-                                                            const s = document.getElementById('mgsSound');
-                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                        }} />
-                                                </div>
-                                                
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Guess Volume</span>
-                                                        <span className="text-primary">{Math.round(guessVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setGuessVol(v);
-                                                            const s = document.getElementById('guessSound');
-                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
-                                                        }} />
-                                                </div>
+                                                <div className="accordion" id="soundAccordion">
+                                                    
+                                                    {/* Volumes Accordion */}
+                                                    <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAcc === 'volumes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'volumes' ? '' : 'volumes')} style={{backgroundColor: openAcc === 'volumes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
+                                                                <i className="fas fa-volume-up text-primary me-2"></i> Volume Controls
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAcc === 'volumes' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white pb-1">
+                                                                <div className="mb-3">
+                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                        <span>Message Volume</span>
+                                                                        <span className="text-primary">{Math.round(msgVol * 100)}%</span>
+                                                                    </label>
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={msgVol} 
+                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                        onChange={e => {
+                                                                            const v = parseFloat(e.target.value);
+                                                                            setMsgVol(v);
+                                                                            const s = document.getElementById('mgsSound');
+                                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                        }} />
+                                                                </div>
+                                                                
+                                                                <div className="mb-3">
+                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                        <span>Guess Volume</span>
+                                                                        <span className="text-primary">{Math.round(guessVol * 100)}%</span>
+                                                                    </label>
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={guessVol} 
+                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                        onChange={e => {
+                                                                            const v = parseFloat(e.target.value);
+                                                                            setGuessVol(v);
+                                                                            const s = document.getElementById('guessSound');
+                                                                            if (s) { s.volume = v; s.play().catch(()=>{}); }
+                                                                        }} />
+                                                                </div>
 
-                                                <div className="mb-3 bg-light p-3 rounded-4 shadow-sm border-start border-warning border-4">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Call Ringtone</span>
-                                                        <span className="text-warning">{Math.round(ringVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setRingVol(v);
-                                                            const s = document.getElementById('callSound');
-                                                            if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
-                                                        }} />
-                                                </div>
+                                                                <div className="mb-3">
+                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                        <span>Call Ringtone</span>
+                                                                        <span className="text-warning">{Math.round(ringVol * 100)}%</span>
+                                                                    </label>
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={ringVol} 
+                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                        onChange={e => {
+                                                                            const v = parseFloat(e.target.value);
+                                                                            setRingVol(v);
+                                                                            const s = document.getElementById('callSound');
+                                                                            if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
+                                                                        }} />
+                                                                </div>
 
-                                                <div className="mb-4 bg-light p-3 rounded-4 shadow-sm border-start border-info border-4">
-                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                        <span>Background Music</span>
-                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
-                                                    </label>
-                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
-                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                        onChange={e => {
-                                                            const v = parseFloat(e.target.value);
-                                                            setBgmVol(v);
-                                                        }} />
-                                                </div>
-
-                                                <h6 className="fw-bold mt-2 mb-3 text-center"><i className="fas fa-music text-primary"></i> Theme Music</h6>
-                                                
-                                                <button 
-                                                    className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
-                                                    onClick={() => {
-                                                        setCurrentBgmMode('random');
-                                                        localStorage.setItem('currentBgmMode', 'random');
-                                                    }}
-                                                >
-                                                    <i className="fas fa-random"></i> {currentBgmMode === 'random' ? 'Random Mode Active' : 'Use Randomly'}
-                                                </button>
-
-                                                {availableMusics.map(music => (
-                                                    <div key={music} className="d-flex justify-content-between align-items-center bg-white p-2 rounded shadow-sm mb-2 border">
-                                                        <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
-                                                        <button className={`btn btn-sm ${currentBgmMode === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
-                                                            setCurrentBgmMode(music);
-                                                            localStorage.setItem('currentBgmMode', music);
-                                                            if ('caches' in window) {
-                                                                caches.open('doodledash-cache-v2').then(cache => cache.add(encodeURI('/thememusic/' + music))).catch(()=>{});
-                                                            }
-                                                        }}>
-                                                            {currentBgmMode === music ? 'Active' : 'Use'}
-                                                        </button>
+                                                                <div className="mb-2">
+                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                        <span>Background Music</span>
+                                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
+                                                                    </label>
+                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
+                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                        onChange={e => {
+                                                                            const v = parseFloat(e.target.value);
+                                                                            setBgmVol(v);
+                                                                        }} />
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                ))}
 
+                                                    {/* Themes Accordion */}
+                                                    <div className="accordion-item border-0 shadow-sm rounded-4 overflow-hidden">
+                                                        <h2 className="accordion-header">
+                                                            <button className={`accordion-button fw-bold ${openAcc === 'themes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'themes' ? '' : 'themes')} style={{backgroundColor: openAcc === 'themes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
+                                                                <i className="fas fa-music text-primary me-2"></i> Theme Music
+                                                            </button>
+                                                        </h2>
+                                                        <div className={`accordion-collapse collapse ${openAcc === 'themes' ? 'show' : ''}`}>
+                                                            <div className="accordion-body bg-white">
+                                                                <button 
+                                                                    className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
+                                                                    onClick={() => {
+                                                                        setCurrentBgmMode('random');
+                                                                        localStorage.setItem('currentBgmMode', 'random');
+                                                                    }}
+                                                                >
+                                                                    <i className="fas fa-random"></i> {currentBgmMode === 'random' ? 'Random Mode Active' : 'Use Randomly'}
+                                                                </button>
+
+                                                                {availableMusics.map(music => (
+                                                                    <div key={music} className="d-flex justify-content-between align-items-center bg-light p-2 rounded shadow-sm mb-2 border">
+                                                                        <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
+                                                                        <button className={`btn btn-sm ${currentBgmMode === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
+                                                                            setCurrentBgmMode(music);
+                                                                            localStorage.setItem('currentBgmMode', music);
+                                                                            if ('caches' in window) {
+                                                                                caches.open('doodledash-cache-v2').then(cache => cache.add(encodeURI('/thememusic/' + music))).catch(()=>{});
+                                                                            }
+                                                                        }}>
+                                                                            {currentBgmMode === music ? 'Active' : 'Use'}
+                                                                        </button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                </div>
                                             </div>
                                         )}
                                     </div>
