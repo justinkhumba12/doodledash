@@ -69,7 +69,6 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        /* Responsive Lobby Tabs with Fixed Height */
         .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
         .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
         .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
@@ -163,7 +162,6 @@
             const [isOffline, setIsOffline] = useState(!navigator.onLine);
             const [openAccordion, setOpenAccordion] = useState(null);
 
-            // Volumes & Background Music settings
             const [msgVol, setMsgVol] = useState(() => parseFloat(localStorage.getItem('msgVol') ?? '1.0'));
             const [guessVol, setGuessVol] = useState(() => parseFloat(localStorage.getItem('guessVol') ?? '1.0'));
             const [ringVol, setRingVol] = useState(() => parseFloat(localStorage.getItem('ringVol') ?? '1.0'));
@@ -177,7 +175,6 @@
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
-            // Tracking policy in sessionStorage to guarantee one interaction per session/reload
             const [policyAccepted, setPolicyAccepted] = useState(() => sessionStorage.getItem('audioPolicy') === 'true');
 
             const peerConnectionRef = useRef(null);
@@ -191,7 +188,6 @@
             const prevCountChats = useRef(0);
             const prevCountGuesses = useRef(0);
 
-            // Global Notification Observers
             useEffect(() => {
                 if (roomData && roomData.chats) {
                     if (roomData.chats.length > prevCountChats.current) {
@@ -220,7 +216,6 @@
                 }
             }, [roomData?.guesses, tgId, activeTab]);
 
-            // Network Offline detection
             useEffect(() => {
                 const handleOffline = () => setIsOffline(true);
                 const handleOnline = () => setIsOffline(false);
@@ -232,7 +227,6 @@
                 };
             }, []);
 
-            // Notification volume ducking tracker
             useEffect(() => {
                 const updateNotify = () => {
                     const mgs = document.getElementById('mgsSound');
@@ -280,7 +274,6 @@
                 localStorage.setItem('ringVol', ringVol);
             }, [ringVol]);
 
-            // BGM Volume ducking logic
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
                 if (s) {
@@ -395,11 +388,29 @@
             };
 
             const initPeerConnection = (stream, targetId, callId) => {
+                // Incorporating strong IPv4/IPv6 TURN & STUN servers
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' }
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        {
+                            urls: "turn:openrelay.metered.ca:80",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        },
+                        {
+                            urls: "turn:openrelay.metered.ca:443",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        },
+                        {
+                            urls: "turn:openrelay.metered.ca:443?transport=tcp",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        }
                     ] 
                 });
                 
@@ -419,9 +430,11 @@
 
                 pc.ontrack = (e) => {
                     if (remoteAudioRef.current) {
-                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        remoteAudioRef.current.srcObject = inboundStream;
-                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                        const inboundStream = (e.streams && e.streams.length > 0) ? e.streams[0] : new MediaStream([e.track]);
+                        if (remoteAudioRef.current.srcObject !== inboundStream) {
+                            remoteAudioRef.current.srcObject = inboundStream;
+                            remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                        }
                     }
                 };
 
@@ -504,7 +517,7 @@
                     const targetId = call.receiver;
                     const pc = initPeerConnection(stream, targetId, call.id);
                     try {
-                        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+                        const offer = await pc.createOffer();
                         await pc.setLocalDescription(offer);
                         socketRef.current.emit('webrtc_signal', { 
                             call_id: call.id, 
