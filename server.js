@@ -317,7 +317,8 @@ const checkRoomReset = (roomId) => {
     if (room.members.length === 0) {
         if (roomId !== 1 && roomId !== 2 && !room.is_private) {
             deleteRoom(roomId);
-        } else {
+        } else if (!room.is_private) {
+            // Keep public core rooms but reset
             room.status = 'WAITING';
             room.current_drawer_id = null;
             room.word_to_draw = null;
@@ -330,6 +331,7 @@ const checkRoomReset = (roomId) => {
             roomDrawings[roomId] = [];
             roomRedoStacks[roomId] = [];
         }
+        // If it IS private, we intentionally don't delete or fully reset it until expiration.
     } else if (room.members.length < 2) {
         room.status = 'WAITING';
         room.current_drawer_id = null;
@@ -475,7 +477,8 @@ io.on('connection', (socket) => {
             total_turns: 0,
             has_given_up: 0,
             purchased_hints: '[]',
-            inks: getInitialInks()
+            inks: getInitialInks(),
+            joined_at: Date.now() // Track explicit joining order
         });
 
         currentRoom = roomIdNum;
@@ -613,8 +616,11 @@ io.on('connection', (socket) => {
 
                 if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                 
-                // Base Cost depends exactly on user limit (2, 3, or 4 credits)
-                cost += limit; 
+                // Expiry and slot strict cost requirements
+                const limitCost = limit === 2 ? 1 : (limit === 3 ? 3 : 4);
+                const durationCost = expire_hours === 2 ? 1 : (expire_hours === 4 ? 2 : 1);
+                
+                cost += limitCost + durationCost; 
                 
                 const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
                 expDate = new Date(Date.now() + hours * 3600000);
@@ -774,18 +780,25 @@ io.on('connection', (socket) => {
     socket.on('give_up', () => {
         if (!currentUser || !currentRoom) return;
         const room = memoryRooms.get(currentRoom);
-        if (!room || room.status !== 'DRAWING') return;
+        if (!room || !['DRAWING', 'PRE_DRAW'].includes(room.status)) return;
 
         const isDrawer = room.current_drawer_id === currentUser;
 
         if (isDrawer) {
-            room.status = 'REVEAL';
-            room.break_end_time = new Date(Date.now() + 5000); 
-            room.round_end_time = null;
-            room.last_winner_id = null;
+            if (room.status === 'PRE_DRAW') {
+                room.status = 'BREAK';
+                room.break_end_time = new Date(Date.now() + 5000); 
+                room.round_end_time = null;
+            } else {
+                room.status = 'REVEAL';
+                room.break_end_time = new Date(Date.now() + 5000); 
+                room.round_end_time = null;
+                room.last_winner_id = null;
+            }
             if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-            roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up.', created_at: new Date() });
+            roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() });
         } else {
+            if (room.status !== 'DRAWING') return; // Guessers only give up during active draws
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) member.has_given_up = 1;
             
@@ -931,7 +944,7 @@ io.on('connection', (socket) => {
         room.word_to_draw = wordClean;
         room.base_hints = JSON.stringify(hints);
         room.status = 'DRAWING';
-        room.round_end_time = new Date(Date.now() + 120000); // 120s max to draw
+        room.round_end_time = null; // Removed countdown per requirement
         
         room.members.forEach(m => {
             m.purchased_hints = '[]';
@@ -1146,7 +1159,7 @@ io.on('connection', (socket) => {
                     broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
-            }, 5000); 
+            }, 3000); // 3 Second Drop Rule Reconnect Tolerance
 
             disconnectTimeouts.set(currentUser, timeoutId);
         }
@@ -1174,19 +1187,7 @@ setInterval(() => {
                 continue;
             }
 
-            // 2. Drawing Expiration Check
-            if (room.status === 'DRAWING' && room.round_end_time && now >= room.round_end_time.getTime()) {
-                room.status = 'REVEAL';
-                room.break_end_time = new Date(now + 5000);
-                room.round_end_time = null;
-                room.last_winner_id = null;
-                if (!roomChats[roomId]) roomChats[roomId] = [];
-                roomChats[roomId].push({ id: chatCounter++, room_id: roomId, user_id: 'System', message: 'Time is up!', created_at: new Date() });
-                syncRoom(roomId);
-                continue;
-            }
-
-            // 3. Reveal -> Break Transition
+            // 2. Reveal -> Break Transition
             if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                 room.status = 'BREAK';
                 room.break_end_time = new Date(now + 10000); 
@@ -1194,7 +1195,7 @@ setInterval(() => {
                 syncRoom(roomId);
             }
 
-            // 4. Waiting/Break -> Pre Draw Transition (Join Order Turns)
+            // 3. Waiting/Break -> Pre Draw Transition (Join Order Turns)
             if (room.status === 'WAITING' || room.status === 'BREAK') {
                 if (room.members.length >= 2) {
                     if (!room.break_end_time) {
@@ -1202,9 +1203,12 @@ setInterval(() => {
                         syncRoom(roomId);
                     } else if (now >= room.break_end_time.getTime() || room.members.every(m => m.is_ready)) {
                         
+                        // Enforce Join time Queue Order
+                        const sortedMembers = [...room.members].sort((a, b) => a.joined_at - b.joined_at);
+                        
                         let idx = room.turn_index || 0;
-                        if (idx >= room.members.length) idx = 0;
-                        const nextDrawer = room.members[idx].user_id;
+                        if (idx >= sortedMembers.length) idx = 0;
+                        const nextDrawer = sortedMembers[idx].user_id;
                         
                         room.status = 'PRE_DRAW';
                         room.current_drawer_id = nextDrawer;
@@ -1228,7 +1232,7 @@ setInterval(() => {
                 }
             }
 
-            // 5. Expiration Check for Private Rooms
+            // 4. Expiration Check for Private Rooms
             if (room.is_private && room.expire_at && now >= room.expire_at.getTime()) {
                 io.to(`room_${roomId}`).emit('room_expired');
                 deleteRoom(roomId); 
@@ -1243,7 +1247,7 @@ setInterval(() => {
             }
         }
         
-        // 6. Idle Client Kick Check
+        // 5. Idle Client Kick Check
         io.sockets.sockets.forEach(s => {
             if (s.currentRoom) {
                 const idleTime = now - (s.lastActiveEvent || now);
