@@ -234,10 +234,10 @@ async function getUserState(tg_id) {
     const [rows] = await db.query(`
         SELECT *,
         (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
-        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 180)) as ad1_available,
-        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 180)) as ad2_available,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 180)) as ad1_wait_mins,
-        GREATEST(0, 180 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 180)) as ad2_wait_mins,
+        (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 60)) as ad1_available,
+        (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 45)) as ad2_available,
+        GREATEST(0, 60 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 60)) as ad1_wait_mins,
+        GREATEST(0, 45 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 45)) as ad2_wait_mins,
         (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
         (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
         FROM users WHERE tg_id = ?
@@ -302,6 +302,7 @@ const checkRoomReset = (roomId) => {
             room.status = 'WAITING';
             room.current_drawer_id = null;
             room.word_to_draw = null;
+            room.break_end_time = null;
             room.members = [];
             roomChats[roomId] = [];
             roomGuesses[roomId] = [];
@@ -312,6 +313,7 @@ const checkRoomReset = (roomId) => {
         room.status = 'WAITING';
         room.current_drawer_id = null;
         room.word_to_draw = null;
+        room.break_end_time = null;
         room.members.forEach(m => m.has_given_up = 0);
     }
 };
@@ -372,7 +374,11 @@ const syncRoom = (roomId) => {
                 }
 
                 s.emit('room_sync', {
-                    room: { ...room, expire_at: room.expire_at ? room.expire_at.toISOString() : null }, // Serialize Date obj
+                    room: { 
+                        ...room, 
+                        expire_at: room.expire_at ? room.expire_at.toISOString() : null,
+                        break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null
+                    },
                     members,
                     chats, 
                     guesses: sanitizedGuesses,
@@ -534,6 +540,8 @@ io.on('connection', (socket) => {
             } 
             else if (type === 'ad' || type === 'ad2') {
                 const prefix = type === 'ad' ? 'ad' : 'ad2';
+                const cooldown = prefix === 'ad' ? 60 : 45;
+                
                 const [u] = await db.query(`SELECT
                     ${prefix}_claims_today as claims,
                     DATE_FORMAT(last_${prefix}_claim_time, '%Y-%m-%d') as last_date,
@@ -546,13 +554,13 @@ io.on('connection', (socket) => {
                     const isToday = user.last_date === user.today;
 
                     if (!user.last_date || !isToday) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
-                    } else if (user.claims < 3 && (user.mins_passed === null || user.mins_passed >= 180)) {
-                        await db.query(`UPDATE users SET credits = credits + 2, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                        success = true; msg = 'Reward claimed! +2 Credits';
+                        await db.query(`UPDATE users SET credits = credits + 1, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        success = true; msg = 'Reward claimed! +1 Credit';
+                    } else if (user.claims < 5 && (user.mins_passed === null || user.mins_passed >= cooldown)) {
+                        await db.query(`UPDATE users SET credits = credits + 1, ${prefix}_claims_today = ${prefix}_claims_today + 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
+                        success = true; msg = 'Reward claimed! +1 Credit';
                     } else {
-                        msg = 'Ad reward not available yet. Max 3 per day, 3 hours apart.';
+                        msg = `Ad reward not available yet. Max 5 per day, ${cooldown} mins apart.`;
                     }
                 }
             }
@@ -575,10 +583,14 @@ io.on('connection', (socket) => {
             let expDate = null;
             
             if (is_private) {
+                const hasRoom = Array.from(memoryRooms.values()).some(r => r.creator_id === currentUser);
+                if (hasRoom) return socket.emit('create_error', 'You can only have 1 private room active at a time.');
+
                 if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
-                const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-                let timeCost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
-                cost += limit + timeCost;
+                
+                const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
+                let timeCost = hours === 4 ? 2 : 1;
+                cost += timeCost;
                 expDate = new Date(Date.now() + hours * 3600000);
             }
 
@@ -640,17 +652,36 @@ io.on('connection', (socket) => {
         broadcastRooms();
     });
 
+    socket.on('delete_room', () => {
+        if (!currentUser || !currentRoom) return;
+        const room = memoryRooms.get(currentRoom);
+        if (!room || room.creator_id !== currentUser) return;
+
+        io.to(`room_${currentRoom}`).emit('room_expired'); // Kicks everyone out
+        
+        deleteRoom(currentRoom);
+        
+        io.in(`room_${currentRoom}`).fetchSockets().then(sockets => {
+            sockets.forEach(s => {
+                s.leave(`room_${currentRoom}`);
+                s.currentRoom = null;
+            });
+        });
+        
+        broadcastRooms();
+    });
+
     socket.on('extend_room', async ({ expire_hours }) => {
         try {
             if (!currentUser || !currentRoom) return;
-            const hours = [2, 4, 12].includes(expire_hours) ? expire_hours : 2;
-            let cost = hours === 12 ? 10 : (hours === 4 ? 4 : 2);
+            const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
+            let cost = hours === 4 ? 2 : 1;
             
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
             
             const room = memoryRooms.get(currentRoom);
-            if (!room || !room.is_private) return;
+            if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
             await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
             room.expire_at = new Date(room.expire_at.getTime() + hours * 3600000);
@@ -751,7 +782,11 @@ io.on('connection', (socket) => {
             const currentGuesses = roomGuesses[currentRoom] || [];
             const myGuessCount = currentGuesses.filter(g => g.user_id === currentUser).length;
             
-            if (myGuessCount >= 5) {
+            if (myGuessCount >= 6) {
+                return socket.emit('create_error', 'No more guesses allowed this round.');
+            }
+
+            if (myGuessCount >= 4) {
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits for extra guesses! (Cost: 1 Credit)');
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
@@ -781,7 +816,7 @@ io.on('connection', (socket) => {
             if (!currentUser || !currentRoom) return;
 
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 2) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+            if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
             const room = memoryRooms.get(currentRoom);
             if (!room) return;
@@ -789,13 +824,15 @@ io.on('connection', (socket) => {
             if (!member) return;
 
             let purchased = JSON.parse(member.purchased_hints || '[]');
+            if (purchased.length >= 1) return socket.emit('create_error', 'You can only buy 1 hint per round.');
+
             if (!purchased.includes(index)) {
                 purchased.push(index);
-                await db.query('UPDATE users SET credits = credits - 2 WHERE tg_id = ?', [currentUser]);
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                 member.purchased_hints = JSON.stringify(purchased);
                 
                 if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-                roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint for 2 Credits!`, created_at: new Date() });
+                roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint for 1 Credit!`, created_at: new Date() });
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
@@ -1010,7 +1047,7 @@ io.on('connection', (socket) => {
                     const uState1 = await getUserState(c.caller);
                     if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
                 }
-            }, 60000);
+            }, 180000); // 1 Credit for every 3 minutes
 
             syncRoom(currentRoom);
         }
@@ -1064,25 +1101,37 @@ setInterval(() => {
             // 1. Reveal -> Break Transition
             if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                 room.status = 'BREAK';
-                room.break_end_time = new Date(now + 600000); // Wait up to 10 min for ready
+                room.break_end_time = new Date(now + 10000); // Wait 10 seconds for auto-ready
                 room.members.forEach(m => m.has_given_up = 0);
                 syncRoom(roomId);
             }
 
             // 2. Waiting/Break -> Pre Draw Transition
             if (room.status === 'WAITING' || room.status === 'BREAK') {
-                if (room.members.length >= 2 && room.members.every(m => m.is_ready)) {
-                    const nextDrawer = room.members[Math.floor(Math.random() * room.members.length)].user_id;
-                    room.status = 'PRE_DRAW';
-                    room.current_drawer_id = nextDrawer;
-                    room.word_to_draw = null;
-                    room.members.forEach(m => m.is_ready = 0);
-                    
-                    // Clear round data
-                    roomGuesses[roomId] = [];
-                    roomDrawings[roomId] = [];
-                    roomRedoStacks[roomId] = [];
-                    syncRoom(roomId);
+                if (room.members.length >= 2) {
+                    if (!room.break_end_time) {
+                        room.break_end_time = new Date(now + 10000);
+                        syncRoom(roomId);
+                    } else if (now >= room.break_end_time.getTime() || room.members.every(m => m.is_ready)) {
+                        // All players forced to ready state & Game Starts
+                        const nextDrawer = room.members[Math.floor(Math.random() * room.members.length)].user_id;
+                        room.status = 'PRE_DRAW';
+                        room.current_drawer_id = nextDrawer;
+                        room.word_to_draw = null;
+                        room.break_end_time = null;
+                        room.members.forEach(m => m.is_ready = 0);
+                        
+                        // Clear round data
+                        roomGuesses[roomId] = [];
+                        roomDrawings[roomId] = [];
+                        roomRedoStacks[roomId] = [];
+                        syncRoom(roomId);
+                    }
+                } else {
+                    if (room.break_end_time) {
+                        room.break_end_time = null;
+                        syncRoom(roomId);
+                    }
                 }
             }
 
