@@ -127,13 +127,14 @@
             }
         };
 
+        // NEW Modal with specifically requested texts and Okay button
         const AudioPolicyModal = ({ onAccept }) => (
             <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
                 <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
-                    <i className="fas fa-bell fs-1 text-warning mb-3 heartbeat"></i>
-                    <h4 className="fw-bold">Enable Notifications</h4>
-                    <p className="text-muted small">To ensure you hear incoming calls and game alerts automatically while playing, please accept our audio policy.</p>
-                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Accept & Continue</button>
+                    <i className="fas fa-phone-volume fs-1 text-warning mb-3 heartbeat"></i>
+                    <h4 className="fw-bold">Voice Call Warning</h4>
+                    <p className="text-muted small">To receive voice calls and hear ringtones, please enable audio autoplay for this room.</p>
+                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Okay</button>
                 </div>
             </div>
         );
@@ -169,7 +170,8 @@
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
-            const [policyAccepted, setPolicyAccepted] = useState(() => localStorage.getItem('audioPolicy') === 'true');
+            // Audio Unlock state setup without LocalStorage so it resets properly when entering a room.
+            const [policyAccepted, setPolicyAccepted] = useState(false);
 
             const peerConnectionRef = useRef(null);
             const remoteAudioRef = useRef(null);
@@ -197,8 +199,22 @@
             useEffect(() => {
                 if (currentRoomId) {
                     lastKnownRoomRef.current = currentRoomId;
+                    // Reset Audio Policy everytime user enters a NEW room to ensure auto-play is ready
+                    setPolicyAccepted(false);
+                    audioUnlocked.current = false;
                 }
             }, [currentRoomId]);
+
+            // FIX 2: Check Room Status continuously - if user somehow exists but is NOT inside members list, kick them to lobby.
+            useEffect(() => {
+                if (currentRoomId && roomData) {
+                    const isMember = roomData.members.some(m => m.user_id === tgIdRef.current);
+                    if (!isMember) {
+                        setCurrentRoomId(null);
+                        setRoomData(null);
+                    }
+                }
+            }, [currentRoomId, roomData]);
 
             // Sync master volume
             useEffect(() => {
@@ -221,7 +237,7 @@
 
             // Robust mobile audio player function
             const playAudioSafe = (id) => {
-                if (localStorage.getItem('audioPolicy') !== 'true') return;
+                if (!audioUnlocked.current) return;
                 const el = document.getElementById(id);
                 if (el) {
                     el.currentTime = 0;
@@ -292,16 +308,23 @@
                 }
             }, [currentRoomId, policyAccepted, activeTrack]);
 
-            // Fix for Mobile Safari/Chrome Audio Policies
+            // FIX 3: Modified Audio Unlock to play a notification sound immediately verifying interaction 
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
-                localStorage.setItem('audioPolicy', 'true');
                 audioUnlocked.current = true;
 
-                ['mgsSound', 'guessSound', 'callSound', 'bgmSound'].forEach(id => {
+                // PLay a sound when user clicks Okay!
+                const confirmSound = document.getElementById('mgsSound');
+                if (confirmSound) {
+                    confirmSound.volume = appVol;
+                    confirmSound.currentTime = 0;
+                    confirmSound.play().catch(()=>{});
+                }
+
+                ['guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        // Play completely muted to initialize context
+                        // Play completely muted to initialize context silently for other audios
                         el.volume = 0.01; 
                         const p = el.play();
                         if (p !== undefined) {
@@ -315,7 +338,7 @@
                                         el.currentTime = 0;
                                     }
                                     el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
-                                }, 50); // Pause immediately after audio context is registered active
+                                }, 50); 
                             }).catch(()=>{});
                         }
                     }
@@ -1657,18 +1680,21 @@
                 return () => socket.off('live_draw', handleLiveDraw);
             }, [socket]);
 
+            // FIX 1: Enhanced getMousePos using Native Pointer Events ensures perfect multi-device capability
             const getMousePos = (e) => {
-                const rect = canvasRef.current.getBoundingClientRect();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientY || (e.clientX ? e.clientX : 0);
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY || (e.clientY ? e.clientY : 0);
-                const scaleX = 500 / rect.width;
-                const scaleY = 500 / rect.height;
-                return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+                const canvas = canvasRef.current;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                return { 
+                    x: (e.clientX - rect.left) * scaleX, 
+                    y: (e.clientY - rect.top) * scaleY 
+                };
             };
 
             const startDraw = (e) => {
                 if (!isDrawer || !isDrawingPhase) return;
-                e.preventDefault();
+                try { e.target.setPointerCapture(e.pointerId); } catch(err) {} // Prevents mouse glitches if leaving canvas boundaries while drawing
                 drawingRef.current = true;
                 currentLineRef.current = [];
                 lastPosRef.current = getMousePos(e);
@@ -1682,13 +1708,13 @@
                 // Track physical length distance drawn
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
                 
-                // Throttled Coordinate Collection logic
-                if (dist < 3) return; 
+                // Throttled Coordinate Collection logic lowered to 1 for precise PC Mouse drawings
+                if (dist < 1) return; 
                 
                 const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
                 
                 if (inkUsedRef.current + dist > currentMaxInk) {
-                    stopDraw(); 
+                    stopDraw(e); 
                     if (!hasBoughtInk) {
                         setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
                     }
@@ -1719,9 +1745,10 @@
                 emitTimeoutRef.current = null;
             }, [socket]);
 
-            const stopDraw = () => {
+            const stopDraw = (e) => {
                 if(!drawingRef.current) return;
                 drawingRef.current = false;
+                try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
                 
                 // Collect newly drawn coordinates
                 if(currentLineRef.current.length > 0) {
@@ -1762,8 +1789,12 @@
                     <div className="whiteboard-container">
                         <canvas 
                             ref={canvasRef} width="500" height="500"
-                            onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={stopDraw} onMouseLeave={stopDraw}
-                            onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={stopDraw}
+                            style={{ touchAction: 'none' }}
+                            onPointerDown={startDraw} 
+                            onPointerMove={moveDraw} 
+                            onPointerUp={stopDraw} 
+                            onPointerOut={stopDraw}
+                            onPointerCancel={stopDraw}
                         />
                         
                         {room.status === 'PRE_DRAW' && isDrawer && (
