@@ -1521,9 +1521,9 @@
             const drawingRef = useRef(false);
             const currentLineRef = useRef([]);
             const lastPosRef = useRef({x: 0, y: 0});
-            const lastStrokeTime = useRef(0);
             const inkUsedRef = useRef(0);
             const localInkRef = useRef({});
+            const prevDrawingsLength = useRef(0);
 
             const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
@@ -1541,13 +1541,36 @@
             
             const currentMaxInk = INK_CONFIG[activeColor] ? INK_CONFIG[activeColor].free + (inkExtraObj[activeColor] || 0) : 0;
 
-            // Merge server ink usage into local ref (prevents overriding local progress with stale server data when doing quick color switches)
+            // Merge server ink usage into local ref reliably 
+            // - We omit activeColor purposefully from dependency block so UI stays smooth and sync avoids unnecessary triggers.
             useEffect(() => {
-                for (const c in inkUsedObj) {
-                    localInkRef.current[c] = Math.max(localInkRef.current[c] || 0, inkUsedObj[c]);
+                if (room.status !== 'DRAWING') {
+                    localInkRef.current = {};
+                    inkUsedRef.current = 0;
+                    prevDrawingsLength.current = 0;
+                    return;
                 }
-            }, [inkUsedObj]);
 
+                // If the server array is smaller, they executed an UNDO or REDO.
+                const isUndo = drawings.length < prevDrawingsLength.current;
+                prevDrawingsLength.current = drawings.length;
+
+                for (const c in inkUsedObj) {
+                    if (isUndo) {
+                        localInkRef.current[c] = inkUsedObj[c] || 0; // Force sync to the lower amount exactly
+                    } else {
+                        localInkRef.current[c] = Math.max(localInkRef.current[c] || 0, inkUsedObj[c] || 0);
+                    }
+                }
+                
+                // Immediately update active UI if the server triggered a valid rollback (Undo)
+                if (isUndo) {
+                    inkUsedRef.current = localInkRef.current[activeColor] || 0;
+                    updateInkUI();
+                }
+            }, [inkUsedObj, drawings.length, room.status]);
+
+            // Sync UI appropriately when purely switching colors 
             useEffect(() => {
                 inkUsedRef.current = localInkRef.current[activeColor] || 0;
                 updateInkUI();
@@ -1694,14 +1717,7 @@
                 }
                 
                 inkUsedRef.current += dist;
-                localInkRef.current[activeColor] = inkUsedRef.current; // Keep local ref strictly synchronized
-
-                // FIX: Mutate local state directly to prevent the ink level from resetting when reading stale roomData on color switch
-                const myMember = roomData.members.find(m => m.user_id === tgId);
-                if (myMember) {
-                    if (!myMember.ink_used) myMember.ink_used = {};
-                    myMember.ink_used[activeColor] = inkUsedRef.current;
-                }
+                localInkRef.current[activeColor] = inkUsedRef.current; 
 
                 updateInkUI();
                 
@@ -1720,12 +1736,9 @@
                 if(!drawingRef.current) return;
                 drawingRef.current = false;
                 
-                const now = Date.now();
-                if (now - lastStrokeTime.current < 100) return; 
-                
+                // Throttle removed so rapid dots and minor sketches are always sent and permanently recorded on the server perfectly.
                 if(currentLineRef.current.length > 0) {
                     socket.emit('draw', { lines: currentLineRef.current, color: activeColor });
-                    lastStrokeTime.current = now;
                 }
             };
 
@@ -1743,12 +1756,7 @@
                                     return (
                                         <div 
                                             key={c}
-                                            onClick={() => {
-                                                setActiveColor(c);
-                                                // Guarantee reading the locally preserved state upon click
-                                                const latestMember = members.find(m => m.user_id === tgId);
-                                                inkUsedRef.current = (latestMember?.ink_used && latestMember.ink_used[c]) || 0;
-                                            }}
+                                            onClick={() => setActiveColor(c)}
                                             className="position-relative"
                                             style={{
                                                 backgroundColor: c === 'white' ? '#f8fafc' : c,
