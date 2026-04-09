@@ -550,6 +550,29 @@
                     if(!data.currentRoom) setRoomData(null);
                 });
                 
+                // Optimized granular events handling
+                socket.on('new_chat', (chatMsg) => {
+                    setRoomData(prev => {
+                        if (!prev) return prev;
+                        return { ...prev, chats: [...prev.chats, chatMsg] };
+                    });
+                });
+
+                socket.on('new_guess', (guessMsg) => {
+                    setRoomData(prev => {
+                        if (!prev) return prev;
+                        
+                        const isDrawer = prev.room.current_drawer_id === tgIdRef.current;
+                        const isReveal = prev.room.status === 'REVEAL' || prev.room.status === 'BREAK';
+                        let safeGuess = guessMsg;
+                        
+                        if (!isDrawer && guessMsg.user_id !== tgIdRef.current && !isReveal) {
+                            safeGuess = { ...guessMsg, guess_text: '••••••••' };
+                        }
+                        return { ...prev, guesses: [...prev.guesses, safeGuess] };
+                    });
+                });
+
                 socket.on('lobby_rooms_update', (data) => setRooms(data));
                 socket.on('user_update', (userData) => setUser(userData));
                 socket.on('room_sync', (data) => setRoomData(data));
@@ -1113,10 +1136,10 @@
             } else if (modal.type === 'confirm_buy_ink') {
                 content = (
                     <>
-                        <p className="text-muted text-center mb-4">Refill your <span style={{color: modal.color === 'white' ? '#94a3b8' : modal.color, fontWeight: 'bold'}}>{modal.color}</span> ink to keep drawing?</p>
+                        <p className="text-muted text-center mb-4">Refill your ink supply to keep drawing?</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: modal.color }); close(); }}>Buy ({modal.cost} Cred)</button>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy ({modal.cost} Cred)</button>
                         </div>
                     </>
                 );
@@ -1505,16 +1528,17 @@
             const readyCount = members.filter(m => m.is_ready).length;
             
             const [wordInput, setWordInput] = useState('');
-            const myData = members.find(m => m.user_id === tgId) || {};
             
-            // Max Ink allowed (length in px)
-            const inkStats = myData.inks?.[activeColor] || {used: 0, extra: 0};
-            const maxInk = (INK_CONFIG[activeColor]?.free || 1500) + (inkStats.extra || 0);
+            // Unified Global Ink logic
+            const myData = members.find(m => m.user_id === tgId) || {};
+            const unifiedInkUsed = myData.ink_used || 0;
+            const unifiedInkExtra = myData.ink_extra || 0;
+            const maxInk = 1500 + unifiedInkExtra; // Base 1500 + Extra bought
 
             useEffect(() => {
-                inkUsedRef.current = inkStats.used || 0;
+                inkUsedRef.current = unifiedInkUsed;
                 updateInkUI();
-            }, [inkStats.used, inkStats.extra, activeColor]);
+            }, [unifiedInkUsed, unifiedInkExtra, activeColor]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1651,7 +1675,7 @@
                 
                 if (inkUsedRef.current + dist > maxInk) {
                     stopDraw(); 
-                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor, cost: INK_CONFIG[activeColor].cost });
+                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5 });
                     return;
                 }
                 
@@ -1706,16 +1730,16 @@
                             </div>
 
                             <div className="d-flex justify-content-between small fw-bold mb-1">
-                                <span className="text-primary"><i className="fas fa-tint"></i> <span style={{textTransform: 'capitalize'}}>{activeColor}</span> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - (inkStats.used || 0)))} / {maxInk}</span>
+                                <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - unifiedInkUsed))} / {maxInk}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
                                 <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                                      style={{width: '100%', transition: 'width 0.1s'}}></div>
                             </div>
                             <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', color: activeColor, cost: INK_CONFIG[activeColor].cost })}>
-                                    <i className="fas fa-plus-circle"></i> Refill {activeColor} ({INK_CONFIG[activeColor].cost} Cred)
+                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5 })}>
+                                    <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
                                 </button>
                             </div>
                         </div>
