@@ -406,7 +406,6 @@ const syncRoom = (roomId) => {
 const terminateCallsForUser = (userId) => {
     for (const [callId, call] of activeCalls.entries()) {
         if (call.caller === userId || call.receiver === userId) {
-            if (call.interval) clearInterval(call.interval);
             activeCalls.delete(callId);
             io.to(`room_${call.room_id}`).emit('call_ended', callId);
             syncRoom(call.room_id);
@@ -792,8 +791,9 @@ io.on('connection', (socket) => {
         const newChat = { id: chatCounter++, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
         roomChats[currentRoom].push(newChat);
         
-        if (roomChats[currentRoom].length > 40) {
-            roomChats[currentRoom].shift(); 
+        // Only delete 15 messages when we hit a threshold of 30
+        if (roomChats[currentRoom].length >= 30) {
+            roomChats[currentRoom].splice(0, 15);
         }
 
         io.to(`room_${currentRoom}`).emit('new_chat', newChat);
@@ -1160,29 +1160,28 @@ io.on('connection', (socket) => {
     socket.on('accept_call', async ({ call_id }) => {
         const call = activeCalls.get(call_id);
         if (call && call.receiver === currentUser) {
+            
+            // Prepaid Logic: Deduct 1 credit upfront
+            const currentCredits = userCredits.get(call.caller) || 0;
+            if (currentCredits < 1) {
+                activeCalls.delete(call_id);
+                io.to(`room_${call.room_id}`).emit('call_ended', call_id);
+                syncRoom(call.room_id);
+                return;
+            }
+
+            userCredits.set(call.caller, currentCredits - 1);
+            db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
+
             call.status = 'ACTIVE';
             call.startTime = Date.now();
+            call.nextChargeTime = Date.now() + 180000; // Prepays for the next 3 minutes
             activeCalls.set(call_id, call);
+            
             io.to(`room_${call.room_id}`).emit('call_update', call);
             
-            call.interval = setInterval(async () => {
-                const c = activeCalls.get(call_id);
-                if(!c) return clearInterval(call.interval);
-                
-                const currentCredits = userCredits.get(c.caller) || 0;
-                
-                if (currentCredits < 1) {
-                    clearInterval(call.interval);
-                    activeCalls.delete(call_id);
-                    io.to(`room_${c.room_id}`).emit('call_ended', call_id);
-                    syncRoom(c.room_id);
-                } else {
-                    userCredits.set(c.caller, currentCredits - 1);
-                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [c.caller]).catch(console.error);
-                    const uState1 = await getUserState(c.caller);
-                    if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
-                }
-            }, 180000); 
+            const uState1 = await getUserState(call.caller);
+            if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
 
             syncRoom(currentRoom);
         }
@@ -1191,7 +1190,6 @@ io.on('connection', (socket) => {
     socket.on('end_call', ({ call_id }) => {
         const call = activeCalls.get(call_id);
         if (call) {
-            if(call.interval) clearInterval(call.interval);
             activeCalls.delete(call_id);
             io.to(`room_${currentRoom || call.room_id}`).emit('call_ended', call_id);
             syncRoom(currentRoom || call.room_id);
@@ -1239,6 +1237,28 @@ io.on('connection', (socket) => {
 setInterval(() => {
     try {
         const now = Date.now();
+        
+        // Handle Prepaid Voice Call Billing
+        for (const [callId, call] of activeCalls.entries()) {
+            if (call.status === 'ACTIVE' && now >= call.nextChargeTime) {
+                const currentCredits = userCredits.get(call.caller) || 0;
+                if (currentCredits < 1) {
+                    // Insufficient funds for next 3-min block
+                    activeCalls.delete(callId);
+                    io.to(`room_${call.room_id}`).emit('call_ended', callId);
+                    syncRoom(call.room_id);
+                } else {
+                    // Renewal Process
+                    userCredits.set(call.caller, currentCredits - 1);
+                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
+                    call.nextChargeTime = now + 180000;
+                    
+                    getUserState(call.caller).then(uState => {
+                        if (uState) io.to(`user_${call.caller}`).emit('user_update', uState);
+                    });
+                }
+            }
+        }
         
         for (const [roomId, room] of memoryRooms.entries()) {
             
