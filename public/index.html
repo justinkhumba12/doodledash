@@ -92,14 +92,7 @@
 
     <script type="text/babel">
         const INK_CONFIG = {
-            black: { free: 1500, extra: 1500, cost: 0.5 },
-            white: { free: 1500, extra: 1500, cost: 0.5 },
-            red: { free: 0, extra: 1500, cost: 0.5 },
-            blue: { free: 0, extra: 1500, cost: 0.5 },
-            green: { free: 0, extra: 1500, cost: 0.5 },
-            yellow: { free: 0, extra: 1500, cost: 0.5 },
-            purple: { free: 0, extra: 1500, cost: 0.5 },
-            orange: { free: 0, extra: 1500, cost: 0.5 }
+            black: { free: 2500, extra: 1000, cost: 0.5 }
         };
 
         const { useState, useEffect, useRef, useCallback } = React;
@@ -1137,12 +1130,12 @@
                 content = (
                     <>
                         <p className="text-muted text-center mb-4">
-                            {modal.isUnlock ? `Unlock ${modal.color} ink to start drawing with it?` : `Refill your ${modal.color} ink supply to keep drawing?`}
+                            Refill your ink supply to keep drawing? (Limit: 1 per round)
                         </p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: modal.color }); close(); }}>
-                                {modal.isUnlock ? 'Unlock' : 'Buy'} ({modal.cost} Cred)
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: 'black' }); close(); }}>
+                                Buy ({modal.cost} Cred)
                             </button>
                         </div>
                     </>
@@ -1497,7 +1490,6 @@
             const canvasRef = useRef(null);
             const [localTimeLeft, setLocalTimeLeft] = useState(0);
             const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
-            const [activeColor, setActiveColor] = useState('black');
             
             // Refs prevent unnecessary React re-renders while drawing and tracking fast movements
             const drawingRef = useRef(false);
@@ -1506,6 +1498,10 @@
             const inkUsedRef = useRef(0);
             const localInkRef = useRef({});
             const prevDrawingsLength = useRef(0);
+            
+            // Throttling Socket Refs
+            const drawQueueRef = useRef([]);
+            const emitTimeoutRef = useRef(null);
 
             const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
@@ -1516,15 +1512,14 @@
             
             const [wordInput, setWordInput] = useState('');
             
-            // Per Color global ink extraction
+            // Ink extraction for 'black'
             const myData = members.find(m => m.user_id === tgId) || {};
             const inkUsedObj = myData.ink_used || {};
             const inkExtraObj = myData.ink_extra || {};
             
-            const currentMaxInk = INK_CONFIG[activeColor] ? INK_CONFIG[activeColor].free + (inkExtraObj[activeColor] || 0) : 0;
+            const currentMaxInk = INK_CONFIG.black.free + (inkExtraObj['black'] || 0);
 
             // Merge server ink usage into local ref reliably 
-            // - We omit activeColor purposefully from dependency block so UI stays smooth and sync avoids unnecessary triggers.
             useEffect(() => {
                 if (room.status !== 'DRAWING') {
                     localInkRef.current = {};
@@ -1547,16 +1542,10 @@
                 
                 // Immediately update active UI if the server triggered a valid rollback (Undo)
                 if (isUndo) {
-                    inkUsedRef.current = localInkRef.current[activeColor] || 0;
+                    inkUsedRef.current = localInkRef.current['black'] || 0;
                     updateInkUI();
                 }
             }, [inkUsedObj, drawings.length, room.status]);
-
-            // Sync UI appropriately when purely switching colors 
-            useEffect(() => {
-                inkUsedRef.current = localInkRef.current[activeColor] || 0;
-                updateInkUI();
-            }, [activeColor, currentMaxInk]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1605,7 +1594,7 @@
                         bar.style.backgroundColor = '';
                         bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
                     } else {
-                        bar.style.backgroundColor = activeColor === 'white' ? '#e2e8f0' : activeColor;
+                        bar.style.backgroundColor = '#1e293b';
                         bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
                     }
                 }
@@ -1613,8 +1602,10 @@
                     text.className = (inkLeft <= (currentMaxInk * 0.2) && currentMaxInk > 0) ? 'text-danger fw-bold' : 'text-muted';
                     text.innerText = `${Math.floor(inkLeft)} / ${currentMaxInk}`;
                 }
+                
+                const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
                 if (buyBtn) {
-                    buyBtn.style.display = inkLeft <= 0 ? 'inline-block' : 'none';
+                    buyBtn.style.display = (inkLeft <= 0 && !hasBoughtInk) ? 'inline-block' : 'none';
                 }
             };
 
@@ -1629,7 +1620,7 @@
                 drawings.forEach(jsonStr => {
                     try {
                         const data = JSON.parse(jsonStr);
-                        ctx.strokeStyle = data.color === 'white' ? '#ffffff' : (data.color || 'black');
+                        ctx.strokeStyle = '#000000'; // Force black
                         data.lines.forEach(l => {
                             ctx.beginPath();
                             ctx.moveTo(l.x0, l.y0);
@@ -1644,15 +1635,15 @@
 
             useEffect(() => {
                 const handleLiveDraw = (data) => {
-                    let lines, color;
+                    let lines;
                     if (Array.isArray(data)) {
-                        lines = data; color = 'black';
+                        lines = data;
                     } else {
-                        lines = data.lines; color = data.color;
+                        lines = data.lines; 
                     }
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = color === 'white' ? '#ffffff' : (color || '#334155');
+                    ctx.strokeStyle = '#000000'; // Enforce black
                     ctx.lineCap = 'round';
                     ctx.lineWidth = 5;
                     lines.forEach(l => {
@@ -1691,15 +1682,21 @@
                 // Track physical length distance drawn
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
                 
+                // Throttled Coordinate Collection logic
+                if (dist < 3) return; 
+                
+                const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
+                
                 if (inkUsedRef.current + dist > currentMaxInk) {
                     stopDraw(); 
-                    const isUnlock = currentMaxInk === 0;
-                    setModal({ type: 'confirm_buy_ink', title: isUnlock ? `Unlock ${activeColor}` : 'Refill Ink', cost: 0.5, color: activeColor, isUnlock });
+                    if (!hasBoughtInk) {
+                        setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                    }
                     return;
                 }
                 
                 inkUsedRef.current += dist;
-                localInkRef.current[activeColor] = inkUsedRef.current; 
+                localInkRef.current['black'] = inkUsedRef.current; 
 
                 updateInkUI();
                 
@@ -1707,20 +1704,35 @@
                 ctx.beginPath();
                 ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
                 ctx.lineTo(newPos.x, newPos.y);
-                ctx.strokeStyle = activeColor === 'white' ? '#ffffff' : activeColor;
+                ctx.strokeStyle = '#000000';
                 ctx.stroke();
 
                 currentLineRef.current.push({x0: lastPosRef.current.x, y0: lastPosRef.current.y, x1: newPos.x, y1: newPos.y});
                 lastPosRef.current = newPos;
             };
 
+            const flushDrawQueue = useCallback(() => {
+                if (drawQueueRef.current.length > 0) {
+                    socket.emit('draw', { lines: drawQueueRef.current });
+                    drawQueueRef.current = [];
+                }
+                emitTimeoutRef.current = null;
+            }, [socket]);
+
             const stopDraw = () => {
                 if(!drawingRef.current) return;
                 drawingRef.current = false;
                 
-                // Throttle removed so rapid dots and minor sketches are always sent and permanently recorded on the server perfectly.
+                // Collect newly drawn coordinates
                 if(currentLineRef.current.length > 0) {
-                    socket.emit('draw', { lines: currentLineRef.current, color: activeColor });
+                    drawQueueRef.current.push(...currentLineRef.current);
+                }
+                
+                // Throttled Network & Socket Emission logic (Batches rapid inputs automatically safely)
+                if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
+                    emitTimeoutRef.current = setTimeout(() => {
+                        flushDrawQueue();
+                    }, 100);
                 }
             };
 
@@ -1728,36 +1740,6 @@
                 <div className="w-100 d-flex flex-column align-items-center">
                     {isDrawer && isDrawingPhase && (
                         <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
-                            
-                            <div className="d-flex justify-content-center gap-2 mb-2 flex-wrap">
-                                {Object.keys(INK_CONFIG).map(c => {
-                                    const extra = inkExtraObj[c] || 0;
-                                    const max = INK_CONFIG[c].free + extra;
-                                    const isLocked = max === 0;
-                                    
-                                    return (
-                                        <div 
-                                            key={c}
-                                            onClick={() => setActiveColor(c)}
-                                            className="position-relative"
-                                            style={{
-                                                backgroundColor: c === 'white' ? '#f8fafc' : c,
-                                                width: '30px', height: '30px', 
-                                                borderRadius: '50%',
-                                                border: activeColor === c ? '3px solid #6366f1' : '2px solid #cbd5e1',
-                                                cursor: 'pointer',
-                                                boxShadow: activeColor === c ? '0 0 10px rgba(99,102,241,0.5)' : 'none',
-                                                opacity: isLocked ? 0.5 : 1
-                                            }}
-                                            title={c}
-                                        >
-                                            {isLocked && (
-                                                <i className="fas fa-lock position-absolute top-50 start-50 translate-middle text-dark" style={{fontSize: '11px'}}></i>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
 
                             <div className="d-flex justify-content-between small fw-bold mb-1">
                                 <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
@@ -1769,11 +1751,9 @@
                             </div>
                             <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
                                 <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                                    const isUnlock = currentMaxInk === 0;
-                                    setModal({ type: 'confirm_buy_ink', title: isUnlock ? `Unlock ${activeColor}` : 'Refill Ink', cost: 0.5, color: activeColor, isUnlock });
+                                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
                                 }}>
-                                    <i className={currentMaxInk === 0 ? "fas fa-unlock" : "fas fa-plus-circle"}></i> 
-                                    {currentMaxInk === 0 ? `Unlock ${activeColor} Ink` : `Refill ${activeColor} Ink`} (0.5 Cred)
+                                    <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
                                 </button>
                             </div>
                         </div>
