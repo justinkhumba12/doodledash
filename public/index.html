@@ -1630,24 +1630,23 @@
                 ctx.lineCap = 'round';
                 ctx.lineWidth = 5;
                 
-                initialDrawingsRef.current.forEach(jsonStr => {
-                    try {
-                        const data = JSON.parse(jsonStr);
-                        ctx.strokeStyle = '#000000';
-                        data.lines.forEach(l => {
-                            ctx.beginPath();
-                            ctx.moveTo(l.x0, l.y0);
-                            ctx.lineTo(l.x1, l.y1);
-                            ctx.stroke();
-                        });
-                    } catch(e){}
+                initialDrawingsRef.current.forEach(data => {
+                    ctx.strokeStyle = data.color === 'black' ? '#000000' : (data.color || '#000000');
+                    const lines = data.lines;
+                    if (!lines) return;
+                    for (let i = 0; i < lines.length; i += 4) {
+                        ctx.beginPath();
+                        ctx.moveTo(lines[i], lines[i+1]);
+                        ctx.lineTo(lines[i+2], lines[i+3]);
+                        ctx.stroke();
+                    }
                 });
             }, []);
 
             // Initial component mount redraw
             useEffect(() => { redraw(); }, [redraw]);
 
-            // Sync Initial Drawings safely (avoids full re-render spam)
+            // Sync Initial Drawings safely and natively
             useEffect(() => {
                 const handleInitialDrawings = (drawings) => {
                     initialDrawingsRef.current = drawings;
@@ -1657,31 +1656,27 @@
                 return () => socket.off('sync_initial_drawings', handleInitialDrawings);
             }, [socket, redraw]);
 
-            // Appends efficiently to local ref history and strokes canvas directly
+            // Appends efficiently to local ref history and strokes canvas directly natively
             useEffect(() => {
                 const handleLiveDraw = (data) => {
-                    let lines;
-                    if (Array.isArray(data)) {
-                        lines = data;
-                    } else {
-                        lines = data.lines; 
-                    }
+                    let lines = data.lines;
+                    let color = data.color || 'black';
                     const canvas = canvasRef.current;
-                    if(!canvas) return;
+                    if(!canvas || !lines) return;
                     
                     const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = '#000000'; 
+                    ctx.strokeStyle = color === 'black' ? '#000000' : color;
                     ctx.lineCap = 'round';
                     ctx.lineWidth = 5;
-                    lines.forEach(l => {
+                    for (let i = 0; i < lines.length; i += 4) {
                         ctx.beginPath();
-                        ctx.moveTo(l.x0, l.y0);
-                        ctx.lineTo(l.x1, l.y1);
+                        ctx.moveTo(lines[i], lines[i+1]);
+                        ctx.lineTo(lines[i+2], lines[i+3]);
                         ctx.stroke();
-                    });
+                    }
                     
-                    // Maintain state to resist canvas resizing or random React re-mounts
-                    initialDrawingsRef.current.push(JSON.stringify({ lines, color: 'black' }));
+                    // Maintain state natively without stringification
+                    initialDrawingsRef.current.push({ lines, color });
                 };
                 socket.on('live_draw', handleLiveDraw);
                 return () => socket.off('live_draw', handleLiveDraw);
@@ -1736,7 +1731,8 @@
                 ctx.strokeStyle = '#000000';
                 ctx.stroke();
 
-                currentLineRef.current.push({x0: lastPosRef.current.x, y0: lastPosRef.current.y, x1: newPos.x, y1: newPos.y});
+                // Append purely numeric coordinates inline avoiding object allocation
+                currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
                 lastPosRef.current = newPos;
             };
 
