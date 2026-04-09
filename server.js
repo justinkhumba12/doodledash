@@ -393,7 +393,6 @@ const syncRoom = (roomId) => {
                     members,
                     chats, 
                     guesses: sanitizedGuesses,
-                    // Note: Drawings removed from sync array completely to save bandwidth
                     profiles,
                     activeCalls: activeCallsList,
                     masked_word: masked_word,
@@ -433,8 +432,8 @@ io.on('connection', (socket) => {
             socket.leave('lobby'); 
             socket.emit('join_success', roomIdNum);
             
-            // Send initial drawings exclusively on join
-            socket.emit('sync_initial_drawings', (roomDrawings[roomIdNum] || []).map(d => d.line_data));
+            // Send initial drawings exclusively on join - Now mapping native lines natively without JSON
+            socket.emit('sync_initial_drawings', (roomDrawings[roomIdNum] || []).map(d => ({ lines: d.lines, color: d.color })));
             return syncRoom(roomIdNum);
         }
 
@@ -482,8 +481,8 @@ io.on('connection', (socket) => {
         socket.leave('lobby');
         socket.emit('join_success', currentRoom);
         
-        // Push initial drawing payload for canvas setup
-        socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => d.line_data));
+        // Push initial drawing payload for canvas setup natively flattened
+        socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => ({ lines: d.lines, color: d.color })));
         
         if (oldRoom) syncRoom(oldRoom);
         syncRoom(currentRoom);
@@ -528,8 +527,8 @@ io.on('connection', (socket) => {
                     currentRoom = id;
                     socket.join(`room_${currentRoom}`);
                     syncRoom(currentRoom);
-                    // Send drawings again on reconnects
-                    socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => d.line_data));
+                    // Send drawings again natively
+                    socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => ({ lines: d.lines, color: d.color })));
                     break;
                 }
             }
@@ -1030,10 +1029,11 @@ io.on('connection', (socket) => {
         const activeColor = 'black'; 
         
         let strokeLength = 0;
+        // Process flat coordinate array [x0, y0, x1, y1, x2, y2...] natively
         if (lines && lines.length > 0) {
-            for (let i = 0; i < lines.length; i++) {
-                const l = lines[i];
-                strokeLength += Math.sqrt(Math.pow(l.x1 - l.x0, 2) + Math.pow(l.y1 - l.y0, 2));
+            for (let i = 0; i < lines.length; i += 4) {
+                const x0 = lines[i], y0 = lines[i+1], x1 = lines[i+2], y1 = lines[i+3];
+                strokeLength += Math.sqrt(Math.pow(x1 - x0, 2) + Math.pow(y1 - y0, 2));
             }
         }
 
@@ -1045,9 +1045,10 @@ io.on('connection', (socket) => {
         roomRedoStacks[currentRoom] = []; 
         if (!roomDrawings[currentRoom]) roomDrawings[currentRoom] = [];
         
+        // Saving the raw flat array immediately avoids JSON overhead
         roomDrawings[currentRoom].push({ 
             id: drawingCounter++, 
-            line_data: JSON.stringify({ lines, color: activeColor }),
+            lines: lines,
             ink_cost: strokeLength,
             color: activeColor,
             user_id: currentUser
@@ -1112,8 +1113,8 @@ io.on('connection', (socket) => {
                 }
             }
             
-            // Re-sync full drawing array to clients efficiently
-            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => d.line_data));
+            // Re-sync full drawing array to clients mapped without JSON
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
             syncRoom(currentRoom);
         }
     });
@@ -1133,8 +1134,8 @@ io.on('connection', (socket) => {
                 }
             }
             
-            // Re-sync full drawing array
-            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => d.line_data));
+            // Re-sync full native drawing array
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
             syncRoom(currentRoom);
         }
     });
