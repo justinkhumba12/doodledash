@@ -73,7 +73,6 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        /* Responsive Lobby Tabs with Fixed Height */
         .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
         .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
         .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
@@ -127,7 +126,6 @@
             }
         };
 
-        // NEW Modal with specifically requested texts and Okay button
         const AudioPolicyModal = ({ onAccept }) => (
             <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
                 <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
@@ -160,7 +158,6 @@
             const [unreadChat, setUnreadChat] = useState(false);
             const [unreadGuess, setUnreadGuess] = useState(false);
 
-            // Audio volumes
             const [appVol, setAppVol] = useState(() => parseFloat(localStorage.getItem('appVol') ?? '1.0'));
             const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15'));
             
@@ -170,7 +167,6 @@
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
-            // Audio Unlock state setup without LocalStorage so it resets properly when entering a room.
             const [policyAccepted, setPolicyAccepted] = useState(false);
 
             const peerConnectionRef = useRef(null);
@@ -183,6 +179,10 @@
             const prevChatsCount = useRef(0);
             const prevGuessesCount = useRef(0);
             const lastKnownRoomRef = useRef(null);
+            
+            // WebRTC candidate batching refs
+            const candidateBatchRef = useRef([]);
+            const batchTimerRef = useRef(null);
 
             if (!tgId) {
                 return (
@@ -199,13 +199,11 @@
             useEffect(() => {
                 if (currentRoomId) {
                     lastKnownRoomRef.current = currentRoomId;
-                    // Reset Audio Policy everytime user enters a NEW room to ensure auto-play is ready
                     setPolicyAccepted(false);
                     audioUnlocked.current = false;
                 }
             }, [currentRoomId]);
 
-            // FIX 2: Check Room Status continuously - if user somehow exists but is NOT inside members list, kick them to lobby.
             useEffect(() => {
                 if (currentRoomId && roomData) {
                     const isMember = roomData.members.some(m => m.user_id === tgIdRef.current);
@@ -216,7 +214,6 @@
                 }
             }, [currentRoomId, roomData]);
 
-            // Sync master volume
             useEffect(() => {
                 ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
                     const s = document.getElementById(id);
@@ -225,7 +222,6 @@
                 localStorage.setItem('appVol', appVol);
             }, [appVol]);
 
-            // Sync BGM volume & Apply 40% reduction when in ACTIVE call
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
                 if (s) {
@@ -235,7 +231,6 @@
                 localStorage.setItem('bgmVol', bgmVol);
             }, [bgmVol, activeCall]);
 
-            // Robust mobile audio player function
             const playAudioSafe = (id) => {
                 if (!audioUnlocked.current) return;
                 const el = document.getElementById(id);
@@ -248,11 +243,9 @@
                 }
             };
 
-            // Sync unread notifications for sidebar glowing and audio
             useEffect(() => {
                 if (!roomData) return;
                 
-                // Track new chats
                 if (roomData.chats && roomData.chats.length > prevChatsCount.current) {
                     const newChats = roomData.chats.slice(prevChatsCount.current);
                     if (newChats.some(c => c.user_id !== tgId && c.user_id !== 'System')) {
@@ -267,7 +260,6 @@
                     prevChatsCount.current = roomData.chats.length;
                 }
 
-                // Track new guesses
                 if (roomData.guesses && roomData.guesses.length > prevGuessesCount.current) {
                     const newGuesses = roomData.guesses.slice(prevGuessesCount.current);
                     if (newGuesses.some(g => g.user_id !== tgId)) {
@@ -308,12 +300,10 @@
                 }
             }, [currentRoomId, policyAccepted, activeTrack]);
 
-            // FIX 3: Modified Audio Unlock to play a notification sound immediately verifying interaction 
             const acceptAudioPolicy = () => {
                 setPolicyAccepted(true);
                 audioUnlocked.current = true;
 
-                // PLay a sound when user clicks Okay!
                 const confirmSound = document.getElementById('mgsSound');
                 if (confirmSound) {
                     confirmSound.volume = appVol;
@@ -324,7 +314,6 @@
                 ['guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
-                        // Play completely muted to initialize context silently for other audios
                         el.volume = 0.01; 
                         const p = el.play();
                         if (p !== undefined) {
@@ -410,11 +399,19 @@
                 
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
-                        socketRef.current.emit('webrtc_signal', { 
-                            call_id: callId, 
-                            target_id: targetId, 
-                            signal: { type: 'candidate', candidate: e.candidate } 
-                        });
+                        // Batch ICE candidates every 500ms to prevent server spam
+                        candidateBatchRef.current.push(e.candidate);
+                        if (!batchTimerRef.current) {
+                            batchTimerRef.current = setTimeout(() => {
+                                socketRef.current.emit('webrtc_signal', { 
+                                    call_id: callId, 
+                                    target_id: targetId, 
+                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
+                                });
+                                candidateBatchRef.current = [];
+                                batchTimerRef.current = null;
+                            }, 500);
+                        }
                     }
                 };
 
@@ -440,6 +437,10 @@
                 if (peerConnectionRef.current) peerConnectionRef.current.close();
                 peerConnectionRef.current = null;
                 candidateQueue.current = [];
+                candidateBatchRef.current = [];
+                if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+                batchTimerRef.current = null;
+                
                 if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
                 if (localStreamRef.current) {
                     localStreamRef.current.getTracks().forEach(track => track.stop());
@@ -479,7 +480,17 @@
                     while (candidateQueue.current.length > 0) {
                         try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
                     }
+                } else if (signal.type === 'candidates') {
+                    const pc = peerConnectionRef.current;
+                    for (const c of signal.candidates) {
+                        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                            try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+                        } else {
+                            candidateQueue.current.push(new RTCIceCandidate(c));
+                        }
+                    }
                 } else if (signal.type === 'candidate') {
+                    // Fallback for single legacy candidates
                     const pc = peerConnectionRef.current;
                     if (pc && pc.remoteDescription && pc.remoteDescription.type) {
                         try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
@@ -566,7 +577,6 @@
                     if(!data.currentRoom) setRoomData(null);
                 });
                 
-                // Optimized granular events handling
                 socket.on('new_chat', (chatMsg) => {
                     setRoomData(prev => {
                         if (!prev) return prev;
@@ -785,8 +795,6 @@
                                                 <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
                                                 
                                                 <div className="accordion" id="soundAccordion">
-                                                    
-                                                    {/* Volumes Accordion */}
                                                     <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
                                                         <h2 className="accordion-header">
                                                             <button className={`accordion-button fw-bold ${openAcc === 'volumes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'volumes' ? '' : 'volumes')} style={{backgroundColor: openAcc === 'volumes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
@@ -816,7 +824,6 @@
                                                         </div>
                                                     </div>
 
-                                                    {/* Themes Accordion */}
                                                     <div className="accordion-item border-0 shadow-sm rounded-4 overflow-hidden">
                                                         <h2 className="accordion-header">
                                                             <button className={`accordion-button fw-bold ${openAcc === 'themes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'themes' ? '' : 'themes')} style={{backgroundColor: openAcc === 'themes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
@@ -1514,19 +1521,20 @@
             const [localTimeLeft, setLocalTimeLeft] = useState(0);
             const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
             
-            // Refs prevent unnecessary React re-renders while drawing and tracking fast movements
+            // Refs prevent unnecessary React re-renders
             const drawingRef = useRef(false);
             const currentLineRef = useRef([]);
             const lastPosRef = useRef({x: 0, y: 0});
             const inkUsedRef = useRef(0);
             const localInkRef = useRef({});
-            const prevDrawingsLength = useRef(0);
             
-            // Throttling Socket Refs
+            // Replaces the heavy re-rendering array from roomData
+            const initialDrawingsRef = useRef([]);
+            
             const drawQueueRef = useRef([]);
             const emitTimeoutRef = useRef(null);
 
-            const { room, drawings, members } = roomData;
+            const { room, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
             const isDrawingPhase = room.status === 'DRAWING';
             
@@ -1535,40 +1543,22 @@
             
             const [wordInput, setWordInput] = useState('');
             
-            // Ink extraction for 'black'
             const myData = members.find(m => m.user_id === tgId) || {};
             const inkUsedObj = myData.ink_used || {};
             const inkExtraObj = myData.ink_extra || {};
             
             const currentMaxInk = INK_CONFIG.black.free + (inkExtraObj['black'] || 0);
 
-            // Merge server ink usage into local ref reliably 
             useEffect(() => {
                 if (room.status !== 'DRAWING') {
                     localInkRef.current = {};
                     inkUsedRef.current = 0;
-                    prevDrawingsLength.current = 0;
                     return;
                 }
-
-                // If the server array is smaller, they executed an UNDO or REDO.
-                const isUndo = drawings.length < prevDrawingsLength.current;
-                prevDrawingsLength.current = drawings.length;
-
-                for (const c in inkUsedObj) {
-                    if (isUndo) {
-                        localInkRef.current[c] = inkUsedObj[c] || 0; // Force sync to the lower amount exactly
-                    } else {
-                        localInkRef.current[c] = Math.max(localInkRef.current[c] || 0, inkUsedObj[c] || 0);
-                    }
-                }
-                
-                // Immediately update active UI if the server triggered a valid rollback (Undo)
-                if (isUndo) {
-                    inkUsedRef.current = localInkRef.current['black'] || 0;
-                    updateInkUI();
-                }
-            }, [inkUsedObj, drawings.length, room.status]);
+                localInkRef.current['black'] = inkUsedObj['black'] || 0;
+                inkUsedRef.current = localInkRef.current['black'] || 0;
+                updateInkUI();
+            }, [inkUsedObj, room.status]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1640,10 +1630,10 @@
                 ctx.lineCap = 'round';
                 ctx.lineWidth = 5;
                 
-                drawings.forEach(jsonStr => {
+                initialDrawingsRef.current.forEach(jsonStr => {
                     try {
                         const data = JSON.parse(jsonStr);
-                        ctx.strokeStyle = '#000000'; // Force black
+                        ctx.strokeStyle = '#000000';
                         data.lines.forEach(l => {
                             ctx.beginPath();
                             ctx.moveTo(l.x0, l.y0);
@@ -1652,10 +1642,22 @@
                         });
                     } catch(e){}
                 });
-            }, [drawings]);
+            }, []);
 
+            // Initial component mount redraw
             useEffect(() => { redraw(); }, [redraw]);
 
+            // Sync Initial Drawings safely (avoids full re-render spam)
+            useEffect(() => {
+                const handleInitialDrawings = (drawings) => {
+                    initialDrawingsRef.current = drawings;
+                    redraw();
+                };
+                socket.on('sync_initial_drawings', handleInitialDrawings);
+                return () => socket.off('sync_initial_drawings', handleInitialDrawings);
+            }, [socket, redraw]);
+
+            // Appends efficiently to local ref history and strokes canvas directly
             useEffect(() => {
                 const handleLiveDraw = (data) => {
                     let lines;
@@ -1665,8 +1667,10 @@
                         lines = data.lines; 
                     }
                     const canvas = canvasRef.current;
+                    if(!canvas) return;
+                    
                     const ctx = canvas.getContext('2d');
-                    ctx.strokeStyle = '#000000'; // Enforce black
+                    ctx.strokeStyle = '#000000'; 
                     ctx.lineCap = 'round';
                     ctx.lineWidth = 5;
                     lines.forEach(l => {
@@ -1675,12 +1679,14 @@
                         ctx.lineTo(l.x1, l.y1);
                         ctx.stroke();
                     });
+                    
+                    // Maintain state to resist canvas resizing or random React re-mounts
+                    initialDrawingsRef.current.push(JSON.stringify({ lines, color: 'black' }));
                 };
                 socket.on('live_draw', handleLiveDraw);
                 return () => socket.off('live_draw', handleLiveDraw);
             }, [socket]);
 
-            // FIX 1: Enhanced getMousePos using Native Pointer Events ensures perfect multi-device capability
             const getMousePos = (e) => {
                 const canvas = canvasRef.current;
                 const rect = canvas.getBoundingClientRect();
@@ -1694,7 +1700,7 @@
 
             const startDraw = (e) => {
                 if (!isDrawer || !isDrawingPhase) return;
-                try { e.target.setPointerCapture(e.pointerId); } catch(err) {} // Prevents mouse glitches if leaving canvas boundaries while drawing
+                try { e.target.setPointerCapture(e.pointerId); } catch(err) {}
                 drawingRef.current = true;
                 currentLineRef.current = [];
                 lastPosRef.current = getMousePos(e);
@@ -1705,10 +1711,7 @@
                 e.preventDefault();
                 const newPos = getMousePos(e);
                 
-                // Track physical length distance drawn
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
-                
-                // Throttled Coordinate Collection logic lowered to 1 for precise PC Mouse drawings
                 if (dist < 1) return; 
                 
                 const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
@@ -1750,12 +1753,10 @@
                 drawingRef.current = false;
                 try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
                 
-                // Collect newly drawn coordinates
                 if(currentLineRef.current.length > 0) {
                     drawQueueRef.current.push(...currentLineRef.current);
                 }
                 
-                // Throttled Network & Socket Emission logic (Batches rapid inputs automatically safely)
                 if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
                     emitTimeoutRef.current = setTimeout(() => {
                         flushDrawQueue();
