@@ -49,13 +49,13 @@ const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6
 // ---------------------------------------------------------
 const INK_CONFIG = {
     black: { free: 1500, extra: 1500, cost: 0.5 },
-    white: { free: 500, extra: 1000, cost: 0.5 },
-    red: { free: 200, extra: 1000, cost: 0.5 },
-    blue: { free: 300, extra: 1000, cost: 0.5 },
-    green: { free: 300, extra: 1000, cost: 0.5 },
-    yellow: { free: 300, extra: 1000, cost: 0.5 },
-    purple: { free: 300, extra: 1000, cost: 0.5 },
-    orange: { free: 300, extra: 1000, cost: 0.5 }
+    white: { free: 1500, extra: 1500, cost: 0.5 },
+    red: { free: 0, extra: 1500, cost: 0.5 },
+    blue: { free: 0, extra: 1500, cost: 0.5 },
+    green: { free: 0, extra: 1500, cost: 0.5 },
+    yellow: { free: 0, extra: 1500, cost: 0.5 },
+    purple: { free: 0, extra: 1500, cost: 0.5 },
+    orange: { free: 0, extra: 1500, cost: 0.5 }
 };
 
 // ---------------------------------------------------------
@@ -398,7 +398,7 @@ const syncRoom = (roomId) => {
                     members,
                     chats, 
                     guesses: sanitizedGuesses,
-                    drawings: drawings.map(d => d.line_data), // color is inside line_data JSON
+                    drawings: drawings.map(d => d.line_data), 
                     profiles,
                     activeCalls: activeCallsList,
                     masked_word: masked_word,
@@ -469,8 +469,8 @@ io.on('connection', (socket) => {
             total_turns: 0,
             has_given_up: 0,
             purchased_hints: '[]',
-            ink_used: 0,      // Unified global ink usage
-            ink_extra: 0,     // Unified global ink extra capacity purchased
+            ink_used: {},      // Now an object to track per color
+            ink_extra: {},     // Now an object to track per color
             joined_at: Date.now() 
         });
 
@@ -945,9 +945,8 @@ io.on('connection', (socket) => {
         room.members.forEach(m => {
             m.purchased_hints = '[]';
             m.has_given_up = 0;
-            // CHANGED: Use a unified ink storage instead of per-color
-            m.ink_used = 0; 
-            m.ink_extra = 0; 
+            m.ink_used = {}; 
+            m.ink_extra = {}; 
         });
         
         roomDrawings[currentRoom] = [];
@@ -1006,8 +1005,8 @@ io.on('connection', (socket) => {
         }
 
         if (member) {
-            // CHANGED: Add to global ink used
-            member.ink_used = (member.ink_used || 0) + strokeLength;
+            if (!member.ink_used) member.ink_used = {};
+            member.ink_used[activeColor] = (member.ink_used[activeColor] || 0) + strokeLength;
         }
 
         roomRedoStacks[currentRoom] = []; 
@@ -1024,15 +1023,15 @@ io.on('connection', (socket) => {
         socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
     });
 
-    socket.on('buy_ink', async () => {
+    socket.on('buy_ink', async ({ color }) => {
         try {
             if (!currentUser || !currentRoom) return;
             const room = memoryRooms.get(currentRoom);
             if (!room || room.status !== 'DRAWING') return;
             
-            // Generic Ink cost: 0.5 credits for 1500 extra ink
-            const cost = 0.5;
-            const extraInkAmount = 1500; 
+            const targetColor = INK_CONFIG[color] ? color : 'black';
+            const cost = INK_CONFIG[targetColor].cost;
+            const extraInkAmount = INK_CONFIG[targetColor].extra; 
 
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (parseFloat(u[0].credits) < cost) {
@@ -1043,9 +1042,9 @@ io.on('connection', (socket) => {
 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
-                // CHANGED: Add to global extra ink
-                member.ink_extra = (member.ink_extra || 0) + extraInkAmount; 
-                socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
+                if (!member.ink_extra) member.ink_extra = {};
+                member.ink_extra[targetColor] = (member.ink_extra[targetColor] || 0) + extraInkAmount; 
+                socket.emit('reward_success', `+${extraInkAmount} ${targetColor} Ink added!`);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
@@ -1069,7 +1068,8 @@ io.on('connection', (socket) => {
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
                 if (member && toRestore.ink_cost) {
-                    member.ink_used = Math.max(0, (member.ink_used || 0) - toRestore.ink_cost);
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
                 }
             }
             
@@ -1087,7 +1087,8 @@ io.on('connection', (socket) => {
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
                 if (member && toRestore.ink_cost) {
-                    member.ink_used = (member.ink_used || 0) + toRestore.ink_cost;
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
                 }
             }
             
@@ -1189,7 +1190,6 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------
 // RAM-BASED GAME LOOP ENGINE (OPTIMIZED)
 // ---------------------------------------------------------
-// Change from 2000ms to 10000ms
 setInterval(() => {
     try {
         const now = Date.now();
