@@ -60,7 +60,8 @@ const roomGuesses = {};
 const roomDrawings = {};
 const roomRedoStacks = {};
 const userProfiles = new Map();
-const activeGuessPayments = new Set(); // Concurrency lock for payments
+const userCredits = new Map(); // RAM-based cache for instant credit checks
+const activeGuessPayments = new Set(); 
 
 let nextRoomId = 1;
 let chatCounter = 1;
@@ -81,6 +82,14 @@ for (let i = 1; i <= 5; i++) {
     roomDrawings[i] = [];
     roomRedoStacks[i] = [];
     nextRoomId = 6;
+}
+
+// Memory Garbage Collection Helper
+function releaseRoomMemory(roomId) {
+    roomDrawings[roomId] = [];
+    roomRedoStacks[roomId] = [];
+    roomChats[roomId] = [];
+    roomGuesses[roomId] = [];
 }
 
 // ---------------------------------------------------------
@@ -170,6 +179,11 @@ app.post('/webhook', async (req, res) => {
             const addedCredits = payload.amount;
             const buyerId = payload.tgId;
             
+            // Update RAM map immediately if it exists
+            if (userCredits.has(buyerId)) {
+                userCredits.set(buyerId, userCredits.get(buyerId) + addedCredits);
+            }
+            
             await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
             sendMsg(update.message.chat.id, `✅ Successfully purchased ${addedCredits} Credits! Your balance has been updated.`);
             
@@ -249,6 +263,12 @@ async function getUserState(tg_id) {
 
     if (rows.length === 0) return null;
     let u = rows[0];
+    
+    // Serve credits from RAM cache if available
+    if (userCredits.has(tg_id)) {
+        u.credits = userCredits.get(tg_id);
+    }
+    
     if (!u.ad1_is_today) u.ad_claims_today = 0;
     if (!u.ad2_is_today) u.ad2_claims_today = 0;
     return u;
@@ -269,22 +289,16 @@ const broadcastRooms = () => {
             is_private: room.is_private,
             max_members: room.max_members,
             creator_id: room.creator_id,
-            // Password explicitly omitted to save bandwidth and improve security
             member_count: room.members.length
         });
     }
-
-    // Emitting ONLY to users inside the lobby room, optimizing CPU usage
     io.to('lobby').emit('lobby_rooms_update', roomsList);
 };
 
 const deleteRoom = (roomId) => {
     if (!roomId) return;
     memoryRooms.delete(roomId);
-    delete roomChats[roomId];
-    delete roomGuesses[roomId];
-    delete roomDrawings[roomId];
-    delete roomRedoStacks[roomId];
+    releaseRoomMemory(roomId); // Aggressively free RAM
 };
 
 const checkRoomReset = (roomId) => {
@@ -296,7 +310,6 @@ const checkRoomReset = (roomId) => {
         if (roomId !== 1 && roomId !== 2 && !room.is_private) {
             deleteRoom(roomId);
         } else if (!room.is_private) {
-            // Keep public core rooms but reset
             room.status = 'WAITING';
             room.current_drawer_id = null;
             room.word_to_draw = null;
@@ -304,12 +317,8 @@ const checkRoomReset = (roomId) => {
             room.round_end_time = null;
             room.members = [];
             room.turn_index = 0;
-            roomChats[roomId] = [];
-            roomGuesses[roomId] = [];
-            roomDrawings[roomId] = [];
-            roomRedoStacks[roomId] = [];
+            releaseRoomMemory(roomId); // Release unused memory instantly
         }
-        // If it IS private, we intentionally don't delete or fully reset it until expiration.
     } else if (room.members.length < 2) {
         room.status = 'WAITING';
         room.current_drawer_id = null;
@@ -317,6 +326,7 @@ const checkRoomReset = (roomId) => {
         room.break_end_time = null;
         room.round_end_time = null;
         room.members.forEach(m => m.has_given_up = 0);
+        releaseRoomMemory(roomId); // Empty RAM arrays to prevent bloat
     }
 };
 
@@ -328,7 +338,6 @@ const syncRoom = (roomId) => {
     const members = room.members;
     const chats = roomChats[roomId] || [];
     const guesses = roomGuesses[roomId] || [];
-    const drawings = roomDrawings[roomId] || [];
 
     let profiles = {};
     const userIds = new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)]);
@@ -384,7 +393,7 @@ const syncRoom = (roomId) => {
                     members,
                     chats, 
                     guesses: sanitizedGuesses,
-                    drawings: drawings.map(d => d.line_data), 
+                    // Note: Drawings removed from sync array completely to save bandwidth
                     profiles,
                     activeCalls: activeCallsList,
                     masked_word: masked_word,
@@ -415,28 +424,32 @@ io.on('connection', (socket) => {
     const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
         const room = memoryRooms.get(roomIdNum);
         if (!room) return socket.emit('join_error', 'Room not found.');
-
         if (room.members.length >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
         const existingMember = room.members.find(m => m.user_id === userId);
         if (existingMember) {
             currentRoom = roomIdNum;
             socket.join(`room_${roomIdNum}`);
-            socket.leave('lobby'); // User left lobby
+            socket.leave('lobby'); 
             socket.emit('join_success', roomIdNum);
+            
+            // Send initial drawings exclusively on join
+            socket.emit('sync_initial_drawings', (roomDrawings[roomIdNum] || []).map(d => d.line_data));
             return syncRoom(roomIdNum);
         }
 
         if (!bypassCost) {
             if (room.is_private) {
-                // If it's a private room, the creator bypasses the password requirement
                 if (room.creator_id !== userId && room.password !== password) {
                     return socket.emit('join_error', 'Incorrect password.');
                 }
             } else if (roomIdNum !== 1 && roomIdNum !== 2) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
-                if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]);
+                const currentCredits = userCredits.get(userId) || 0;
+                if (currentCredits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
+                
+                // Deduct instantly from RAM Cache, then query DB asynchronously
+                userCredits.set(userId, currentCredits - 1);
+                db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]).catch(console.error);
             }
         }
 
@@ -466,8 +479,11 @@ io.on('connection', (socket) => {
 
         currentRoom = roomIdNum;
         socket.join(`room_${currentRoom}`);
-        socket.leave('lobby'); // User left lobby
+        socket.leave('lobby');
         socket.emit('join_success', currentRoom);
+        
+        // Push initial drawing payload for canvas setup
+        socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => d.line_data));
         
         if (oldRoom) syncRoom(oldRoom);
         syncRoom(currentRoom);
@@ -499,6 +515,12 @@ io.on('connection', (socket) => {
                 await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
             }
 
+            // Sync Database Credits to RAM Map 
+            const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [tg_id]);
+            if (dbUser.length > 0 && !userCredits.has(tg_id)) {
+                userCredits.set(tg_id, parseFloat(dbUser[0].credits));
+            }
+
             const userState = await getUserState(tg_id);
             
             for (const [id, room] of memoryRooms.entries()) {
@@ -506,11 +528,12 @@ io.on('connection', (socket) => {
                     currentRoom = id;
                     socket.join(`room_${currentRoom}`);
                     syncRoom(currentRoom);
+                    // Send drawings again on reconnects
+                    socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => d.line_data));
                     break;
                 }
             }
 
-            // Put user in lobby room only if not instantly loaded into a game room
             if (!currentRoom) {
                 socket.join('lobby');
             }
@@ -537,13 +560,14 @@ io.on('connection', (socket) => {
             if (!currentUser) return;
             let success = false;
             let msg = '';
+            let rewardAmount = 0;
 
             if (type === 'daily') {
                 const [res] = await db.query(`
                     UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
                     WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
                 `, [currentUser]);
-                if (res.affectedRows > 0) { success = true; msg = 'Daily reward claimed! +1 Credit'; }
+                if (res.affectedRows > 0) { success = true; rewardAmount = 1; msg = 'Daily reward claimed! +1 Credit'; }
                 else { msg = 'Daily reward already claimed today.'; }
             } 
             else if (type === 'ad' || type === 'ad2') {
@@ -563,18 +587,17 @@ io.on('connection', (socket) => {
                     const isToday = user.last_date === user.today;
 
                     if (!user.last_date || !isToday) {
-                        const reward = 1;
-                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [reward, currentUser]);
-                        success = true; msg = `Reward claimed! +${reward} Credit`;
+                        rewardAmount = 1;
+                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = 1, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [rewardAmount, currentUser]);
+                        success = true; msg = `Reward claimed! +${rewardAmount} Credit`;
                     } else if (user.claims < maxClaims && (user.mins_passed === null || user.mins_passed >= cooldown)) {
                         const newClaimCount = user.claims + 1;
-                        
-                        let reward = 1;
-                        if (prefix === 'ad' && newClaimCount === 3) reward = 2;
-                        if (prefix === 'ad2' && (newClaimCount === 4 || newClaimCount === 5)) reward = 2;
+                        rewardAmount = 1;
+                        if (prefix === 'ad' && newClaimCount === 3) rewardAmount = 2;
+                        if (prefix === 'ad2' && (newClaimCount === 4 || newClaimCount === 5)) rewardAmount = 2;
 
-                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = ?, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [reward, newClaimCount, currentUser]);
-                        success = true; msg = `Reward claimed! +${reward} Credit${reward > 1 ? 's' : ''}`;
+                        await db.query(`UPDATE users SET credits = credits + ?, ${prefix}_claims_today = ?, last_${prefix}_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [rewardAmount, newClaimCount, currentUser]);
+                        success = true; msg = `Reward claimed! +${rewardAmount} Credit${rewardAmount > 1 ? 's' : ''}`;
                     } else {
                         msg = `Ad reward not available yet. Max ${maxClaims} per day, ${cooldown} mins apart.`;
                     }
@@ -582,6 +605,9 @@ io.on('connection', (socket) => {
             }
 
             if (success) {
+                // Instantly sync reward into RAM
+                userCredits.set(currentUser, (userCredits.get(currentUser) || 0) + rewardAmount);
+                
                 socket.emit('reward_success', msg);
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
@@ -608,15 +634,17 @@ io.on('connection', (socket) => {
                 const durationCost = expire_hours === 2 ? 1 : (expire_hours === 4 ? 2 : 1);
                 
                 cost += limitCost + durationCost; 
-                
                 const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
                 expDate = new Date(Date.now() + hours * 3600000);
             }
 
             if (cost > 0) {
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (u[0].credits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
-                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                const currentCredits = userCredits.get(currentUser) || 0;
+                if (currentCredits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
+                
+                // Deduct via RAM instantly
+                userCredits.set(currentUser, currentCredits - cost);
+                db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
             }
 
             const newRoomId = nextRoomId++;
@@ -675,7 +703,7 @@ io.on('connection', (socket) => {
             checkRoomReset(currentRoom);
         }
         socket.leave(`room_${currentRoom}`);
-        socket.join('lobby'); // User joins lobby back
+        socket.join('lobby'); 
         syncRoom(currentRoom);
         currentRoom = null;
         broadcastRooms();
@@ -693,7 +721,7 @@ io.on('connection', (socket) => {
         io.in(`room_${currentRoom}`).fetchSockets().then(sockets => {
             sockets.forEach(s => {
                 s.leave(`room_${currentRoom}`);
-                s.join('lobby'); // Move users back to lobby channel
+                s.join('lobby'); 
                 s.currentRoom = null;
             });
         });
@@ -707,13 +735,16 @@ io.on('connection', (socket) => {
             const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
             let cost = hours === 4 ? 2 : 1;
             
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
+            const currentCredits = userCredits.get(currentUser) || 0;
+            if (currentCredits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
             
             const room = memoryRooms.get(currentRoom);
             if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+            // Instant RAM cache update
+            userCredits.set(currentUser, currentCredits - cost);
+            db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
+            
             room.expire_at = new Date(room.expire_at.getTime() + hours * 3600000);
             
             const userState = await getUserState(currentUser);
@@ -730,7 +761,6 @@ io.on('connection', (socket) => {
         if (!room || !room.is_private || room.creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
 
         room.password = password;
-        // Password sent exclusively to the user returning the update
         socket.emit('reward_success', `Room password updated successfully! New password: ${password}`);
         broadcastRooms();
         syncRoom(currentRoom);
@@ -747,7 +777,7 @@ io.on('connection', (socket) => {
         const sockets = await io.in(`user_${target_id}`).fetchSockets();
         sockets.forEach(s => {
             s.leave(`room_${currentRoom}`);
-            s.join('lobby'); // Bring them back into the lobby update loop
+            s.join('lobby'); 
             if (s.currentRoom === currentRoom) s.currentRoom = null;
         });
 
@@ -755,7 +785,6 @@ io.on('connection', (socket) => {
         broadcastRooms();
     });
 
-    // OPTIMIZED CHAT
     socket.on('chat', ({ message }) => {
         if (!currentUser || !currentRoom || !message.trim()) return;
         
@@ -788,6 +817,7 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = null;
+                releaseRoomMemory(currentRoom); // GC clear arrays
             }
             if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
             roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() });
@@ -808,12 +838,12 @@ io.on('connection', (socket) => {
                 room.round_end_time = null;
                 room.last_winner_id = null;
                 roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'All guessers gave up.', created_at: new Date() });
+                releaseRoomMemory(currentRoom); // GC clear arrays
             }
         }
         syncRoom(currentRoom);
     });
 
-    // OPTIMIZED GUESS
     socket.on('guess', async ({ guess }) => {
         try {
             if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
@@ -835,12 +865,15 @@ io.on('connection', (socket) => {
                 if (activeGuessPayments.has(currentUser)) return;
                 activeGuessPayments.add(currentUser);
                 try {
-                    const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                    if (u[0].credits < 1) {
+                    const currentCredits = userCredits.get(currentUser) || 0;
+                    if (currentCredits < 1) {
                         activeGuessPayments.delete(currentUser);
                         return socket.emit('create_error', 'Not enough credits to unlock extra guesses! (Cost: 1 Credit)');
                     }
-                    await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                    
+                    // Fast RAM deduction
+                    userCredits.set(currentUser, currentCredits - 1);
+                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
                     
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
@@ -865,6 +898,7 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
+                releaseRoomMemory(currentRoom); // GC memory clear
                 syncRoom(currentRoom); 
             }
 
@@ -877,9 +911,6 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser || !currentRoom) return;
 
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (u[0].credits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
-
             const room = memoryRooms.get(currentRoom);
             if (!room) return;
             const member = room.members.find(m => m.user_id === currentUser);
@@ -889,8 +920,14 @@ io.on('connection', (socket) => {
             if (purchased.length >= 1) return socket.emit('create_error', 'You can only buy 1 hint per round.');
 
             if (!purchased.includes(index)) {
+                const currentCredits = userCredits.get(currentUser) || 0;
+                if (currentCredits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
+
+                // Fast RAM deduction
+                userCredits.set(currentUser, currentCredits - 1);
+                db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
+                
                 purchased.push(index);
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                 member.purchased_hints = JSON.stringify(purchased);
                 
                 if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
@@ -948,9 +985,8 @@ io.on('connection', (socket) => {
             m.ink_extra = {}; 
         });
         
-        roomDrawings[currentRoom] = [];
-        roomGuesses[currentRoom] = [];
-        roomRedoStacks[currentRoom] = [];
+        // Final sanity check clears prior memory on fresh drawing phase
+        releaseRoomMemory(currentRoom);
         
         syncRoom(currentRoom);
     });
@@ -978,9 +1014,7 @@ io.on('connection', (socket) => {
                 room.members.forEach(m => m.is_ready = 0);
                 room.turn_index = idx + 1; 
 
-                roomGuesses[currentRoom] = [];
-                roomDrawings[currentRoom] = [];
-                roomRedoStacks[currentRoom] = [];
+                releaseRoomMemory(currentRoom); // Clears any lingering data
             }
 
             syncRoom(currentRoom);
@@ -993,7 +1027,7 @@ io.on('connection', (socket) => {
         if (!room || room.status !== 'DRAWING') return;
 
         const member = room.members.find(m => m.user_id === currentUser);
-        const activeColor = 'black'; // Strictly enforced black color
+        const activeColor = 'black'; 
         
         let strokeLength = 0;
         if (lines && lines.length > 0) {
@@ -1028,24 +1062,25 @@ io.on('connection', (socket) => {
             const room = memoryRooms.get(currentRoom);
             if (!room || room.status !== 'DRAWING') return;
             
-            const targetColor = 'black'; // Strictly enforced black color
+            const targetColor = 'black'; 
             const cost = INK_CONFIG[targetColor].cost;
             const extraInkAmount = INK_CONFIG[targetColor].extra; 
 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
-                // Ensure ink can only be bought once per round
                 if (!member.ink_extra) member.ink_extra = {};
                 if (member.ink_extra[targetColor]) {
                     return socket.emit('create_error', 'You can only buy ink once per round.');
                 }
 
-                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (parseFloat(u[0].credits) < cost) {
+                const currentCredits = userCredits.get(currentUser) || 0;
+                if (currentCredits < cost) {
                     return socket.emit('create_error', `Not enough credits to buy ink.`);
                 }
 
-                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                // Fast RAM deduction
+                userCredits.set(currentUser, currentCredits - cost);
+                db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
 
                 member.ink_extra[targetColor] = extraInkAmount; 
                 socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
@@ -1077,6 +1112,8 @@ io.on('connection', (socket) => {
                 }
             }
             
+            // Re-sync full drawing array to clients efficiently
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => d.line_data));
             syncRoom(currentRoom);
         }
     });
@@ -1096,6 +1133,8 @@ io.on('connection', (socket) => {
                 }
             }
             
+            // Re-sync full drawing array
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => d.line_data));
             syncRoom(currentRoom);
         }
     });
@@ -1129,15 +1168,16 @@ io.on('connection', (socket) => {
                 const c = activeCalls.get(call_id);
                 if(!c) return clearInterval(call.interval);
                 
-                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ? AND credits >= 1', [c.caller]);
-                const [u1] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [c.caller]);
+                const currentCredits = userCredits.get(c.caller) || 0;
                 
-                if (parseFloat(u1[0].credits) < 1) {
+                if (currentCredits < 1) {
                     clearInterval(call.interval);
                     activeCalls.delete(call_id);
                     io.to(`room_${c.room_id}`).emit('call_ended', call_id);
                     syncRoom(c.room_id);
                 } else {
+                    userCredits.set(c.caller, currentCredits - 1);
+                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [c.caller]).catch(console.error);
                     const uState1 = await getUserState(c.caller);
                     if(uState1) io.to(`user_${c.caller}`).emit('user_update', uState1);
                 }
@@ -1157,6 +1197,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Server-side support for batch arrays of WebRTC candidates
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
         socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
@@ -1205,6 +1246,8 @@ setInterval(() => {
                 room.break_end_time = new Date(now + 5000); 
                 room.word_to_draw = null;
                 room.round_end_time = null;
+                releaseRoomMemory(roomId); // GC Release
+                
                 if (!roomChats[roomId]) roomChats[roomId] = [];
                 roomChats[roomId].push({ id: chatCounter++, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() });
                 syncRoom(roomId);
@@ -1225,7 +1268,7 @@ setInterval(() => {
                 io.in(`room_${roomId}`).fetchSockets().then(sockets => {
                     sockets.forEach(s => {
                         s.leave(`room_${roomId}`);
-                        s.join('lobby'); // Move users back to lobby
+                        s.join('lobby'); 
                         s.currentRoom = null;
                     });
                 });
@@ -1245,6 +1288,7 @@ setInterval(() => {
                             room.break_end_time = new Date(now + 5000); 
                             room.word_to_draw = null;
                             room.round_end_time = null;
+                            releaseRoomMemory(s.currentRoom);
                         }
 
                         room.members = room.members.filter(m => m.user_id !== s.currentUser);
@@ -1253,7 +1297,7 @@ setInterval(() => {
                         broadcastRooms();
                     }
                     s.leave(`room_${s.currentRoom}`);
-                    s.join('lobby'); // Moved back to lobby channel
+                    s.join('lobby'); 
                     s.currentRoom = null;
                 } else if (idleTime > 50000 && !s.idleWarned) {
                     s.idleWarned = true;
