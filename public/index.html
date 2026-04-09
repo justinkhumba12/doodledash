@@ -187,6 +187,7 @@
             const audioUnlocked = useRef(false);
             const prevChatsCount = useRef(0);
             const prevGuessesCount = useRef(0);
+            const lastKnownRoomRef = useRef(null);
 
             if (!tgId) {
                 return (
@@ -199,6 +200,12 @@
                     </div>
                 );
             }
+
+            useEffect(() => {
+                if (currentRoomId) {
+                    lastKnownRoomRef.current = currentRoomId;
+                }
+            }, [currentRoomId]);
 
             // Sync master volume
             useEffect(() => {
@@ -528,6 +535,12 @@
 
                 socket.on('connect', () => {
                     socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                    
+                    if (lastKnownRoomRef.current) {
+                        setTimeout(() => {
+                            socket.emit('join_room', { room_id: lastKnownRoomRef.current });
+                        }, 500);
+                    }
                 });
 
                 socket.on('lobby_data', (data) => {
