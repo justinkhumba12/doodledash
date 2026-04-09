@@ -93,13 +93,13 @@
     <script type="text/babel">
         const INK_CONFIG = {
             black: { free: 1500, extra: 1500, cost: 0.5 },
-            white: { free: 500, extra: 1000, cost: 0.5 },
-            red: { free: 200, extra: 1000, cost: 0.5 },
-            blue: { free: 300, extra: 1000, cost: 0.5 },
-            green: { free: 300, extra: 1000, cost: 0.5 },
-            yellow: { free: 300, extra: 1000, cost: 0.5 },
-            purple: { free: 300, extra: 1000, cost: 0.5 },
-            orange: { free: 300, extra: 1000, cost: 0.5 }
+            white: { free: 1500, extra: 1500, cost: 0.5 },
+            red: { free: 0, extra: 1500, cost: 0.5 },
+            blue: { free: 0, extra: 1500, cost: 0.5 },
+            green: { free: 0, extra: 1500, cost: 0.5 },
+            yellow: { free: 0, extra: 1500, cost: 0.5 },
+            purple: { free: 0, extra: 1500, cost: 0.5 },
+            orange: { free: 0, extra: 1500, cost: 0.5 }
         };
 
         const { useState, useEffect, useRef, useCallback } = React;
@@ -1136,10 +1136,14 @@
             } else if (modal.type === 'confirm_buy_ink') {
                 content = (
                     <>
-                        <p className="text-muted text-center mb-4">Refill your ink supply to keep drawing?</p>
+                        <p className="text-muted text-center mb-4">
+                            {modal.isUnlock ? `Unlock ${modal.color} ink to start drawing with it?` : `Refill your ${modal.color} ink supply to keep drawing?`}
+                        </p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>Buy ({modal.cost} Cred)</button>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: modal.color }); close(); }}>
+                                {modal.isUnlock ? 'Unlock' : 'Buy'} ({modal.cost} Cred)
+                            </button>
                         </div>
                     </>
                 );
@@ -1529,16 +1533,18 @@
             
             const [wordInput, setWordInput] = useState('');
             
-            // Unified Global Ink logic
+            // Per Color global ink extraction
             const myData = members.find(m => m.user_id === tgId) || {};
-            const unifiedInkUsed = myData.ink_used || 0;
-            const unifiedInkExtra = myData.ink_extra || 0;
-            const maxInk = 1500 + unifiedInkExtra; // Base 1500 + Extra bought
+            const inkUsedObj = myData.ink_used || {};
+            const inkExtraObj = myData.ink_extra || {};
+            
+            const currentMaxInk = INK_CONFIG[activeColor] ? INK_CONFIG[activeColor].free + (inkExtraObj[activeColor] || 0) : 0;
+            const currentUsedInk = inkUsedObj[activeColor] || 0;
 
             useEffect(() => {
-                inkUsedRef.current = unifiedInkUsed;
+                inkUsedRef.current = currentUsedInk;
                 updateInkUI();
-            }, [unifiedInkUsed, unifiedInkExtra, activeColor]);
+            }, [currentUsedInk, currentMaxInk, activeColor]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1574,8 +1580,8 @@
 
             const updateInkUI = () => {
                 if (!isDrawer || !isDrawingPhase) return;
-                const inkLeft = Math.max(0, maxInk - inkUsedRef.current);
-                const inkPercent = (inkLeft / maxInk) * 100;
+                const inkLeft = Math.max(0, currentMaxInk - inkUsedRef.current);
+                const inkPercent = currentMaxInk > 0 ? (inkLeft / currentMaxInk) * 100 : 0;
                 
                 const bar = document.getElementById('inkProgressBar');
                 const text = document.getElementById('inkProgressText');
@@ -1583,7 +1589,7 @@
                 
                 if (bar) {
                     bar.style.width = `${inkPercent}%`;
-                    if (inkLeft <= (maxInk * 0.2)) {
+                    if (inkLeft <= (currentMaxInk * 0.2) && currentMaxInk > 0) {
                         bar.style.backgroundColor = '';
                         bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
                     } else {
@@ -1592,8 +1598,8 @@
                     }
                 }
                 if (text) {
-                    text.className = inkLeft <= (maxInk * 0.2) ? 'text-danger fw-bold' : 'text-muted';
-                    text.innerText = `${Math.floor(inkLeft)} / ${maxInk}`;
+                    text.className = (inkLeft <= (currentMaxInk * 0.2) && currentMaxInk > 0) ? 'text-danger fw-bold' : 'text-muted';
+                    text.innerText = `${Math.floor(inkLeft)} / ${currentMaxInk}`;
                 }
                 if (buyBtn) {
                     buyBtn.style.display = inkLeft <= 0 ? 'inline-block' : 'none';
@@ -1673,9 +1679,10 @@
                 // Track physical length distance drawn
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
                 
-                if (inkUsedRef.current + dist > maxInk) {
+                if (inkUsedRef.current + dist > currentMaxInk) {
                     stopDraw(); 
-                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5 });
+                    const isUnlock = currentMaxInk === 0;
+                    setModal({ type: 'confirm_buy_ink', title: isUnlock ? `Unlock ${activeColor}` : 'Refill Ink', cost: 0.5, color: activeColor, isUnlock });
                     return;
                 }
                 
@@ -1712,34 +1719,53 @@
                         <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
                             
                             <div className="d-flex justify-content-center gap-2 mb-2 flex-wrap">
-                                {Object.keys(INK_CONFIG).map(c => (
-                                    <div 
-                                        key={c}
-                                        onClick={() => setActiveColor(c)}
-                                        style={{
-                                            backgroundColor: c === 'white' ? '#f8fafc' : c,
-                                            width: '30px', height: '30px', 
-                                            borderRadius: '50%',
-                                            border: activeColor === c ? '3px solid #6366f1' : '2px solid #cbd5e1',
-                                            cursor: 'pointer',
-                                            boxShadow: activeColor === c ? '0 0 10px rgba(99,102,241,0.5)' : 'none'
-                                        }}
-                                        title={c}
-                                    />
-                                ))}
+                                {Object.keys(INK_CONFIG).map(c => {
+                                    const extra = inkExtraObj[c] || 0;
+                                    const max = INK_CONFIG[c].free + extra;
+                                    const isLocked = max === 0;
+                                    
+                                    return (
+                                        <div 
+                                            key={c}
+                                            onClick={() => {
+                                                setActiveColor(c);
+                                                inkUsedRef.current = inkUsedObj[c] || 0;
+                                            }}
+                                            className="position-relative"
+                                            style={{
+                                                backgroundColor: c === 'white' ? '#f8fafc' : c,
+                                                width: '30px', height: '30px', 
+                                                borderRadius: '50%',
+                                                border: activeColor === c ? '3px solid #6366f1' : '2px solid #cbd5e1',
+                                                cursor: 'pointer',
+                                                boxShadow: activeColor === c ? '0 0 10px rgba(99,102,241,0.5)' : 'none',
+                                                opacity: isLocked ? 0.5 : 1
+                                            }}
+                                            title={c}
+                                        >
+                                            {isLocked && (
+                                                <i className="fas fa-lock position-absolute top-50 start-50 translate-middle text-dark" style={{fontSize: '11px'}}></i>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
 
                             <div className="d-flex justify-content-between small fw-bold mb-1">
                                 <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, maxInk - unifiedInkUsed))} / {maxInk}</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInk - currentUsedInk))} / {currentMaxInk}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
                                 <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                                      style={{width: '100%', transition: 'width 0.1s'}}></div>
                             </div>
                             <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5 })}>
-                                    <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
+                                <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                                    const isUnlock = currentMaxInk === 0;
+                                    setModal({ type: 'confirm_buy_ink', title: isUnlock ? `Unlock ${activeColor}` : 'Refill Ink', cost: 0.5, color: activeColor, isUnlock });
+                                }}>
+                                    <i className={currentMaxInk === 0 ? "fas fa-unlock" : "fas fa-plus-circle"}></i> 
+                                    {currentMaxInk === 0 ? `Unlock ${activeColor} Ink` : `Refill ${activeColor} Ink`} (0.5 Cred)
                                 </button>
                             </div>
                         </div>
