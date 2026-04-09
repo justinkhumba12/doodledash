@@ -48,14 +48,7 @@ const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6
 // INK CONFIGURATION
 // ---------------------------------------------------------
 const INK_CONFIG = {
-    black: { free: 1500, extra: 1500, cost: 0.5 },
-    white: { free: 1500, extra: 1500, cost: 0.5 },
-    red: { free: 0, extra: 1500, cost: 0.5 },
-    blue: { free: 0, extra: 1500, cost: 0.5 },
-    green: { free: 0, extra: 1500, cost: 0.5 },
-    yellow: { free: 0, extra: 1500, cost: 0.5 },
-    purple: { free: 0, extra: 1500, cost: 0.5 },
-    orange: { free: 0, extra: 1500, cost: 0.5 }
+    black: { free: 2500, extra: 1000, cost: 0.5 }
 };
 
 // ---------------------------------------------------------
@@ -994,13 +987,13 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('draw', ({ lines, color }) => {
+    socket.on('draw', ({ lines }) => {
         if (!currentUser || !currentRoom) return;
         const room = memoryRooms.get(currentRoom);
         if (!room || room.status !== 'DRAWING') return;
 
         const member = room.members.find(m => m.user_id === currentUser);
-        const activeColor = INK_CONFIG[color] ? color : 'black';
+        const activeColor = 'black'; // Strictly enforced black color
         
         let strokeLength = 0;
         if (lines && lines.length > 0) {
@@ -1029,28 +1022,33 @@ io.on('connection', (socket) => {
         socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
     });
 
-    socket.on('buy_ink', async ({ color }) => {
+    socket.on('buy_ink', async () => {
         try {
             if (!currentUser || !currentRoom) return;
             const room = memoryRooms.get(currentRoom);
             if (!room || room.status !== 'DRAWING') return;
             
-            const targetColor = INK_CONFIG[color] ? color : 'black';
+            const targetColor = 'black'; // Strictly enforced black color
             const cost = INK_CONFIG[targetColor].cost;
             const extraInkAmount = INK_CONFIG[targetColor].extra; 
 
-            const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (parseFloat(u[0].credits) < cost) {
-                return socket.emit('create_error', `Not enough credits to buy ink.`);
-            }
-
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
-
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
+                // Ensure ink can only be bought once per round
                 if (!member.ink_extra) member.ink_extra = {};
-                member.ink_extra[targetColor] = (member.ink_extra[targetColor] || 0) + extraInkAmount; 
-                socket.emit('reward_success', `+${extraInkAmount} ${targetColor} Ink added!`);
+                if (member.ink_extra[targetColor]) {
+                    return socket.emit('create_error', 'You can only buy ink once per round.');
+                }
+
+                const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (parseFloat(u[0].credits) < cost) {
+                    return socket.emit('create_error', `Not enough credits to buy ink.`);
+                }
+
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+
+                member.ink_extra[targetColor] = extraInkAmount; 
+                socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
