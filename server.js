@@ -276,20 +276,13 @@ const broadcastRooms = () => {
             is_private: room.is_private,
             max_members: room.max_members,
             creator_id: room.creator_id,
-            password: room.password,
+            // Password explicitly omitted to save bandwidth and improve security
             member_count: room.members.length
         });
     }
 
-    io.sockets.sockets.forEach(s => {
-        const userId = s.currentUser;
-        const customizedRooms = roomsList.map(r => {
-            if (r.creator_id === userId) return r; 
-            const { password, ...safeRoom } = r;
-            return safeRoom;
-        });
-        s.emit('lobby_rooms_update', customizedRooms);
-    });
+    // Emitting ONLY to users inside the lobby room, optimizing CPU usage
+    io.to('lobby').emit('lobby_rooms_update', roomsList);
 };
 
 const deleteRoom = (roomId) => {
@@ -436,13 +429,17 @@ io.on('connection', (socket) => {
         if (existingMember) {
             currentRoom = roomIdNum;
             socket.join(`room_${roomIdNum}`);
+            socket.leave('lobby'); // User left lobby
             socket.emit('join_success', roomIdNum);
             return syncRoom(roomIdNum);
         }
 
         if (!bypassCost) {
             if (room.is_private) {
-                if (room.password !== password) return socket.emit('join_error', 'Incorrect password.');
+                // If it's a private room, the creator bypasses the password requirement
+                if (room.creator_id !== userId && room.password !== password) {
+                    return socket.emit('join_error', 'Incorrect password.');
+                }
             } else if (roomIdNum !== 1 && roomIdNum !== 2) {
                 const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [userId]);
                 if (u[0].credits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
@@ -469,13 +466,14 @@ io.on('connection', (socket) => {
             total_turns: 0,
             has_given_up: 0,
             purchased_hints: '[]',
-            ink_used: {},      // Now an object to track per color
-            ink_extra: {},     // Now an object to track per color
+            ink_used: {},      
+            ink_extra: {},     
             joined_at: Date.now() 
         });
 
         currentRoom = roomIdNum;
         socket.join(`room_${currentRoom}`);
+        socket.leave('lobby'); // User left lobby
         socket.emit('join_success', currentRoom);
         
         if (oldRoom) syncRoom(oldRoom);
@@ -519,11 +517,16 @@ io.on('connection', (socket) => {
                 }
             }
 
+            // Put user in lobby room only if not instantly loaded into a game room
+            if (!currentRoom) {
+                socket.join('lobby');
+            }
+
             const roomsList = [];
             for (const [id, room] of memoryRooms.entries()) {
                 roomsList.push({
                     id: room.id, status: room.status, is_private: room.is_private, max_members: room.max_members,
-                    creator_id: room.creator_id, password: room.creator_id === tg_id ? room.password : null, member_count: room.members.length
+                    creator_id: room.creator_id, member_count: room.members.length
                 });
             }
 
@@ -679,6 +682,7 @@ io.on('connection', (socket) => {
             checkRoomReset(currentRoom);
         }
         socket.leave(`room_${currentRoom}`);
+        socket.join('lobby'); // User joins lobby back
         syncRoom(currentRoom);
         currentRoom = null;
         broadcastRooms();
@@ -696,6 +700,7 @@ io.on('connection', (socket) => {
         io.in(`room_${currentRoom}`).fetchSockets().then(sockets => {
             sockets.forEach(s => {
                 s.leave(`room_${currentRoom}`);
+                s.join('lobby'); // Move users back to lobby channel
                 s.currentRoom = null;
             });
         });
@@ -732,7 +737,8 @@ io.on('connection', (socket) => {
         if (!room || !room.is_private || room.creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
 
         room.password = password;
-        socket.emit('reward_success', 'Room password updated successfully!');
+        // Password sent exclusively to the user returning the update
+        socket.emit('reward_success', `Room password updated successfully! New password: ${password}`);
         broadcastRooms();
         syncRoom(currentRoom);
     });
@@ -748,6 +754,7 @@ io.on('connection', (socket) => {
         const sockets = await io.in(`user_${target_id}`).fetchSockets();
         sockets.forEach(s => {
             s.leave(`room_${currentRoom}`);
+            s.join('lobby'); // Bring them back into the lobby update loop
             if (s.currentRoom === currentRoom) s.currentRoom = null;
         });
 
@@ -768,7 +775,6 @@ io.on('connection', (socket) => {
             roomChats[currentRoom].shift(); 
         }
 
-        // Broadcast just the chat, save vCPU
         io.to(`room_${currentRoom}`).emit('new_chat', newChat);
     });
 
@@ -866,7 +872,7 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
-                syncRoom(currentRoom); // Only sync room on phase change
+                syncRoom(currentRoom); 
             }
 
         } catch (err) {
@@ -1221,6 +1227,7 @@ setInterval(() => {
                 io.in(`room_${roomId}`).fetchSockets().then(sockets => {
                     sockets.forEach(s => {
                         s.leave(`room_${roomId}`);
+                        s.join('lobby'); // Move users back to lobby
                         s.currentRoom = null;
                     });
                 });
@@ -1248,6 +1255,7 @@ setInterval(() => {
                         broadcastRooms();
                     }
                     s.leave(`room_${s.currentRoom}`);
+                    s.join('lobby'); // Moved back to lobby channel
                     s.currentRoom = null;
                 } else if (idleTime > 50000 && !s.idleWarned) {
                     s.idleWarned = true;
