@@ -58,14 +58,6 @@ const INK_CONFIG = {
     orange: { free: 300, extra: 1000, cost: 0.5 }
 };
 
-const getInitialInks = () => {
-    let inks = {};
-    Object.keys(INK_CONFIG).forEach(color => {
-        inks[color] = { used: 0, extra: 0 };
-    });
-    return inks;
-};
-
 // ---------------------------------------------------------
 // RAM MEMORY STORAGE
 // ---------------------------------------------------------
@@ -477,8 +469,9 @@ io.on('connection', (socket) => {
             total_turns: 0,
             has_given_up: 0,
             purchased_hints: '[]',
-            inks: getInitialInks(),
-            joined_at: Date.now() // Track explicit joining order
+            ink_used: 0,      // Unified global ink usage
+            ink_extra: 0,     // Unified global ink extra capacity purchased
+            joined_at: Date.now() 
         });
 
         currentRoom = roomIdNum;
@@ -560,7 +553,7 @@ io.on('connection', (socket) => {
             else if (type === 'ad' || type === 'ad2') {
                 const prefix = type === 'ad' ? 'ad' : 'ad2';
                 const cooldown = prefix === 'ad' ? 60 : 45;
-                const maxClaims = prefix === 'ad' ? 3 : 5; // Enforce limits correctly
+                const maxClaims = prefix === 'ad' ? 3 : 5; 
                 
                 const [u] = await db.query(`SELECT
                     ${prefix}_claims_today as claims,
@@ -580,7 +573,6 @@ io.on('connection', (socket) => {
                     } else if (user.claims < maxClaims && (user.mins_passed === null || user.mins_passed >= cooldown)) {
                         const newClaimCount = user.claims + 1;
                         
-                        // Check for Tiered Bonuses
                         let reward = 1;
                         if (prefix === 'ad' && newClaimCount === 3) reward = 2;
                         if (prefix === 'ad2' && (newClaimCount === 4 || newClaimCount === 5)) reward = 2;
@@ -616,7 +608,6 @@ io.on('connection', (socket) => {
 
                 if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                 
-                // Expiry and slot strict cost requirements
                 const limitCost = limit === 2 ? 1 : (limit === 3 ? 3 : 4);
                 const durationCost = expire_hours === 2 ? 1 : (expire_hours === 4 ? 2 : 1);
                 
@@ -764,17 +755,21 @@ io.on('connection', (socket) => {
         broadcastRooms();
     });
 
+    // OPTIMIZED CHAT
     socket.on('chat', ({ message }) => {
         if (!currentUser || !currentRoom || !message.trim()) return;
         
         if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-        roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() });
+        
+        const newChat = { id: chatCounter++, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
+        roomChats[currentRoom].push(newChat);
         
         if (roomChats[currentRoom].length > 40) {
             roomChats[currentRoom].shift(); 
         }
 
-        syncRoom(currentRoom);
+        // Broadcast just the chat, save vCPU
+        io.to(`room_${currentRoom}`).emit('new_chat', newChat);
     });
 
     socket.on('give_up', () => {
@@ -798,7 +793,7 @@ io.on('connection', (socket) => {
             if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
             roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() });
         } else {
-            if (room.status !== 'DRAWING') return; // Guessers only give up during active draws
+            if (room.status !== 'DRAWING') return; 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) member.has_given_up = 1;
             
@@ -819,6 +814,7 @@ io.on('connection', (socket) => {
         syncRoom(currentRoom);
     });
 
+    // OPTIMIZED GUESS
     socket.on('guess', async ({ guess }) => {
         try {
             if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
@@ -832,12 +828,10 @@ io.on('connection', (socket) => {
             const currentGuesses = roomGuesses[currentRoom] || [];
             const myGuessCount = currentGuesses.filter(g => g.user_id === currentUser).length;
             
-            // Strictly enforce MAX 6 guesses
             if (myGuessCount >= 6) {
                 return socket.emit('create_error', 'No more guesses allowed this round.');
             }
 
-            // On the 5th guess attempt (index 4), require 1 Credit to unlock both #5 and #6.
             if (myGuessCount === 4) {
                 if (activeGuessPayments.has(currentUser)) return;
                 activeGuessPayments.add(currentUser);
@@ -858,21 +852,23 @@ io.on('connection', (socket) => {
                 activeGuessPayments.delete(currentUser);
             }
             
-            // Re-check count after potential async delay
             if ((roomGuesses[currentRoom] || []).filter(g => g.user_id === currentUser).length >= 6) return;
 
             const isCorrect = room.word_to_draw && room.word_to_draw.toLowerCase() === guess.trim().toLowerCase();
             
-            roomGuesses[currentRoom].push({ id: guessCounter++, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() });
+            const newGuess = { id: guessCounter++, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() };
+            roomGuesses[currentRoom].push(newGuess);
+
+            io.to(`room_${currentRoom}`).emit('new_guess', newGuess);
 
             if (isCorrect) {
                 room.status = 'REVEAL';
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
+                syncRoom(currentRoom); // Only sync room on phase change
             }
 
-            syncRoom(currentRoom);
         } catch (err) {
             console.error('Guess Error:', err);
         }
@@ -944,12 +940,14 @@ io.on('connection', (socket) => {
         room.word_to_draw = wordClean;
         room.base_hints = JSON.stringify(hints);
         room.status = 'DRAWING';
-        room.round_end_time = null; // Removed countdown per requirement
+        room.round_end_time = null; 
         
         room.members.forEach(m => {
             m.purchased_hints = '[]';
             m.has_given_up = 0;
-            m.inks = getInitialInks(); 
+            // CHANGED: Use a unified ink storage instead of per-color
+            m.ink_used = 0; 
+            m.ink_extra = 0; 
         });
         
         roomDrawings[currentRoom] = [];
@@ -968,7 +966,6 @@ io.on('connection', (socket) => {
             member.is_ready = 1;
 
             if (room.members.length >= 2 && room.members.every(m => m.is_ready)) {
-                // Enforce Join time Queue Order
                 const sortedMembers = [...room.members].sort((a, b) => a.joined_at - b.joined_at);
 
                 let idx = room.turn_index || 0;
@@ -979,9 +976,9 @@ io.on('connection', (socket) => {
                 room.current_drawer_id = nextDrawer;
                 room.word_to_draw = null;
                 room.break_end_time = null;
-                room.round_end_time = new Date(Date.now() + 30000); // 30s countdown to choose word
+                room.round_end_time = new Date(Date.now() + 30000); 
                 room.members.forEach(m => m.is_ready = 0);
-                room.turn_index = idx + 1; // Advance turn sequence
+                room.turn_index = idx + 1; 
 
                 roomGuesses[currentRoom] = [];
                 roomDrawings[currentRoom] = [];
@@ -1009,10 +1006,8 @@ io.on('connection', (socket) => {
         }
 
         if (member) {
-            if (!member.inks) member.inks = getInitialInks();
-            const config = INK_CONFIG[activeColor];
-            const maxInk = config.free + (member.inks[activeColor].extra || 0);
-            member.inks[activeColor].used = (member.inks[activeColor].used || 0) + strokeLength;
+            // CHANGED: Add to global ink used
+            member.ink_used = (member.ink_used || 0) + strokeLength;
         }
 
         roomRedoStacks[currentRoom] = []; 
@@ -1029,25 +1024,28 @@ io.on('connection', (socket) => {
         socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
     });
 
-    socket.on('buy_ink', async ({ color }) => {
+    socket.on('buy_ink', async () => {
         try {
             if (!currentUser || !currentRoom) return;
             const room = memoryRooms.get(currentRoom);
             if (!room || room.status !== 'DRAWING') return;
-            const targetColor = INK_CONFIG[color] ? color : 'black';
+            
+            // Generic Ink cost: 0.5 credits for 1500 extra ink
+            const cost = 0.5;
+            const extraInkAmount = 1500; 
 
             const [u] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (parseFloat(u[0].credits) < INK_CONFIG[targetColor].cost) {
-                return socket.emit('create_error', `Not enough credits to buy ${targetColor} ink.`);
+            if (parseFloat(u[0].credits) < cost) {
+                return socket.emit('create_error', `Not enough credits to buy ink.`);
             }
 
-            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [INK_CONFIG[targetColor].cost, currentUser]);
+            await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
-                if (!member.inks) member.inks = getInitialInks();
-                member.inks[targetColor].extra += INK_CONFIG[targetColor].extra; 
-                socket.emit('reward_success', `+${INK_CONFIG[targetColor].extra} ${targetColor} Ink added!`);
+                // CHANGED: Add to global extra ink
+                member.ink_extra = (member.ink_extra || 0) + extraInkAmount; 
+                socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
@@ -1070,8 +1068,8 @@ io.on('connection', (socket) => {
             const room = memoryRooms.get(currentRoom);
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
-                if (member && toRestore.color && member.inks && member.inks[toRestore.color]) {
-                    member.inks[toRestore.color].used = Math.max(0, (member.inks[toRestore.color].used || 0) - (toRestore.ink_cost || 0));
+                if (member && toRestore.ink_cost) {
+                    member.ink_used = Math.max(0, (member.ink_used || 0) - toRestore.ink_cost);
                 }
             }
             
@@ -1088,8 +1086,8 @@ io.on('connection', (socket) => {
             const room = memoryRooms.get(currentRoom);
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
-                if (member && toRestore.color && member.inks && member.inks[toRestore.color]) {
-                    member.inks[toRestore.color].used = (member.inks[toRestore.color].used || 0) + (toRestore.ink_cost || 0);
+                if (member && toRestore.ink_cost) {
+                    member.ink_used = (member.ink_used || 0) + toRestore.ink_cost;
                 }
             }
             
@@ -1181,7 +1179,7 @@ io.on('connection', (socket) => {
                     broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
-            }, 30000); // 30 Second Drop Rule Reconnect Tolerance
+            }, 30000); 
 
             disconnectTimeouts.set(currentUser, timeoutId);
         }
@@ -1189,15 +1187,15 @@ io.on('connection', (socket) => {
 });
 
 // ---------------------------------------------------------
-// RAM-BASED GAME LOOP ENGINE
+// RAM-BASED GAME LOOP ENGINE (OPTIMIZED)
 // ---------------------------------------------------------
+// Change from 2000ms to 10000ms
 setInterval(() => {
     try {
         const now = Date.now();
         
         for (const [roomId, room] of memoryRooms.entries()) {
             
-            // 1. Drawer 30s timeout Check (PRE_DRAW Expiration)
             if (room.status === 'PRE_DRAW' && room.round_end_time && now >= room.round_end_time.getTime()) {
                 room.status = 'BREAK';
                 room.break_end_time = new Date(now + 5000); 
@@ -1209,7 +1207,6 @@ setInterval(() => {
                 continue;
             }
 
-            // 2. Reveal -> Break Transition
             if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                 room.status = 'BREAK';
                 room.break_end_time = new Date(now + 10000); 
@@ -1217,7 +1214,6 @@ setInterval(() => {
                 syncRoom(roomId);
             }
 
-            // 3. Expiration Check for Private Rooms
             if (room.is_private && room.expire_at && now >= room.expire_at.getTime()) {
                 io.to(`room_${roomId}`).emit('room_expired');
                 deleteRoom(roomId); 
@@ -1232,7 +1228,6 @@ setInterval(() => {
             }
         }
         
-        // 4. Idle Client Kick Check
         io.sockets.sockets.forEach(s => {
             if (s.currentRoom) {
                 const idleTime = now - (s.lastActiveEvent || now);
@@ -1264,7 +1259,7 @@ setInterval(() => {
         });
 
     } catch (e) { console.error("Game Loop Error:", e); }
-}, 2000); 
+}, 10000); 
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
