@@ -9,7 +9,6 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    <!-- Preload Assets -->
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
     <link rel="preload" href="/audio/call.mp3" as="audio">
@@ -389,7 +388,8 @@
                         { urls: 'stun:stun1.l.google.com:19302' },
                         { urls: 'stun:stun2.l.google.com:19302' },
                         { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        { urls: 'stun:stun.services.mozilla.com' } // Included for broader IPv6 STUN compatibility
                     ] 
                 });
                 
@@ -1812,7 +1812,7 @@
                             <div className="wb-overlay">
                                 {room.status !== 'WAITING' && (
                                     <>
-                                        <h4 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h4>
+                                        <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h6>
                                         {room.last_winner_id ? (
                                             <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
                                                 {roomData.profiles[room.last_winner_id] ? (
@@ -1832,10 +1832,6 @@
                                     </h5>
                                 ) : (
                                     <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
-                                )}
-                                
-                                {room.break_end_time && members.length >= 2 && (
-                                    <div className="mt-3 fw-bold text-primary">Game auto-starts in {localTimeLeft}s</div>
                                 )}
                             </div>
                         )}
