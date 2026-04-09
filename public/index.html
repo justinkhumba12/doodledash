@@ -1523,6 +1523,7 @@
             const lastPosRef = useRef({x: 0, y: 0});
             const lastStrokeTime = useRef(0);
             const inkUsedRef = useRef(0);
+            const localInkRef = useRef({});
 
             const { room, drawings, members } = roomData;
             const isDrawer = room.current_drawer_id === tgId;
@@ -1539,12 +1540,18 @@
             const inkExtraObj = myData.ink_extra || {};
             
             const currentMaxInk = INK_CONFIG[activeColor] ? INK_CONFIG[activeColor].free + (inkExtraObj[activeColor] || 0) : 0;
-            const currentUsedInk = inkUsedObj[activeColor] || 0;
+
+            // Merge server ink usage into local ref (prevents overriding local progress with stale server data when doing quick color switches)
+            useEffect(() => {
+                for (const c in inkUsedObj) {
+                    localInkRef.current[c] = Math.max(localInkRef.current[c] || 0, inkUsedObj[c]);
+                }
+            }, [inkUsedObj]);
 
             useEffect(() => {
-                inkUsedRef.current = currentUsedInk;
+                inkUsedRef.current = localInkRef.current[activeColor] || 0;
                 updateInkUI();
-            }, [currentUsedInk, currentMaxInk, activeColor]);
+            }, [activeColor, currentMaxInk]);
 
             // Timer for Auto Ready
             useEffect(() => {
@@ -1656,8 +1663,8 @@
 
             const getMousePos = (e) => {
                 const rect = canvasRef.current.getBoundingClientRect();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientY || (e.clientX ? e.clientX : 0);
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY || (e.clientY ? e.clientY : 0);
                 const scaleX = 500 / rect.width;
                 const scaleY = 500 / rect.height;
                 return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
@@ -1687,6 +1694,15 @@
                 }
                 
                 inkUsedRef.current += dist;
+                localInkRef.current[activeColor] = inkUsedRef.current; // Keep local ref strictly synchronized
+
+                // FIX: Mutate local state directly to prevent the ink level from resetting when reading stale roomData on color switch
+                const myMember = roomData.members.find(m => m.user_id === tgId);
+                if (myMember) {
+                    if (!myMember.ink_used) myMember.ink_used = {};
+                    myMember.ink_used[activeColor] = inkUsedRef.current;
+                }
+
                 updateInkUI();
                 
                 const ctx = canvasRef.current.getContext('2d');
@@ -1729,7 +1745,9 @@
                                             key={c}
                                             onClick={() => {
                                                 setActiveColor(c);
-                                                inkUsedRef.current = inkUsedObj[c] || 0;
+                                                // Guarantee reading the locally preserved state upon click
+                                                const latestMember = members.find(m => m.user_id === tgId);
+                                                inkUsedRef.current = (latestMember?.ink_used && latestMember.ink_used[c]) || 0;
                                             }}
                                             className="position-relative"
                                             style={{
@@ -1753,7 +1771,7 @@
 
                             <div className="d-flex justify-content-between small fw-bold mb-1">
                                 <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInk - currentUsedInk))} / {currentMaxInk}</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInk - (inkUsedRef.current || 0)))} / {currentMaxInk}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
                                 <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
