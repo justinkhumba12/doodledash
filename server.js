@@ -966,6 +966,28 @@ io.on('connection', (socket) => {
         const member = room.members.find(m => m.user_id === currentUser);
         if (member) {
             member.is_ready = 1;
+
+            if (room.members.length >= 2 && room.members.every(m => m.is_ready)) {
+                // Enforce Join time Queue Order
+                const sortedMembers = [...room.members].sort((a, b) => a.joined_at - b.joined_at);
+
+                let idx = room.turn_index || 0;
+                if (idx >= sortedMembers.length) idx = 0;
+                const nextDrawer = sortedMembers[idx].user_id;
+
+                room.status = 'PRE_DRAW';
+                room.current_drawer_id = nextDrawer;
+                room.word_to_draw = null;
+                room.break_end_time = null;
+                room.round_end_time = new Date(Date.now() + 30000); // 30s countdown to choose word
+                room.members.forEach(m => m.is_ready = 0);
+                room.turn_index = idx + 1; // Advance turn sequence
+
+                roomGuesses[currentRoom] = [];
+                roomDrawings[currentRoom] = [];
+                roomRedoStacks[currentRoom] = [];
+            }
+
             syncRoom(currentRoom);
         }
     });
@@ -1159,7 +1181,7 @@ io.on('connection', (socket) => {
                     broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
-            }, 3000); // 3 Second Drop Rule Reconnect Tolerance
+            }, 30000); // 30 Second Drop Rule Reconnect Tolerance
 
             disconnectTimeouts.set(currentUser, timeoutId);
         }
@@ -1195,44 +1217,7 @@ setInterval(() => {
                 syncRoom(roomId);
             }
 
-            // 3. Waiting/Break -> Pre Draw Transition (Join Order Turns)
-            if (room.status === 'WAITING' || room.status === 'BREAK') {
-                if (room.members.length >= 2) {
-                    if (!room.break_end_time) {
-                        room.break_end_time = new Date(now + 10000);
-                        syncRoom(roomId);
-                    } else if (now >= room.break_end_time.getTime() || room.members.every(m => m.is_ready)) {
-                        
-                        // Enforce Join time Queue Order
-                        const sortedMembers = [...room.members].sort((a, b) => a.joined_at - b.joined_at);
-                        
-                        let idx = room.turn_index || 0;
-                        if (idx >= sortedMembers.length) idx = 0;
-                        const nextDrawer = sortedMembers[idx].user_id;
-                        
-                        room.status = 'PRE_DRAW';
-                        room.current_drawer_id = nextDrawer;
-                        room.word_to_draw = null;
-                        room.break_end_time = null;
-                        room.round_end_time = new Date(Date.now() + 30000); // 30s countdown to choose word
-                        room.members.forEach(m => m.is_ready = 0);
-                        room.turn_index = idx + 1; // Advance turn sequence
-                        
-                        roomGuesses[roomId] = [];
-                        roomDrawings[roomId] = [];
-                        roomRedoStacks[roomId] = [];
-                        syncRoom(roomId);
-                    }
-                } else {
-                    if (room.break_end_time) {
-                        room.break_end_time = null;
-                        room.round_end_time = null;
-                        syncRoom(roomId);
-                    }
-                }
-            }
-
-            // 4. Expiration Check for Private Rooms
+            // 3. Expiration Check for Private Rooms
             if (room.is_private && room.expire_at && now >= room.expire_at.getTime()) {
                 io.to(`room_${roomId}`).emit('room_expired');
                 deleteRoom(roomId); 
@@ -1247,7 +1232,7 @@ setInterval(() => {
             }
         }
         
-        // 5. Idle Client Kick Check
+        // 4. Idle Client Kick Check
         io.sockets.sockets.forEach(s => {
             if (s.currentRoom) {
                 const idleTime = now - (s.lastActiveEvent || now);
