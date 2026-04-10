@@ -88,7 +88,6 @@ for (let i = 1; i <= 5; i++) {
 function releaseRoomMemory(roomId) {
     roomDrawings[roomId] = [];
     roomRedoStacks[roomId] = [];
-    // Guesses and Chats explicitly NOT cleared here so they persist for the reveal screen
 }
 
 // ---------------------------------------------------------
@@ -127,7 +126,7 @@ async function initDB() {
             "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0"
         ];
         for (let query of migrations) {
-            try { await db.query(query); } catch (e) { /* Ignore if column already exists */ }
+            try { await db.query(query); } catch (e) { }
         }
     } catch (err) {
         console.error('MySQL Init Error:', err);
@@ -318,7 +317,7 @@ const checkRoomReset = (roomId) => {
             room.members = [];
             room.turn_index = 0;
             releaseRoomMemory(roomId); 
-            roomGuesses[roomId] = []; // Wipe guesses if room is empty
+            roomGuesses[roomId] = []; 
             roomChats[roomId] = []; 
         }
     } else if (room.members.length < 2) {
@@ -330,7 +329,7 @@ const checkRoomReset = (roomId) => {
         room.end_reason = null;
         room.members.forEach(m => m.has_given_up = 0);
         releaseRoomMemory(roomId); 
-        roomGuesses[roomId] = []; // Wipe guesses if room resets
+        roomGuesses[roomId] = []; 
     }
 };
 
@@ -486,34 +485,34 @@ io.on('connection', (socket) => {
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         try {
             if (!tg_id) return;
-            currentUser = tg_id;
-            socket.currentUser = tg_id; 
+            currentUser = String(tg_id);
+            socket.currentUser = currentUser; 
             
-            if (profile_pic) userProfiles.set(tg_id, profile_pic);
+            if (profile_pic) userProfiles.set(currentUser, profile_pic);
 
-            if (disconnectTimeouts.has(tg_id)) {
-                clearTimeout(disconnectTimeouts.get(tg_id));
-                disconnectTimeouts.delete(tg_id);
+            if (disconnectTimeouts.has(currentUser)) {
+                clearTimeout(disconnectTimeouts.get(currentUser));
+                disconnectTimeouts.delete(currentUser);
             }
 
-            socket.join(`user_${tg_id}`);
+            socket.join(`user_${currentUser}`);
             
-            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tg_id]);
+            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [currentUser]);
             if (profile_pic) {
-                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, tg_id]);
+                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, currentUser]);
             } else {
-                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
+                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
             }
 
-            const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [tg_id]);
-            if (dbUser.length > 0 && !userCredits.has(tg_id)) {
-                userCredits.set(tg_id, parseFloat(dbUser[0].credits));
+            const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (dbUser.length > 0 && !userCredits.has(currentUser)) {
+                userCredits.set(currentUser, parseFloat(dbUser[0].credits));
             }
 
-            const userState = await getUserState(tg_id);
+            const userState = await getUserState(currentUser);
             
             for (const [id, room] of memoryRooms.entries()) {
-                if (room.members.some(m => m.user_id === tg_id)) {
+                if (room.members.some(m => String(m.user_id) === currentUser)) {
                     currentRoom = id;
                     socket.join(`room_${currentRoom}`);
                     syncRoom(currentRoom);
@@ -887,7 +886,6 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
-                // DO NOT erase guesses/canvas here so they remain on screen during REVEAL
                 syncRoom(currentRoom); 
             }
 
@@ -964,7 +962,7 @@ io.on('connection', (socket) => {
         room.word_to_draw = wordClean;
         room.base_hints = JSON.stringify(hints);
         room.status = 'DRAWING';
-        room.end_reason = null; // Clear end reason for new round
+        room.end_reason = null; 
         room.round_end_time = null; 
         
         room.members.forEach(m => {
@@ -974,8 +972,8 @@ io.on('connection', (socket) => {
             m.ink_extra = {}; 
         });
         
-        releaseRoomMemory(currentRoom); // Clears past drawings
-        io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); // Emit fresh canvas
+        releaseRoomMemory(currentRoom); 
+        io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
         
         syncRoom(currentRoom);
     });
@@ -999,14 +997,14 @@ io.on('connection', (socket) => {
                 room.current_drawer_id = nextDrawer;
                 room.word_to_draw = null;
                 room.break_end_time = null;
-                room.end_reason = null; // New round begins
+                room.end_reason = null; 
                 room.round_end_time = new Date(Date.now() + 30000); 
                 room.members.forEach(m => m.is_ready = 0);
                 room.turn_index = idx + 1; 
 
                 releaseRoomMemory(currentRoom); 
-                roomGuesses[currentRoom] = []; // Clear old guesses right as new turn starts
-                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); // Reset canvas
+                roomGuesses[currentRoom] = []; 
+                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
             }
 
             syncRoom(currentRoom);
@@ -1139,7 +1137,7 @@ io.on('connection', (socket) => {
         if (isInCall) return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
 
         const callId = `call_${Date.now()}_${Math.random()}`;
-        const callObj = { id: callId, caller: currentUser, receiver: receiver_id, status: 'RINGING', room_id: currentRoom };
+        const callObj = { id: callId, caller: currentUser, receiver: String(receiver_id), status: 'RINGING', room_id: currentRoom };
         activeCalls.set(callId, callObj);
         io.to(`room_${currentRoom}`).emit('call_update', callObj);
         syncRoom(currentRoom);
@@ -1147,7 +1145,7 @@ io.on('connection', (socket) => {
 
     socket.on('accept_call', async ({ call_id }) => {
         const call = activeCalls.get(call_id);
-        if (call && call.receiver === currentUser) {
+        if (call && String(call.receiver) === currentUser) {
             
             const currentCredits = userCredits.get(call.caller) || 0;
             if (currentCredits < 1) {
@@ -1183,8 +1181,14 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ⚡ WebRTC Target Routing ⚡
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-        socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
+        socket.to(`user_${String(target_id)}`).emit('webrtc_signal_receive', { 
+            call_id, 
+            sender_id: currentUser, 
+            target_id: String(target_id), 
+            signal 
+        });
     });
 
     socket.on('disconnect', () => {
