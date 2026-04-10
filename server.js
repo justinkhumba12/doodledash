@@ -88,8 +88,9 @@ for (let i = 1; i <= 5; i++) {
 function releaseRoomMemory(roomId) {
     roomDrawings[roomId] = [];
     roomRedoStacks[roomId] = [];
-    roomChats[roomId] = [];
     roomGuesses[roomId] = [];
+    // Note: roomChats[roomId] is explicitly NOT cleared here. 
+    // Messages persist across round status changes. They are capped at 30 messages in the chat handler.
 }
 
 // ---------------------------------------------------------
@@ -299,6 +300,7 @@ const deleteRoom = (roomId) => {
     if (!roomId) return;
     memoryRooms.delete(roomId);
     releaseRoomMemory(roomId); // Aggressively free RAM
+    delete roomChats[roomId];  // Completely wipe chats if the room is permanently deleted
 };
 
 const checkRoomReset = (roomId) => {
@@ -318,6 +320,7 @@ const checkRoomReset = (roomId) => {
             room.members = [];
             room.turn_index = 0;
             releaseRoomMemory(roomId); // Release unused memory instantly
+            roomChats[roomId] = []; // Empty room, safely reset chats.
         }
     } else if (room.members.length < 2) {
         room.status = 'WAITING';
@@ -326,7 +329,7 @@ const checkRoomReset = (roomId) => {
         room.break_end_time = null;
         room.round_end_time = null;
         room.members.forEach(m => m.has_given_up = 0);
-        releaseRoomMemory(roomId); // Empty RAM arrays to prevent bloat
+        releaseRoomMemory(roomId); // Empty RAM arrays for round data. Chats persist since someone is still there.
     }
 };
 
@@ -986,6 +989,9 @@ io.on('connection', (socket) => {
         
         // Final sanity check clears prior memory on fresh drawing phase
         releaseRoomMemory(currentRoom);
+        
+        // Immediately emit an empty drawing payload to force clear everyone's canvas right away
+        io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
         
         syncRoom(currentRoom);
     });
