@@ -385,27 +385,7 @@
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' },
-                        { urls: 'stun:stun.services.mozilla.com' },
-                        // Metered TURN server setup for strong IPv4/IPv6 NAT translation
-                        {
-                            urls: 'turn:openrelay.metered.ca:80',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        },
-                        {
-                            urls: 'turn:openrelay.metered.ca:443',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        },
-                        {
-                            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        }
+                        { urls: 'stun:stun1.l.google.com:19302' }
                     ] 
                 });
                 
@@ -415,7 +395,6 @@
                 
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
-                        // Batch ICE candidates every 500ms to prevent server spam
                         candidateBatchRef.current.push(e.candidate);
                         if (!batchTimerRef.current) {
                             batchTimerRef.current = setTimeout(() => {
@@ -506,7 +485,6 @@
                         }
                     }
                 } else if (signal.type === 'candidate') {
-                    // Fallback for single legacy candidates
                     const pc = peerConnectionRef.current;
                     if (pc && pc.remoteDescription && pc.remoteDescription.type) {
                         try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
@@ -521,14 +499,6 @@
 
                 if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
                     let stream = localStreamRef.current;
-                    if (!stream) {
-                        stream = await requestMic();
-                        if (stream) {
-                            setLocalStream(stream);
-                            localStreamRef.current = stream;
-                        }
-                    }
-
                     const targetId = call.receiver;
                     const pc = initPeerConnection(stream, targetId, call.id);
                     try {
@@ -549,21 +519,20 @@
                 if (stream) {
                     setLocalStream(stream);
                     localStreamRef.current = stream;
+                    socketRef.current.emit('initiate_call', { receiver_id: targetId });
                 }
-                socketRef.current.emit('initiate_call', { receiver_id: targetId });
             };
 
             const acceptCall = async (callObj) => {
                 if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-                const stream = await requestMic();
                 if (!callObj) return;
                 
+                const stream = await requestMic();
                 if (stream) {
                     setLocalStream(stream);
                     localStreamRef.current = stream;
+                    socketRef.current.emit('accept_call', { call_id: callObj.id });
                 }
-                
-                socketRef.current.emit('accept_call', { call_id: callObj.id });
             };
 
             useEffect(() => {
@@ -1433,6 +1402,9 @@
         const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
             const { room, members, activeCalls } = roomData;
             const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
+            
+            // Generate sorted queue by joined_at for Drawing Queue
+            const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
             return (
                 <div className="row">
@@ -1485,8 +1457,8 @@
                             ) : null}
 
                             <div className="mt-4 w-100">
-                                <h6 className="fw-bold text-secondary mb-3">Player List</h6>
-                                {members.map(m => {
+                                <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
+                                {sortedMembers.map(m => {
                                     const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
                                     
                                     return (
@@ -1578,7 +1550,7 @@
 
             // Timer for Auto Ready
             useEffect(() => {
-                if ((room.status === 'WAITING' || room.status === 'BREAK') && room.break_end_time) {
+                if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
                     const offset = Date.now() - new Date(roomData.server_time).getTime();
                     const targetTime = new Date(room.break_end_time).getTime() + offset;
                     
@@ -1659,8 +1631,11 @@
                 });
             }, []);
 
-            // Initial component mount redraw
-            useEffect(() => { redraw(); }, [redraw]);
+            // Initial component mount redraw and request sync
+            useEffect(() => { 
+                redraw(); 
+                socket.emit('request_initial_drawings');
+            }, [redraw, socket]);
 
             // Sync Initial Drawings safely and natively
             useEffect(() => {
@@ -1828,9 +1803,22 @@
                             <div className="wb-overlay">
                                 {room.status !== 'WAITING' && (
                                     <>
-                                        <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw || 'Skipped'}</span></h6>
-                                        {room.last_winner_id ? (
-                                            <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2">
+                                        {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
+                                            <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h6>
+                                        )}
+                                        
+                                        {room.end_reason === 'drawer_gave_up' ? (
+                                            <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
+                                        ) : room.end_reason === 'all_gave_up' ? (
+                                            <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
+                                        ) : room.end_reason === 'timeout_predraw' ? (
+                                            <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
+                                        ) : room.end_reason === 'drawer_skipped' ? (
+                                            <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
+                                        ) : room.end_reason === 'drawer_disconnected' ? (
+                                            <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
+                                        ) : room.last_winner_id ? (
+                                            <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm">
                                                 {roomData.profiles[room.last_winner_id] ? (
                                                     <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}}/>
                                                 ) : (
@@ -1838,7 +1826,9 @@
                                                 )}
                                                 <span className="fs-5"><b>{toHex(room.last_winner_id)}</b> guessed it!</span>
                                             </div>
-                                        ) : <div className="alert alert-warning mt-2 fw-bold">Nobody guessed it!</div>}
+                                        ) : (
+                                            <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
+                                        )}
                                     </>
                                 )}
                                 
