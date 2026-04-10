@@ -150,6 +150,7 @@
             
             const [activeCall, setActiveCall] = useState(null);
             const [localStream, setLocalStream] = useState(null);
+            const [callConnectionState, setCallConnectionState] = useState('Ready');
             
             const [isMicMuted, setIsMicMuted] = useState(false);
             const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
@@ -310,6 +311,8 @@
                     confirmSound.play().catch(()=>{});
                 }
 
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
+
                 ['guessSound', 'callSound', 'bgmSound'].forEach(id => {
                     const el = document.getElementById(id);
                     if(el) {
@@ -381,14 +384,24 @@
                 }
             };
 
+            // ⚡ Expanded STUN + Free Public TURN for Symmetric NAT ⚡
             const initPeerConnection = (stream, targetId, callId) => {
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
+                        { urls: 'stun:stun.cloudflare.com:3478' },
+                        { urls: 'stun:stun.twilio.com:3478' },
+                        { 
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        { 
+                            urls: 'turn:openrelay.metered.ca:443',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
                     ] 
                 });
                 
@@ -396,6 +409,7 @@
                     stream.getTracks().forEach(track => pc.addTrack(track, stream));
                 }
                 
+                // Aggressive ICE candidate batching & flushing
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
                         candidateBatchRef.current.push(e.candidate);
@@ -412,6 +426,20 @@
                                 batchTimerRef.current = null;
                             }, 500);
                         }
+                    } else {
+                        // End of candidates, flush immediately
+                        if (candidateBatchRef.current.length > 0) {
+                            if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+                            if (socketRef.current) {
+                                socketRef.current.emit('webrtc_signal', { 
+                                    call_id: callId, 
+                                    target_id: targetId, 
+                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
+                                });
+                            }
+                            candidateBatchRef.current = [];
+                            batchTimerRef.current = null;
+                        }
                     }
                 };
 
@@ -424,10 +452,11 @@
                 };
 
                 pc.oniceconnectionstatechange = () => {
+                    setCallConnectionState(pc.iceConnectionState);
                     if (pc.iceConnectionState === 'failed') {
-                        setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked P2P routing (Symmetric NAT detected). Call ended.' });
+                        setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked routing. Ensure firewall permits TURN/WebRTC.' });
                         if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
-                    } else if (pc.iceConnectionState === 'closed') {
+                    } else if (pc.iceConnectionState === 'closed' || pc.iceConnectionState === 'disconnected') {
                         if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
                     }
                 };
@@ -441,6 +470,7 @@
                 peerConnectionRef.current = null;
                 candidateQueue.current = [];
                 candidateBatchRef.current = [];
+                setCallConnectionState('Ready');
                 if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
                 batchTimerRef.current = null;
                 
@@ -491,13 +521,6 @@
                         } else {
                             candidateQueue.current.push(new RTCIceCandidate(c));
                         }
-                    }
-                } else if (signal.type === 'candidate') {
-                    const pc = peerConnectionRef.current;
-                    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                        try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (e) {}
-                    } else {
-                        candidateQueue.current.push(new RTCIceCandidate(signal.candidate));
                     }
                 }
             };
@@ -755,6 +778,7 @@
                                     socket={socketRef.current}
                                     setProfileModal={setProfileModal}
                                     activeCall={activeCall}
+                                    callConnectionState={callConnectionState}
                                     isMicMuted={isMicMuted}
                                     setIsMicMuted={setIsMicMuted}
                                     isSpeakerMuted={isSpeakerMuted}
@@ -1383,7 +1407,7 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, callConnectionState, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
             const { room, members, activeCalls } = roomData;
             const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
             
@@ -1419,10 +1443,15 @@
                         
                         {(activeCall && activeCall.status === 'ACTIVE') ? (
                             <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
-                                    <div className="d-flex align-items-center justify-content-center w-100 px-2">
+                                    <div className="d-flex flex-column align-items-center justify-content-center w-100 px-2">
                                         <div className="d-flex align-items-center gap-2">
                                             <i className="fas fa-phone-volume heartbeat text-success"></i>
                                             <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
+                                        </div>
+                                        <div className="mt-1">
+                                            <span className={`badge ${callConnectionState === 'connected' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                                                Status: {callConnectionState}
+                                            </span>
                                         </div>
                                     </div>
                                     
