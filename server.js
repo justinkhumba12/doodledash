@@ -60,7 +60,7 @@ const roomGuesses = {};
 const roomDrawings = {};
 const roomRedoStacks = {};
 const userProfiles = new Map();
-const userCredits = new Map(); // RAM-based cache for instant credit checks
+const userCredits = new Map(); 
 const activeGuessPayments = new Set(); 
 
 let nextRoomId = 1;
@@ -72,7 +72,7 @@ let drawingCounter = 1;
 for (let i = 1; i <= 5; i++) {
     memoryRooms.set(i, {
         id: i, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
-        round_end_time: null, break_end_time: null, last_winner_id: null,
+        round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null,
         turn_index: 0, modified_at: new Date(), is_private: 0,
         password: null, max_members: 4, base_hints: '[]', creator_id: null, expire_at: null,
         members: [] 
@@ -88,9 +88,7 @@ for (let i = 1; i <= 5; i++) {
 function releaseRoomMemory(roomId) {
     roomDrawings[roomId] = [];
     roomRedoStacks[roomId] = [];
-    roomGuesses[roomId] = [];
-    // Note: roomChats[roomId] is explicitly NOT cleared here. 
-    // Messages persist across round status changes. They are capped at 30 messages in the chat handler.
+    // Guesses and Chats explicitly NOT cleared here so they persist for the reveal screen
 }
 
 // ---------------------------------------------------------
@@ -180,7 +178,6 @@ app.post('/webhook', async (req, res) => {
             const addedCredits = payload.amount;
             const buyerId = payload.tgId;
             
-            // Update RAM map immediately if it exists
             if (userCredits.has(buyerId)) {
                 userCredits.set(buyerId, userCredits.get(buyerId) + addedCredits);
             }
@@ -265,7 +262,6 @@ async function getUserState(tg_id) {
     if (rows.length === 0) return null;
     let u = rows[0];
     
-    // Serve credits from RAM cache if available
     if (userCredits.has(tg_id)) {
         u.credits = userCredits.get(tg_id);
     }
@@ -299,8 +295,9 @@ const broadcastRooms = () => {
 const deleteRoom = (roomId) => {
     if (!roomId) return;
     memoryRooms.delete(roomId);
-    releaseRoomMemory(roomId); // Aggressively free RAM
-    delete roomChats[roomId];  // Completely wipe chats if the room is permanently deleted
+    releaseRoomMemory(roomId); 
+    roomGuesses[roomId] = [];
+    delete roomChats[roomId];
 };
 
 const checkRoomReset = (roomId) => {
@@ -317,10 +314,12 @@ const checkRoomReset = (roomId) => {
             room.word_to_draw = null;
             room.break_end_time = null;
             room.round_end_time = null;
+            room.end_reason = null;
             room.members = [];
             room.turn_index = 0;
-            releaseRoomMemory(roomId); // Release unused memory instantly
-            roomChats[roomId] = []; // Empty room, safely reset chats.
+            releaseRoomMemory(roomId); 
+            roomGuesses[roomId] = []; // Wipe guesses if room is empty
+            roomChats[roomId] = []; 
         }
     } else if (room.members.length < 2) {
         room.status = 'WAITING';
@@ -328,8 +327,10 @@ const checkRoomReset = (roomId) => {
         room.word_to_draw = null;
         room.break_end_time = null;
         room.round_end_time = null;
+        room.end_reason = null;
         room.members.forEach(m => m.has_given_up = 0);
-        releaseRoomMemory(roomId); // Empty RAM arrays for round data. Chats persist since someone is still there.
+        releaseRoomMemory(roomId); 
+        roomGuesses[roomId] = []; // Wipe guesses if room resets
     }
 };
 
@@ -433,9 +434,6 @@ io.on('connection', (socket) => {
             socket.join(`room_${roomIdNum}`);
             socket.leave('lobby'); 
             socket.emit('join_success', roomIdNum);
-            
-            // Send initial drawings exclusively on join - Now mapping native lines natively without JSON
-            socket.emit('sync_initial_drawings', (roomDrawings[roomIdNum] || []).map(d => ({ lines: d.lines, color: d.color })));
             return syncRoom(roomIdNum);
         }
 
@@ -448,7 +446,6 @@ io.on('connection', (socket) => {
                 const currentCredits = userCredits.get(userId) || 0;
                 if (currentCredits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
                 
-                // Deduct instantly from RAM Cache, then query DB asynchronously
                 userCredits.set(userId, currentCredits - 1);
                 db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]).catch(console.error);
             }
@@ -483,9 +480,6 @@ io.on('connection', (socket) => {
         socket.leave('lobby');
         socket.emit('join_success', currentRoom);
         
-        // Push initial drawing payload for canvas setup natively flattened
-        socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => ({ lines: d.lines, color: d.color })));
-        
         if (oldRoom) syncRoom(oldRoom);
         syncRoom(currentRoom);
         broadcastRooms();
@@ -516,7 +510,6 @@ io.on('connection', (socket) => {
                 await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tg_id]);
             }
 
-            // Sync Database Credits to RAM Map 
             const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [tg_id]);
             if (dbUser.length > 0 && !userCredits.has(tg_id)) {
                 userCredits.set(tg_id, parseFloat(dbUser[0].credits));
@@ -529,8 +522,6 @@ io.on('connection', (socket) => {
                     currentRoom = id;
                     socket.join(`room_${currentRoom}`);
                     syncRoom(currentRoom);
-                    // Send drawings again natively
-                    socket.emit('sync_initial_drawings', (roomDrawings[currentRoom] || []).map(d => ({ lines: d.lines, color: d.color })));
                     break;
                 }
             }
@@ -549,6 +540,12 @@ io.on('connection', (socket) => {
 
             socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom });
         } catch (err) {}
+    });
+    
+    socket.on('request_initial_drawings', () => {
+        if (currentRoom && roomDrawings[currentRoom]) {
+            socket.emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
+        }
     });
 
     socket.on('active_event', () => {
@@ -606,7 +603,6 @@ io.on('connection', (socket) => {
             }
 
             if (success) {
-                // Instantly sync reward into RAM
                 userCredits.set(currentUser, (userCredits.get(currentUser) || 0) + rewardAmount);
                 
                 socket.emit('reward_success', msg);
@@ -643,7 +639,6 @@ io.on('connection', (socket) => {
                 const currentCredits = userCredits.get(currentUser) || 0;
                 if (currentCredits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
                 
-                // Deduct via RAM instantly
                 userCredits.set(currentUser, currentCredits - cost);
                 db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
             }
@@ -651,7 +646,7 @@ io.on('connection', (socket) => {
             const newRoomId = nextRoomId++;
             memoryRooms.set(newRoomId, {
                 id: newRoomId, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
-                round_end_time: null, break_end_time: null, last_winner_id: null, turn_index: 0,
+                round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null, turn_index: 0,
                 modified_at: new Date(), is_private: is_private ? 1 : 0, password: is_private ? password : null,
                 max_members: limit, base_hints: '[]', creator_id: is_private ? currentUser : null, expire_at: expDate,
                 members: []
@@ -693,6 +688,7 @@ io.on('connection', (socket) => {
         if (room) {
             if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                 room.status = 'BREAK';
+                room.end_reason = 'drawer_disconnected';
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.word_to_draw = null;
                 room.round_end_time = null;
@@ -742,7 +738,6 @@ io.on('connection', (socket) => {
             const room = memoryRooms.get(currentRoom);
             if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
-            // Instant RAM cache update
             userCredits.set(currentUser, currentCredits - cost);
             db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
             
@@ -794,7 +789,6 @@ io.on('connection', (socket) => {
         const newChat = { id: chatCounter++, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
         roomChats[currentRoom].push(newChat);
         
-        // Only delete 15 messages when we hit a threshold of 30
         if (roomChats[currentRoom].length >= 30) {
             roomChats[currentRoom].splice(0, 15);
         }
@@ -812,15 +806,13 @@ io.on('connection', (socket) => {
         if (isDrawer) {
             if (room.status === 'PRE_DRAW') {
                 room.status = 'BREAK';
-                room.break_end_time = new Date(Date.now() + 5000); 
-                room.round_end_time = null;
+                room.end_reason = 'drawer_skipped';
             } else {
-                room.status = 'REVEAL';
-                room.break_end_time = new Date(Date.now() + 5000); 
-                room.round_end_time = null;
-                room.last_winner_id = null;
-                releaseRoomMemory(currentRoom); // GC clear arrays
+                room.status = 'REVEAL'; // Show word, don't clear canvas yet
+                room.end_reason = 'drawer_gave_up';
             }
+            room.break_end_time = new Date(Date.now() + 5000); 
+            room.round_end_time = null;
             if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
             roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() });
         } else {
@@ -836,11 +828,11 @@ io.on('connection', (socket) => {
 
             if (allGivenUp) {
                 room.status = 'REVEAL';
+                room.end_reason = 'all_gave_up';
                 room.break_end_time = new Date(Date.now() + 5000);
                 room.round_end_time = null;
                 room.last_winner_id = null;
                 roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'All guessers gave up.', created_at: new Date() });
-                releaseRoomMemory(currentRoom); // GC clear arrays
             }
         }
         syncRoom(currentRoom);
@@ -873,7 +865,6 @@ io.on('connection', (socket) => {
                         return socket.emit('create_error', 'Not enough credits to unlock extra guesses! (Cost: 1 Credit)');
                     }
                     
-                    // Fast RAM deduction
                     userCredits.set(currentUser, currentCredits - 1);
                     db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
                     
@@ -897,10 +888,11 @@ io.on('connection', (socket) => {
 
             if (isCorrect) {
                 room.status = 'REVEAL';
+                room.end_reason = 'guessed';
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
-                releaseRoomMemory(currentRoom); // GC memory clear
+                // DO NOT erase guesses/canvas here so they remain on screen during REVEAL
                 syncRoom(currentRoom); 
             }
 
@@ -925,7 +917,6 @@ io.on('connection', (socket) => {
                 const currentCredits = userCredits.get(currentUser) || 0;
                 if (currentCredits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
-                // Fast RAM deduction
                 userCredits.set(currentUser, currentCredits - 1);
                 db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
                 
@@ -978,6 +969,7 @@ io.on('connection', (socket) => {
         room.word_to_draw = wordClean;
         room.base_hints = JSON.stringify(hints);
         room.status = 'DRAWING';
+        room.end_reason = null; // Clear end reason for new round
         room.round_end_time = null; 
         
         room.members.forEach(m => {
@@ -987,11 +979,8 @@ io.on('connection', (socket) => {
             m.ink_extra = {}; 
         });
         
-        // Final sanity check clears prior memory on fresh drawing phase
-        releaseRoomMemory(currentRoom);
-        
-        // Immediately emit an empty drawing payload to force clear everyone's canvas right away
-        io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
+        releaseRoomMemory(currentRoom); // Clears past drawings
+        io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); // Emit fresh canvas
         
         syncRoom(currentRoom);
     });
@@ -1015,11 +1004,14 @@ io.on('connection', (socket) => {
                 room.current_drawer_id = nextDrawer;
                 room.word_to_draw = null;
                 room.break_end_time = null;
+                room.end_reason = null; // New round begins
                 room.round_end_time = new Date(Date.now() + 30000); 
                 room.members.forEach(m => m.is_ready = 0);
                 room.turn_index = idx + 1; 
 
-                releaseRoomMemory(currentRoom); // Clears any lingering data
+                releaseRoomMemory(currentRoom); 
+                roomGuesses[currentRoom] = []; // Clear old guesses right as new turn starts
+                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); // Reset canvas
             }
 
             syncRoom(currentRoom);
@@ -1035,7 +1027,6 @@ io.on('connection', (socket) => {
         const activeColor = 'black'; 
         
         let strokeLength = 0;
-        // Process flat coordinate array [x0, y0, x1, y1, x2, y2...] natively
         if (lines && lines.length > 0) {
             for (let i = 0; i < lines.length; i += 4) {
                 const x0 = lines[i], y0 = lines[i+1], x1 = lines[i+2], y1 = lines[i+3];
@@ -1051,7 +1042,6 @@ io.on('connection', (socket) => {
         roomRedoStacks[currentRoom] = []; 
         if (!roomDrawings[currentRoom]) roomDrawings[currentRoom] = [];
         
-        // Saving the raw flat array immediately avoids JSON overhead
         roomDrawings[currentRoom].push({ 
             id: drawingCounter++, 
             lines: lines,
@@ -1085,7 +1075,6 @@ io.on('connection', (socket) => {
                     return socket.emit('create_error', `Not enough credits to buy ink.`);
                 }
 
-                // Fast RAM deduction
                 userCredits.set(currentUser, currentCredits - cost);
                 db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
 
@@ -1119,7 +1108,6 @@ io.on('connection', (socket) => {
                 }
             }
             
-            // Re-sync full drawing array to clients mapped without JSON
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
             syncRoom(currentRoom);
         }
@@ -1140,7 +1128,6 @@ io.on('connection', (socket) => {
                 }
             }
             
-            // Re-sync full native drawing array
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
             syncRoom(currentRoom);
         }
@@ -1167,7 +1154,6 @@ io.on('connection', (socket) => {
         const call = activeCalls.get(call_id);
         if (call && call.receiver === currentUser) {
             
-            // Prepaid Logic: Deduct 1 credit upfront
             const currentCredits = userCredits.get(call.caller) || 0;
             if (currentCredits < 1) {
                 activeCalls.delete(call_id);
@@ -1181,7 +1167,7 @@ io.on('connection', (socket) => {
 
             call.status = 'ACTIVE';
             call.startTime = Date.now();
-            call.nextChargeTime = Date.now() + 180000; // Prepays for the next 3 minutes
+            call.nextChargeTime = Date.now() + 180000; 
             activeCalls.set(call_id, call);
             
             io.to(`room_${call.room_id}`).emit('call_update', call);
@@ -1202,7 +1188,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Server-side support for batch arrays of WebRTC candidates
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
         socket.to(`user_${target_id}`).emit('webrtc_signal_receive', { call_id, sender_id: currentUser, target_id, signal });
     });
@@ -1216,6 +1201,7 @@ io.on('connection', (socket) => {
                     if (room) {
                         if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                             room.status = 'BREAK';
+                            room.end_reason = 'drawer_disconnected';
                             room.break_end_time = new Date(Date.now() + 5000); 
                             room.word_to_draw = null;
                             room.round_end_time = null;
@@ -1238,7 +1224,7 @@ io.on('connection', (socket) => {
 });
 
 // ---------------------------------------------------------
-// RAM-BASED GAME LOOP ENGINE (OPTIMIZED)
+// RAM-BASED GAME LOOP ENGINE
 // ---------------------------------------------------------
 setInterval(() => {
     try {
@@ -1249,12 +1235,10 @@ setInterval(() => {
             if (call.status === 'ACTIVE' && now >= call.nextChargeTime) {
                 const currentCredits = userCredits.get(call.caller) || 0;
                 if (currentCredits < 1) {
-                    // Insufficient funds for next 3-min block
                     activeCalls.delete(callId);
                     io.to(`room_${call.room_id}`).emit('call_ended', callId);
                     syncRoom(call.room_id);
                 } else {
-                    // Renewal Process
                     userCredits.set(call.caller, currentCredits - 1);
                     db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
                     call.nextChargeTime = now + 180000;
@@ -1270,10 +1254,10 @@ setInterval(() => {
             
             if (room.status === 'PRE_DRAW' && room.round_end_time && now >= room.round_end_time.getTime()) {
                 room.status = 'BREAK';
+                room.end_reason = 'timeout_predraw';
                 room.break_end_time = new Date(now + 5000); 
                 room.word_to_draw = null;
                 room.round_end_time = null;
-                releaseRoomMemory(roomId); // GC Release
                 
                 if (!roomChats[roomId]) roomChats[roomId] = [];
                 roomChats[roomId].push({ id: chatCounter++, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() });
@@ -1312,10 +1296,10 @@ setInterval(() => {
                     if (room) {
                         if (room.current_drawer_id === s.currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                             room.status = 'BREAK';
+                            room.end_reason = 'drawer_disconnected';
                             room.break_end_time = new Date(now + 5000); 
                             room.word_to_draw = null;
                             room.round_end_time = null;
-                            releaseRoomMemory(s.currentRoom);
                         }
 
                         room.members = room.members.filter(m => m.user_id !== s.currentUser);
