@@ -442,13 +442,8 @@ io.on('connection', (socket) => {
                 if (room.creator_id !== userId && room.password !== password) {
                     return socket.emit('join_error', 'Incorrect password.');
                 }
-            } else if (roomIdNum !== 1 && roomIdNum !== 2) {
-                const currentCredits = userCredits.get(userId) || 0;
-                if (currentCredits < 1) return socket.emit('join_error', 'Not enough credits. Public rooms cost 1 credit.');
-                
-                userCredits.set(userId, currentCredits - 1);
-                db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [userId]).catch(console.error);
             }
+            // Public rooms are free, no credits deducted.
         }
 
         const oldRoom = currentRoom;
@@ -618,7 +613,7 @@ io.on('connection', (socket) => {
         try {
             if (!currentUser) return;
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
-            let cost = (auto_join && !is_private) ? 1 : 0;
+            let cost = 0; // Public room auto-join is free
             let expDate = null;
             
             if (is_private) {
