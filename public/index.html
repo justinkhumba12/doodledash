@@ -136,6 +136,257 @@
             </div>
         );
 
+        // --- Custom React Hook for WebRTC Logic ---
+        const useWebRTC = (socket, tgIdRef, setModal) => {
+            const [activeCall, setActiveCall] = useState(null);
+            const [localStream, setLocalStream] = useState(null);
+            const [callConnectionState, setCallConnectionState] = useState('Ready');
+            const [isMicMuted, setIsMicMuted] = useState(false);
+            const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+
+            const peerConnectionRef = useRef(null);
+            const remoteAudioRef = useRef(null);
+            const localStreamRef = useRef(null);
+            const candidateQueue = useRef([]);
+            const candidateBatchRef = useRef([]);
+            const batchTimerRef = useRef(null);
+
+            const requestMic = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { 
+                            echoCancellation: { ideal: true }, 
+                            noiseSuppression: { ideal: true }, 
+                            autoGainControl: { ideal: true } 
+                        } 
+                    });
+                    return stream;
+                } catch (e) {
+                    alert("Microphone permission required for calls. Please enable it in your browser/app settings.");
+                    return null; 
+                }
+            };
+
+            const initPeerConnection = useCallback((stream, targetId, callId) => {
+                const pc = new RTCPeerConnection({ 
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun.cloudflare.com:3478' },
+                        { urls: 'stun:stun.twilio.com:3478' },
+                        { 
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        { 
+                            urls: 'turn:openrelay.metered.ca:443',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
+                    ] 
+                });
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                }
+                
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        candidateBatchRef.current.push(e.candidate);
+                        if (!batchTimerRef.current) {
+                            batchTimerRef.current = setTimeout(() => {
+                                if (socket) {
+                                    socket.emit('webrtc_signal', { 
+                                        call_id: callId, 
+                                        target_id: targetId, 
+                                        signal: { type: 'candidates', candidates: candidateBatchRef.current } 
+                                    });
+                                }
+                                candidateBatchRef.current = [];
+                                batchTimerRef.current = null;
+                            }, 500);
+                        }
+                    } else {
+                        if (candidateBatchRef.current.length > 0) {
+                            if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+                            if (socket) {
+                                socket.emit('webrtc_signal', { 
+                                    call_id: callId, 
+                                    target_id: targetId, 
+                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
+                                });
+                            }
+                            candidateBatchRef.current = [];
+                            batchTimerRef.current = null;
+                        }
+                    }
+                };
+
+                pc.ontrack = (e) => {
+                    if (remoteAudioRef.current) {
+                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
+                        remoteAudioRef.current.srcObject = inboundStream;
+                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
+                    }
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    setCallConnectionState(pc.iceConnectionState);
+                    if (pc.iceConnectionState === 'failed') {
+                        setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked routing. Ensure firewall permits TURN/WebRTC.' });
+                        if (socket) socket.emit('end_call', { call_id: callId });
+                    } else if (pc.iceConnectionState === 'closed' || pc.iceConnectionState === 'disconnected') {
+                        if (socket) socket.emit('end_call', { call_id: callId });
+                    }
+                };
+
+                peerConnectionRef.current = pc;
+                return pc;
+            }, [socket, setModal]);
+
+            const cleanupCall = useCallback(() => {
+                if (peerConnectionRef.current) peerConnectionRef.current.close();
+                peerConnectionRef.current = null;
+                candidateQueue.current = [];
+                candidateBatchRef.current = [];
+                setCallConnectionState('Ready');
+                if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+                batchTimerRef.current = null;
+                
+                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+                if (localStreamRef.current) {
+                    localStreamRef.current.getTracks().forEach(track => track.stop());
+                    setLocalStream(null);
+                    localStreamRef.current = null;
+                }
+                setActiveCall(null);
+                setIsMicMuted(false);
+                setIsSpeakerMuted(false);
+            }, []);
+
+            useEffect(() => {
+                if (!socket) return;
+
+                const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
+                    if (String(target_id) !== String(tgIdRef.current)) return;
+                    
+                    if (signal.type === 'offer') {
+                        let stream = localStreamRef.current;
+                        if (!stream) {
+                             stream = await requestMic();
+                             if (stream) { setLocalStream(stream); localStreamRef.current = stream; }
+                        }
+                        
+                        const pc = initPeerConnection(stream, sender_id, call_id);
+                        
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                        
+                        while (candidateQueue.current.length > 0) {
+                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch(e) {}
+                        }
+                    } else if (signal.type === 'answer') {
+                        const pc = peerConnectionRef.current;
+                        if (!pc) return;
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                        
+                        while (candidateQueue.current.length > 0) {
+                            try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
+                        }
+                    } else if (signal.type === 'candidates') {
+                        const pc = peerConnectionRef.current;
+                        for (const c of signal.candidates) {
+                            if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+                            } else {
+                                candidateQueue.current.push(new RTCIceCandidate(c));
+                            }
+                        }
+                    }
+                };
+
+                const handleCallUpdate = async (call) => {
+                    setActiveCall(call);
+
+                    if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
+                        let stream = localStreamRef.current;
+                        const targetId = call.receiver;
+                        const pc = initPeerConnection(stream, targetId, call.id);
+                        try {
+                            const offer = await pc.createOffer({ offerToReceiveAudio: true });
+                            await pc.setLocalDescription(offer);
+                            socket.emit('webrtc_signal', { 
+                                call_id: call.id, 
+                                target_id: targetId, 
+                                signal: { type: 'offer', offer } 
+                            });
+                        } catch(e) {}
+                    }
+                };
+
+                socket.on('webrtc_signal_receive', handleReceiveSignal);
+                socket.on('call_update', handleCallUpdate);
+                socket.on('call_ended', cleanupCall);
+
+                return () => {
+                    socket.off('webrtc_signal_receive', handleReceiveSignal);
+                    socket.off('call_update', handleCallUpdate);
+                    socket.off('call_ended', cleanupCall);
+                };
+            }, [socket, tgIdRef, cleanupCall, initPeerConnection]);
+
+            useEffect(() => {
+                if (localStreamRef.current) {
+                    localStreamRef.current.getAudioTracks().forEach(track => {
+                        track.enabled = !isMicMuted;
+                    });
+                }
+            }, [isMicMuted, localStream]);
+
+            const initiateCall = async (targetId) => {
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
+                const stream = await requestMic();
+                if (stream) {
+                    setLocalStream(stream);
+                    localStreamRef.current = stream;
+                    if (socket) socket.emit('initiate_call', { receiver_id: targetId });
+                }
+            };
+
+            const acceptCall = async (callObj) => {
+                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
+                if (!callObj) return;
+                
+                const stream = await requestMic();
+                if (stream) {
+                    setLocalStream(stream);
+                    localStreamRef.current = stream;
+                    if (socket) socket.emit('accept_call', { call_id: callObj.id });
+                }
+            };
+
+            const endCall = (callId) => {
+                if (socket) socket.emit('end_call', { call_id: callId });
+            };
+
+            return {
+                activeCall,
+                localStream,
+                callConnectionState,
+                isMicMuted, setIsMicMuted,
+                isSpeakerMuted, setIsSpeakerMuted,
+                remoteAudioRef,
+                initiateCall,
+                acceptCall,
+                endCall,
+                cleanupCall
+            };
+        };
+
+        // --- Main App Component ---
         const App = () => {
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
@@ -148,12 +399,7 @@
             const [profileModal, setProfileModal] = useState(null);
             const [openAcc, setOpenAcc] = useState('volumes');
             
-            const [activeCall, setActiveCall] = useState(null);
-            const [localStream, setLocalStream] = useState(null);
-            const [callConnectionState, setCallConnectionState] = useState('Ready');
-            
-            const [isMicMuted, setIsMicMuted] = useState(false);
-            const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
+            const [socket, setSocket] = useState(null);
             
             const [unreadChat, setUnreadChat] = useState(false);
             const [unreadGuess, setUnreadGuess] = useState(false);
@@ -169,20 +415,19 @@
 
             const [policyAccepted, setPolicyAccepted] = useState(false);
 
-            const peerConnectionRef = useRef(null);
-            const remoteAudioRef = useRef(null);
-            const socketRef = useRef(null);
-            const candidateQueue = useRef([]);
-            const localStreamRef = useRef(null);
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
             const prevChatsCount = useRef(0);
             const prevGuessesCount = useRef(0);
             const lastKnownRoomRef = useRef(null);
-            
-            // WebRTC candidate batching refs
-            const candidateBatchRef = useRef([]);
-            const batchTimerRef = useRef(null);
+
+            // Utilizing the custom WebRTC Hook
+            const {
+                activeCall, localStream, callConnectionState,
+                isMicMuted, setIsMicMuted,
+                isSpeakerMuted, setIsSpeakerMuted,
+                remoteAudioRef, initiateCall, acceptCall, endCall, cleanupCall
+            } = useWebRTC(socket, tgIdRef, setModal);
 
             if (!tgId) {
                 return (
@@ -368,239 +613,40 @@
                 return () => { if (vibInterval) clearInterval(vibInterval); };
             }, [activeCall, tgId, policyAccepted]);
 
-            const requestMic = async () => {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: { 
-                            echoCancellation: { ideal: true }, 
-                            noiseSuppression: { ideal: true }, 
-                            autoGainControl: { ideal: true } 
-                        } 
-                    });
-                    return stream;
-                } catch (e) {
-                    alert("Microphone permission required for calls. Please enable it in your browser/app settings.");
-                    return null; 
-                }
-            };
-
-            // ⚡ Expanded STUN + Free Public TURN for Symmetric NAT ⚡
-            const initPeerConnection = (stream, targetId, callId) => {
-                const pc = new RTCPeerConnection({ 
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.cloudflare.com:3478' },
-                        { urls: 'stun:stun.twilio.com:3478' },
-                        { 
-                            urls: 'turn:openrelay.metered.ca:80',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        },
-                        { 
-                            urls: 'turn:openrelay.metered.ca:443',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        }
-                    ] 
-                });
-                
-                if (stream) {
-                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
-                }
-                
-                // Aggressive ICE candidate batching & flushing
-                pc.onicecandidate = (e) => {
-                    if (e.candidate) {
-                        candidateBatchRef.current.push(e.candidate);
-                        if (!batchTimerRef.current) {
-                            batchTimerRef.current = setTimeout(() => {
-                                if (socketRef.current) {
-                                    socketRef.current.emit('webrtc_signal', { 
-                                        call_id: callId, 
-                                        target_id: targetId, 
-                                        signal: { type: 'candidates', candidates: candidateBatchRef.current } 
-                                    });
-                                }
-                                candidateBatchRef.current = [];
-                                batchTimerRef.current = null;
-                            }, 500);
-                        }
-                    } else {
-                        // End of candidates, flush immediately
-                        if (candidateBatchRef.current.length > 0) {
-                            if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
-                            if (socketRef.current) {
-                                socketRef.current.emit('webrtc_signal', { 
-                                    call_id: callId, 
-                                    target_id: targetId, 
-                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
-                                });
-                            }
-                            candidateBatchRef.current = [];
-                            batchTimerRef.current = null;
-                        }
-                    }
-                };
-
-                pc.ontrack = (e) => {
-                    if (remoteAudioRef.current) {
-                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        remoteAudioRef.current.srcObject = inboundStream;
-                        remoteAudioRef.current.play().catch(err => console.error("Audio playback error:", err));
-                    }
-                };
-
-                pc.oniceconnectionstatechange = () => {
-                    setCallConnectionState(pc.iceConnectionState);
-                    if (pc.iceConnectionState === 'failed') {
-                        setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked routing. Ensure firewall permits TURN/WebRTC.' });
-                        if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
-                    } else if (pc.iceConnectionState === 'closed' || pc.iceConnectionState === 'disconnected') {
-                        if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
-                    }
-                };
-
-                peerConnectionRef.current = pc;
-                return pc;
-            };
-
-            const cleanupCall = () => {
-                if (peerConnectionRef.current) peerConnectionRef.current.close();
-                peerConnectionRef.current = null;
-                candidateQueue.current = [];
-                candidateBatchRef.current = [];
-                setCallConnectionState('Ready');
-                if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
-                batchTimerRef.current = null;
-                
-                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-                if (localStreamRef.current) {
-                    localStreamRef.current.getTracks().forEach(track => track.stop());
-                    setLocalStream(null);
-                    localStreamRef.current = null;
-                }
-                setActiveCall(null);
-                setIsMicMuted(false);
-                setIsSpeakerMuted(false);
-            };
-
-            const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
-                if (String(target_id) !== String(tgIdRef.current)) return;
-                
-                if (signal.type === 'offer') {
-                    let stream = localStreamRef.current;
-                    if (!stream) {
-                         stream = await requestMic();
-                         if (stream) { setLocalStream(stream); localStreamRef.current = stream; }
-                    }
-                    
-                    const pc = initPeerConnection(stream, sender_id, call_id);
-                    
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    socketRef.current.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
-                    
-                    while (candidateQueue.current.length > 0) {
-                        try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch(e) {}
-                    }
-                } else if (signal.type === 'answer') {
-                    const pc = peerConnectionRef.current;
-                    if (!pc) return;
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-                    
-                    while (candidateQueue.current.length > 0) {
-                        try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
-                    }
-                } else if (signal.type === 'candidates') {
-                    const pc = peerConnectionRef.current;
-                    for (const c of signal.candidates) {
-                        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                            try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
-                        } else {
-                            candidateQueue.current.push(new RTCIceCandidate(c));
-                        }
-                    }
-                }
-            };
-
-            const handleCallUpdate = async (call) => {
-                setActiveCall(call);
-
-                if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
-                    let stream = localStreamRef.current;
-                    const targetId = call.receiver;
-                    const pc = initPeerConnection(stream, targetId, call.id);
-                    try {
-                        const offer = await pc.createOffer({ offerToReceiveAudio: true });
-                        await pc.setLocalDescription(offer);
-                        socketRef.current.emit('webrtc_signal', { 
-                            call_id: call.id, 
-                            target_id: targetId, 
-                            signal: { type: 'offer', offer } 
-                        });
-                    } catch(e) {}
-                }
-            };
-
-            const initiateCall = async (targetId) => {
-                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-                const stream = await requestMic();
-                if (stream) {
-                    setLocalStream(stream);
-                    localStreamRef.current = stream;
-                    socketRef.current.emit('initiate_call', { receiver_id: targetId });
-                }
-            };
-
-            const acceptCall = async (callObj) => {
-                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-                if (!callObj) return;
-                
-                const stream = await requestMic();
-                if (stream) {
-                    setLocalStream(stream);
-                    localStreamRef.current = stream;
-                    socketRef.current.emit('accept_call', { call_id: callObj.id });
-                }
-            };
-
             useEffect(() => {
-                const socket = io({ 
+                const newSocket = io({ 
                     transports: ['websocket', 'polling'], 
                     reconnection: true,
                     reconnectionDelay: 1000,
                     reconnectionDelayMax: 5000,
                     reconnectionAttempts: Infinity
                 });
-                socketRef.current = socket;
 
-                socket.on('connect', () => {
-                    socket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                newSocket.on('connect', () => {
+                    newSocket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
                     
                     if (lastKnownRoomRef.current) {
                         setTimeout(() => {
-                            socket.emit('join_room', { room_id: lastKnownRoomRef.current });
+                            newSocket.emit('join_room', { room_id: lastKnownRoomRef.current });
                         }, 500);
                     }
                 });
 
-                socket.on('lobby_data', (data) => {
+                newSocket.on('lobby_data', (data) => {
                     setUser(data.user);
                     setRooms(data.rooms);
                     setCurrentRoomId(data.currentRoom || null);
                     if(!data.currentRoom) setRoomData(null);
                 });
                 
-                socket.on('new_chat', (chatMsg) => {
+                newSocket.on('new_chat', (chatMsg) => {
                     setRoomData(prev => {
                         if (!prev) return prev;
                         return { ...prev, chats: [...prev.chats, chatMsg] };
                     });
                 });
 
-                socket.on('new_guess', (guessMsg) => {
+                newSocket.on('new_guess', (guessMsg) => {
                     setRoomData(prev => {
                         if (!prev) return prev;
                         
@@ -615,54 +661,52 @@
                     });
                 });
 
-                socket.on('lobby_rooms_update', (data) => setRooms(data));
-                socket.on('user_update', (userData) => setUser(userData));
-                socket.on('room_sync', (data) => setRoomData(data));
+                newSocket.on('lobby_rooms_update', (data) => setRooms(data));
+                newSocket.on('user_update', (userData) => setUser(userData));
+                newSocket.on('room_sync', (data) => setRoomData(data));
                 
-                socket.on('kick_idle', () => {
+                newSocket.on('kick_idle', () => {
                     setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
                     setCurrentRoomId(null);
                 });
 
-                socket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
-                socket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
-                socket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
-                socket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
+                newSocket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
+                newSocket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
+                newSocket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
+                newSocket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
                 
-                socket.on('join_success', (roomId) => {
+                newSocket.on('join_success', (roomId) => {
                     setCurrentRoomId(roomId);
                     setModal(null);
                 });
 
-                socket.on('kicked_by_admin', () => {
+                newSocket.on('kicked_by_admin', () => {
                     setModal({ type: 'error', title: 'Kicked', content: 'You were removed from the private room by the creator.' });
                     setCurrentRoomId(null);
                 });
 
-                socket.on('room_expired', () => {
+                newSocket.on('room_expired', () => {
                     setModal({ type: 'error', title: 'Room Closed', content: 'The private room has expired or been deleted.' });
                     setCurrentRoomId(null);
                 });
 
-                socket.on('room_created', ({ room_id }) => {
+                newSocket.on('room_created', ({ room_id }) => {
                     setModal(null);
-                    socket.emit('search_room', { room_id }); 
+                    newSocket.emit('search_room', { room_id }); 
                 });
 
-                socket.on('search_result', (room) => {
+                newSocket.on('search_result', (room) => {
                     if (room.is_private) {
                         setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
                     } else {
-                        socket.emit('join_room', { room_id: room.id });
+                        newSocket.emit('join_room', { room_id: room.id });
                     }
                 });
 
-                socket.on('webrtc_signal_receive', handleReceiveSignal);
-                socket.on('call_update', handleCallUpdate);
-                socket.on('call_ended', cleanupCall);
+                setSocket(newSocket);
                 
                 const resetIdle = () => {
-                    socketRef.current.emit('active_event');
+                    newSocket.emit('active_event');
                     setModal(prev => prev?.type === 'idle_warning' ? null : prev);
                 };
                 window.addEventListener('mousemove', resetIdle);
@@ -671,17 +715,9 @@
                 return () => {
                     window.removeEventListener('mousemove', resetIdle);
                     window.removeEventListener('touchstart', resetIdle);
-                    socket.disconnect();
+                    newSocket.disconnect();
                 }
             }, []); 
-
-            useEffect(() => {
-                if (localStreamRef.current) {
-                    localStreamRef.current.getAudioTracks().forEach(track => {
-                        track.enabled = !isMicMuted;
-                    });
-                }
-            }, [isMicMuted, localStream]);
 
             const [touchStartPos, setTouchStartPos] = useState(null);
             const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
@@ -706,7 +742,7 @@
                 setTouchStartPos(null);
             };
 
-            if (!user || !socketRef.current) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
+            if (!user || !socket) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
 
             let timeLeftText = '';
             if (roomData && roomData.room.is_private && roomData.room.expire_at) {
@@ -743,7 +779,7 @@
                     {currentRoomId && !policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
 
                     {!currentRoomId ? (
-                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socketRef.current} />
+                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />
                     ) : (
                         <>
                             {roomData ? (
@@ -775,7 +811,7 @@
                                     roomData={roomData} 
                                     tgId={tgId} 
                                     onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
-                                    socket={socketRef.current}
+                                    socket={socket}
                                     setProfileModal={setProfileModal}
                                     activeCall={activeCall}
                                     callConnectionState={callConnectionState}
@@ -784,6 +820,7 @@
                                     isSpeakerMuted={isSpeakerMuted}
                                     setIsSpeakerMuted={setIsSpeakerMuted}
                                     setModal={setModal}
+                                    endCall={endCall}
                                 />
                                 
                                 <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -800,8 +837,8 @@
                                             <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                         </div>
                                         
-                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socketRef.current} setModal={setModal} />}
-                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socketRef.current} tgId={tgId} />}
+                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socket} setModal={setModal} />}
+                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={tgId} />}
                                         {activeTab === 'sounds' && (
                                             <div className="panel-body">
                                                 <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
@@ -894,7 +931,7 @@
                         </>
                     )}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socketRef.current} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socket} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
                     
                     {profileModal && (
                         <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
@@ -925,7 +962,7 @@
                                 <h4>Incoming Call</h4>
                                 <p className="text-muted">From {toHex(activeCall.caller)}</p>
                                 <div className="d-flex gap-4 mt-3 justify-content-center">
-                                    <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => socketRef.current.emit('end_call', {call_id: activeCall.id})}><i className="fas fa-phone-slash"></i></button>
+                                    <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => endCall(activeCall.id)}><i className="fas fa-phone-slash"></i></button>
                                     <button className="btn btn-success rounded-circle shadow d-flex align-items-center justify-content-center heartbeat" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i></button>
                                 </div>
                             </div>
@@ -1407,7 +1444,7 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, callConnectionState, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal }) => {
+        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, callConnectionState, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal, endCall }) => {
             const { room, members, activeCalls } = roomData;
             const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
             
@@ -1462,7 +1499,7 @@
                                         <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
                                             <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
                                         </button>
-                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => socket.emit('end_call', {call_id: activeCall.id})} title="End Call">
+                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => endCall(activeCall.id)} title="End Call">
                                             <i className="fas fa-phone-slash fs-5"></i>
                                         </button>
                                     </div>
@@ -1499,7 +1536,7 @@
                                                 {(mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id) ? (
                                                     <div className="d-flex align-items-center gap-2">
                                                         <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
-                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => socket.emit('end_call', {call_id: mCall.id})}><i className="fas fa-times"></i></button>
+                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => endCall(mCall.id)}><i className="fas fa-times"></i></button>
                                                     </div>
                                                 ) : null}
 
@@ -1647,11 +1684,12 @@
             // Initial component mount redraw and request sync
             useEffect(() => { 
                 redraw(); 
-                socket.emit('request_initial_drawings');
+                if (socket) socket.emit('request_initial_drawings');
             }, [redraw, socket]);
 
             // Sync Initial Drawings safely and natively
             useEffect(() => {
+                if (!socket) return;
                 const handleInitialDrawings = (drawings) => {
                     initialDrawingsRef.current = drawings;
                     redraw();
@@ -1662,6 +1700,7 @@
 
             // Appends efficiently to local ref history and strokes canvas directly natively
             useEffect(() => {
+                if (!socket) return;
                 const handleLiveDraw = (data) => {
                     let lines = data.lines;
                     let color = data.color || 'black';
@@ -1742,7 +1781,7 @@
 
             const flushDrawQueue = useCallback(() => {
                 if (drawQueueRef.current.length > 0) {
-                    socket.emit('draw', { lines: drawQueueRef.current });
+                    if (socket) socket.emit('draw', { lines: drawQueueRef.current });
                     drawQueueRef.current = [];
                 }
                 emitTimeoutRef.current = null;
@@ -1922,7 +1961,7 @@
                     setModal({ type: 'confirm_guess_credit', guess: input, title: 'Unlock 2 Extra Guesses?' });
                     setInput('');
                 } else {
-                    socket.emit('guess', {guess: input});
+                    if (socket) socket.emit('guess', {guess: input});
                     setInput('');
                 }
             };
