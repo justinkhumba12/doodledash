@@ -385,7 +385,10 @@
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' }
                     ] 
                 });
                 
@@ -398,11 +401,13 @@
                         candidateBatchRef.current.push(e.candidate);
                         if (!batchTimerRef.current) {
                             batchTimerRef.current = setTimeout(() => {
-                                socketRef.current.emit('webrtc_signal', { 
-                                    call_id: callId, 
-                                    target_id: targetId, 
-                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
-                                });
+                                if (socketRef.current) {
+                                    socketRef.current.emit('webrtc_signal', { 
+                                        call_id: callId, 
+                                        target_id: targetId, 
+                                        signal: { type: 'candidates', candidates: candidateBatchRef.current } 
+                                    });
+                                }
                                 candidateBatchRef.current = [];
                                 batchTimerRef.current = null;
                             }, 500);
@@ -419,8 +424,11 @@
                 };
 
                 pc.oniceconnectionstatechange = () => {
-                    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-                        socketRef.current.emit('end_call', { call_id: callId });
+                    if (pc.iceConnectionState === 'failed') {
+                        setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked P2P routing (Symmetric NAT detected). Call ended.' });
+                        if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
+                    } else if (pc.iceConnectionState === 'closed') {
+                        if (socketRef.current) socketRef.current.emit('end_call', { call_id: callId });
                     }
                 };
 
@@ -622,12 +630,7 @@
                     if (room.is_private) {
                         setModal({ type: 'prompt_pwd', title: 'Private Room Protected', room_id: room.id });
                     } else {
-                        const isFree = room.id === 1 || room.id === 2;
-                        if (isFree) {
-                            socket.emit('join_room', { room_id: room.id });
-                        } else {
-                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: room.id });
-                        }
+                        socket.emit('join_room', { room_id: room.id });
                     }
                 });
 
@@ -930,7 +933,7 @@
                 let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
                 let durationCost = expireHours === 2 ? 1 : 2;
                 let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
-                let autoJoinCost = (autoJoin && !isPriv) ? 1 : 0;
+                let autoJoinCost = 0; 
                 let totalCostDisplay = baseRoomCost + autoJoinCost;
 
                 content = (
@@ -970,7 +973,7 @@
                                 </div>
                                 <div className="alert alert-success py-2 small mb-3">
                                     <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
-                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Joining usually costs 1 Credit</span>
+                                    <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
                                 </div>
                             </>
                         )}
@@ -980,18 +983,13 @@
                             <input className="form-check-input" type="checkbox" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} id="autoJoinCheck" />
                             <label className="form-check-label text-dark fw-bold" htmlFor="autoJoinCheck">Join Room After Creating</label>
                         </div>
-                        {autoJoin && !isPriv && (
-                            <div className="alert alert-info py-2 small mb-3">
-                                <i className="fas fa-info-circle me-1"></i> Cost: 1 Credit to auto-join this public room immediately.
-                            </div>
-                        )}
                         {autoJoin && isPriv && (
                             <div className="alert alert-success py-2 small mb-3">
                                 <i className="fas fa-info-circle me-1"></i> Auto-joining your private room is free!
                             </div>
                         )}
 
-                        {(isPriv || (autoJoin && !isPriv)) && (
+                        {(isPriv) && (
                             <div className="alert alert-warning py-2 small mb-3">
                                 <i className="fas fa-coins text-warning me-1"></i> Total Cost: {totalCostDisplay} Credits
                             </div>
@@ -1032,18 +1030,6 @@
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
-                        </div>
-                    </>
-                );
-            } else if (modal.type === 'confirm_join') {
-                content = (
-                    <>
-                        <div className="text-center py-3">
-                            <span className="badge bg-warning text-dark fs-6 px-3 py-2 rounded-pill shadow-sm"><i className="fas fa-coins"></i> {modal.content}</span>
-                        </div>
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id }); }}>Confirm</button>
                         </div>
                     </>
                 );
@@ -1335,7 +1321,7 @@
                         <div className="row g-3">
                             {filteredRooms.length > 0 ? filteredRooms.map(r => {
                                 const isFull = r.member_count >= r.max_members;
-                                const isFree = r.id === 1 || r.id === 2;
+                                const isFree = !r.is_private;
                                 return (
                                     <div key={r.id} className="col-md-4 col-sm-6 mb-2">
                                         <div className="room-card bg-white rounded-4 p-3 border shadow-sm h-100 position-relative overflow-hidden hover-up">
@@ -1349,8 +1335,8 @@
                                                 {isFull ? (
                                                     <span className="badge bg-secondary rounded-pill">Full</span>
                                                 ) : (
-                                                    <span className={`badge ${isFree ? 'bg-success' : (r.is_private ? 'bg-danger' : 'bg-primary')} rounded-pill px-2 py-1`}>
-                                                        {isFree ? <><i className="fas fa-gift"></i> Free</> : (r.is_private ? <><i className="fas fa-key"></i> Password</> : <><i className="fas fa-coins"></i> -1 Credit</>)}
+                                                    <span className={`badge ${isFree ? 'bg-success' : 'bg-danger'} rounded-pill px-2 py-1`}>
+                                                        {isFree ? <><i className="fas fa-gift"></i> Free</> : <><i className="fas fa-key"></i> Password</>}
                                                     </span>
                                                 )}
                                             </div>
@@ -1366,10 +1352,8 @@
                                                             setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
                                                         } else if (r.is_private && activeTab === 'my_rooms') {
                                                             socket.emit('join_room', { room_id: r.id }); // Creator auto-bypass
-                                                        } else if (isFree) {
-                                                            socket.emit('join_room', { room_id: r.id });
                                                         } else {
-                                                            setModal({ type: 'confirm_join', title: 'Join Public Room', content: 'Cost: 1 Credit', room_id: r.id });
+                                                            socket.emit('join_room', { room_id: r.id });
                                                         }
                                                     }}>
                                                     {isFull ? 'Full' : 'Join'}
