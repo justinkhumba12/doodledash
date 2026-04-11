@@ -170,10 +170,18 @@
             const initPeerConnection = useCallback((stream, targetId, callId) => {
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
+                        // Dual-Stack / IPv4 Google STUN Servers
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
+                        
+                        // Dedicated IPv6 STUN Servers (Essential for proper Dual-Stack gathering)
+                        { urls: 'stun:stun.ipv6.google.com:19302' },
+                        
+                        // External STUN (often resolves automatically to both IPv4/v6)
                         { urls: 'stun:stun.cloudflare.com:3478' },
                         { urls: 'stun:stun.twilio.com:3478' },
+                        
+                        // TURN servers for relay (when p2p is completely blocked)
                         { 
                             urls: 'turn:openrelay.metered.ca:80',
                             username: 'openrelayproject',
@@ -184,7 +192,8 @@
                             username: 'openrelayproject',
                             credential: 'openrelayproject'
                         }
-                    ] 
+                    ],
+                    iceTransportPolicy: 'all' // Explicitly allow all paths (IPv4/IPv6/Relay)
                 });
                 
                 if (stream) {
