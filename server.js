@@ -4,12 +4,27 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
+const Redis = require('ioredis');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 const app = express();
 const server = http.createServer(app);
+
+// ---------------------------------------------------------
+// REDIS CONNECTION & ADAPTER SETUP
+// ---------------------------------------------------------
+const REDIS_URL = 'redis://default:ChviGEknsjWwVfmQdOubyapqVCnZUfSH@caboose.proxy.rlwy.net:28708';
+const redis = new Redis(REDIS_URL);
+const pubClient = redis.duplicate();
+const subClient = redis.duplicate();
+
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    adapter: createAdapter(pubClient, subClient)
 });
+
+redis.on('error', (err) => console.error('Redis Error:', err));
+redis.on('connect', () => console.log('Connected to Redis.'));
 
 app.use(cors());
 app.use(express.json());
@@ -51,44 +66,57 @@ const INK_CONFIG = {
     black: { free: 2500, extra: 1000, cost: 0.5 }
 };
 
-// ---------------------------------------------------------
-// RAM MEMORY STORAGE
-// ---------------------------------------------------------
-const memoryRooms = new Map();
-const roomChats = {};
-const roomGuesses = {};
-const roomDrawings = {};
-const roomRedoStacks = {};
-const userProfiles = new Map();
-const userCredits = new Map(); 
-const activeGuessPayments = new Set(); 
+const disconnectTimeouts = new Map(); // Kept local for socket teardown timers
 
-let nextRoomId = 1;
-let chatCounter = 1;
-let guessCounter = 1;
-let drawingCounter = 1;
-
-// Initialize 5 Default Public Rooms into RAM
-for (let i = 1; i <= 5; i++) {
-    memoryRooms.set(i, {
-        id: i, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
-        round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null,
-        turn_index: 0, modified_at: new Date(), is_private: 0,
-        password: null, max_members: 4, base_hints: '[]', creator_id: null, expire_at: null,
-        members: [] 
-    });
-    roomChats[i] = [];
-    roomGuesses[i] = [];
-    roomDrawings[i] = [];
-    roomRedoStacks[i] = [];
-    nextRoomId = 6;
+// ---------------------------------------------------------
+// REDIS HELPERS
+// ---------------------------------------------------------
+async function getRoom(roomId) {
+    const data = await redis.get(`room:${roomId}`);
+    if (!data) return null;
+    const room = JSON.parse(data);
+    // Rehydrate Dates
+    if (room.modified_at) room.modified_at = new Date(room.modified_at);
+    if (room.expire_at) room.expire_at = new Date(room.expire_at);
+    if (room.break_end_time) room.break_end_time = new Date(room.break_end_time);
+    if (room.round_end_time) room.round_end_time = new Date(room.round_end_time);
+    return room;
 }
 
-// Memory Garbage Collection Helper
-function releaseRoomMemory(roomId) {
-    roomDrawings[roomId] = [];
-    roomRedoStacks[roomId] = [];
+async function saveRoom(room) {
+    room.modified_at = new Date();
+    await redis.set(`room:${room.id}`, JSON.stringify(room));
+    await redis.sadd('active_rooms', room.id);
 }
+
+async function releaseRoomMemory(roomId) {
+    await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`);
+}
+
+async function deleteRoomData(roomId) {
+    if (!roomId) return;
+    await redis.del(`room:${roomId}`, `room:${roomId}:chats`, `room:${roomId}:guesses`, `room:${roomId}:drawings`, `room:${roomId}:redo`);
+    await redis.srem('active_rooms', roomId);
+}
+
+async function initRedisRooms() {
+    const nextId = await redis.get('next_room_id');
+    if (!nextId) await redis.set('next_room_id', 6);
+
+    for (let i = 1; i <= 5; i++) {
+        const exists = await redis.sismember('active_rooms', i);
+        if (!exists) {
+            await saveRoom({
+                id: i, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
+                round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null,
+                turn_index: 0, modified_at: new Date(), is_private: 0,
+                password: null, max_members: 4, base_hints: '[]', creator_id: null, expire_at: null,
+                members: [] 
+            });
+        }
+    }
+}
+initRedisRooms();
 
 // ---------------------------------------------------------
 // DATABASE CONNECTION
@@ -104,7 +132,6 @@ async function initDB() {
         for (let table of tablesToDrop) {
             await db.query(`DROP TABLE IF EXISTS ${table}`);
         }
-        console.log('Cleaned up deprecated tables.');
 
         await db.query(`
             CREATE TABLE IF NOT EXISTS users (
@@ -177,9 +204,8 @@ app.post('/webhook', async (req, res) => {
             const addedCredits = payload.amount;
             const buyerId = payload.tgId;
             
-            if (userCredits.has(buyerId)) {
-                userCredits.set(buyerId, userCredits.get(buyerId) + addedCredits);
-            }
+            const currentCredits = parseFloat(await redis.hget('user_credits', buyerId)) || 0;
+            await redis.hset('user_credits', buyerId, currentCredits + addedCredits);
             
             await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [addedCredits, buyerId]);
             sendMsg(update.message.chat.id, `✅ Successfully purchased ${addedCredits} Credits! Your balance has been updated.`);
@@ -261,8 +287,11 @@ async function getUserState(tg_id) {
     if (rows.length === 0) return null;
     let u = rows[0];
     
-    if (userCredits.has(tg_id)) {
-        u.credits = userCredits.get(tg_id);
+    const redisCredits = await redis.hget('user_credits', tg_id);
+    if (redisCredits !== null) {
+        u.credits = parseFloat(redisCredits);
+    } else {
+        await redis.hset('user_credits', tg_id, u.credits);
     }
     
     if (!u.ad1_is_today) u.ad_claims_today = 0;
@@ -270,43 +299,36 @@ async function getUserState(tg_id) {
     return u;
 }
 
-const activeCalls = new Map(); 
-const disconnectTimeouts = new Map(); 
-
 // ---------------------------------------------------------
-// RAM-BASED LOBBY & ROOM FUNCTIONS
+// REFACTORED LOBBY & ROOM FUNCTIONS
 // ---------------------------------------------------------
-const broadcastRooms = () => {
+const broadcastRooms = async () => {
+    const activeIds = await redis.smembers('active_rooms');
     const roomsList = [];
-    for (const [id, room] of memoryRooms.entries()) {
-        roomsList.push({
-            id: room.id,
-            status: room.status,
-            is_private: room.is_private,
-            max_members: room.max_members,
-            creator_id: room.creator_id,
-            member_count: room.members.length
-        });
+    for (const id of activeIds) {
+        const room = await getRoom(id);
+        if (room) {
+            roomsList.push({
+                id: room.id,
+                status: room.status,
+                is_private: room.is_private,
+                max_members: room.max_members,
+                creator_id: room.creator_id,
+                member_count: room.members.length
+            });
+        }
     }
     io.to('lobby').emit('lobby_rooms_update', roomsList);
 };
 
-const deleteRoom = (roomId) => {
+const checkRoomReset = async (roomId) => {
     if (!roomId) return;
-    memoryRooms.delete(roomId);
-    releaseRoomMemory(roomId); 
-    roomGuesses[roomId] = [];
-    delete roomChats[roomId];
-};
-
-const checkRoomReset = (roomId) => {
-    if (!roomId) return;
-    const room = memoryRooms.get(roomId);
+    const room = await getRoom(roomId);
     if (!room) return;
 
     if (room.members.length === 0) {
-        if (roomId !== 1 && roomId !== 2 && !room.is_private) {
-            deleteRoom(roomId);
+        if (roomId > 5 && !room.is_private) {
+            await deleteRoomData(roomId);
         } else if (!room.is_private) {
             room.status = 'WAITING';
             room.current_drawer_id = null;
@@ -316,9 +338,9 @@ const checkRoomReset = (roomId) => {
             room.end_reason = null;
             room.members = [];
             room.turn_index = 0;
-            releaseRoomMemory(roomId); 
-            roomGuesses[roomId] = []; 
-            roomChats[roomId] = []; 
+            await releaseRoomMemory(roomId); 
+            await redis.del(`room:${roomId}:guesses`, `room:${roomId}:chats`); 
+            await saveRoom(room);
         }
     } else if (room.members.length < 2) {
         room.status = 'WAITING';
@@ -328,112 +350,122 @@ const checkRoomReset = (roomId) => {
         room.round_end_time = null;
         room.end_reason = null;
         room.members.forEach(m => m.has_given_up = 0);
-        releaseRoomMemory(roomId); 
-        roomGuesses[roomId] = []; 
+        await releaseRoomMemory(roomId); 
+        await redis.del(`room:${roomId}:guesses`);
+        await saveRoom(room);
     }
 };
 
-const syncRoom = (roomId) => {
+const syncRoom = async (roomId) => {
     if (!roomId) return;
-    const room = memoryRooms.get(roomId);
+    const room = await getRoom(roomId);
     if (!room) return;
 
     const members = room.members;
-    const chats = roomChats[roomId] || [];
-    const guesses = roomGuesses[roomId] || [];
+    const rawChats = await redis.lrange(`room:${roomId}:chats`, 0, -1);
+    const chats = rawChats.map(c => JSON.parse(c));
+    
+    const rawGuesses = await redis.lrange(`room:${roomId}:guesses`, 0, -1);
+    const guesses = rawGuesses.map(g => JSON.parse(g));
 
-    let profiles = {};
     const userIds = new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)]);
-    userIds.forEach(id => {
-        profiles[id] = userProfiles.get(id) || null;
-    });
+    const profiles = {};
+    if (userIds.size > 0) {
+        const idsArr = Array.from(userIds);
+        const results = await redis.hmget('user_profiles', ...idsArr);
+        idsArr.forEach((id, i) => profiles[id] = results[i] || null);
+    }
 
-    const activeCallsList = Array.from(activeCalls.values())
-        .filter(c => c.room_id === roomId)
-        .map(c => ({
-            id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id
-        }));
+    const allCalls = await redis.hgetall('active_calls');
+    const activeCallsList = [];
+    for (const key in allCalls) {
+        const c = JSON.parse(allCalls[key]);
+        if (c.room_id == roomId) {
+            activeCallsList.push({ id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id });
+        }
+    }
 
-    const roomSockets = io.sockets.adapter.rooms.get(`room_${roomId}`);
+    const roomSockets = await io.in(`room_${roomId}`).fetchSockets();
     if (roomSockets) {
-        for (const socketId of roomSockets) {
-            const s = io.sockets.sockets.get(socketId);
-            if (s) {
-                const userId = s.currentUser;
-                const isDrawer = room.current_drawer_id === userId;
-                
-                const sanitizedGuesses = guesses.map(g => {
-                    if (isDrawer || g.user_id === userId || room.status === 'REVEAL' || room.status === 'BREAK') {
-                        return g;
-                    }
-                    return { ...g, guess_text: '••••••••' };
-                });
+        for (const s of roomSockets) {
+            const userId = s.data.currentUser;
+            if (!userId) continue;
 
-                let masked_word = null;
-                if (['DRAWING', 'REVEAL', 'BREAK'].includes(room.status)) {
-                    const base_hints = JSON.parse(room.base_hints || '[]');
-                    const actual_word = room.word_to_draw || '';
-                    const memberData = members.find(m => m.user_id === userId);
-                    const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
-                    const isReveal = room.status !== 'DRAWING';
-                    
-                    masked_word = actual_word.split('').map((char, index) => {
-                        if (char === ' ') return { char: ' ', index, revealed: true };
-                        if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
-                            return { char, index, revealed: true };
-                        }
-                        return { char: null, index, revealed: false };
-                    });
+            const isDrawer = room.current_drawer_id === userId;
+            
+            const sanitizedGuesses = guesses.map(g => {
+                if (isDrawer || g.user_id === userId || room.status === 'REVEAL' || room.status === 'BREAK') {
+                    return g;
                 }
+                return { ...g, guess_text: '••••••••' };
+            });
 
-                s.emit('room_sync', {
-                    room: { 
-                        ...room, 
-                        expire_at: room.expire_at ? room.expire_at.toISOString() : null,
-                        break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
-                        round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null
-                    },
-                    members,
-                    chats, 
-                    guesses: sanitizedGuesses,
-                    profiles,
-                    activeCalls: activeCallsList,
-                    masked_word: masked_word,
-                    server_time: new Date().toISOString()
+            let masked_word = null;
+            if (['DRAWING', 'REVEAL', 'BREAK'].includes(room.status)) {
+                const base_hints = JSON.parse(room.base_hints || '[]');
+                const actual_word = room.word_to_draw || '';
+                const memberData = members.find(m => m.user_id === userId);
+                const purchased_hints = JSON.parse(memberData?.purchased_hints || '[]');
+                const isReveal = room.status !== 'DRAWING';
+                
+                masked_word = actual_word.split('').map((char, index) => {
+                    if (char === ' ') return { char: ' ', index, revealed: true };
+                    if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
+                        return { char, index, revealed: true };
+                    }
+                    return { char: null, index, revealed: false };
                 });
             }
+
+            s.emit('room_sync', {
+                room: { 
+                    ...room, 
+                    expire_at: room.expire_at ? room.expire_at.toISOString() : null,
+                    break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
+                    round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null
+                },
+                members,
+                chats, 
+                guesses: sanitizedGuesses,
+                profiles,
+                activeCalls: activeCallsList,
+                masked_word: masked_word,
+                server_time: new Date().toISOString()
+            });
         }
     }
 };
 
-const terminateCallsForUser = (userId) => {
-    for (const [callId, call] of activeCalls.entries()) {
+const terminateCallsForUser = async (userId) => {
+    const allCalls = await redis.hgetall('active_calls');
+    for (const [callId, callStr] of Object.entries(allCalls)) {
+        const call = JSON.parse(callStr);
         if (call.caller === userId || call.receiver === userId) {
-            activeCalls.delete(callId);
+            await redis.hdel('active_calls', callId);
             io.to(`room_${call.room_id}`).emit('call_ended', callId);
-            syncRoom(call.room_id);
+            await syncRoom(call.room_id);
         }
     }
 };
 
 io.on('connection', (socket) => {
-    let currentUser = null;
-    let currentRoom = null;
-    socket.lastActiveEvent = Date.now();
-    socket.idleWarned = false;
+    socket.data.lastActiveEvent = Date.now();
+    socket.data.idleWarned = false;
+    socket.data.currentUser = null;
+    socket.data.currentRoom = null;
 
     const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
-        const room = memoryRooms.get(roomIdNum);
+        const room = await getRoom(roomIdNum);
         if (!room) return socket.emit('join_error', 'Room not found.');
         if (room.members.length >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
         const existingMember = room.members.find(m => m.user_id === userId);
         if (existingMember) {
-            currentRoom = roomIdNum;
+            socket.data.currentRoom = roomIdNum;
             socket.join(`room_${roomIdNum}`);
             socket.leave('lobby'); 
             socket.emit('join_success', roomIdNum);
-            return syncRoom(roomIdNum);
+            return await syncRoom(roomIdNum);
         }
 
         if (!bypassCost) {
@@ -442,17 +474,17 @@ io.on('connection', (socket) => {
                     return socket.emit('join_error', 'Incorrect password.');
                 }
             }
-            // Public rooms are free, no credits deducted.
         }
 
-        const oldRoom = currentRoom;
+        const oldRoom = socket.data.currentRoom;
         if (oldRoom) {
-            terminateCallsForUser(userId); 
+            await terminateCallsForUser(userId); 
             socket.leave(`room_${oldRoom}`);
-            const oRoom = memoryRooms.get(oldRoom);
+            const oRoom = await getRoom(oldRoom);
             if (oRoom) {
                 oRoom.members = oRoom.members.filter(m => m.user_id !== userId);
-                checkRoomReset(oldRoom);
+                await saveRoom(oRoom);
+                await checkRoomReset(oldRoom);
             }
         }
 
@@ -469,14 +501,15 @@ io.on('connection', (socket) => {
             joined_at: Date.now() 
         });
 
-        currentRoom = roomIdNum;
-        socket.join(`room_${currentRoom}`);
+        await saveRoom(room);
+        socket.data.currentRoom = roomIdNum;
+        socket.join(`room_${roomIdNum}`);
         socket.leave('lobby');
-        socket.emit('join_success', currentRoom);
+        socket.emit('join_success', roomIdNum);
         
-        if (oldRoom) syncRoom(oldRoom);
-        syncRoom(currentRoom);
-        broadcastRooms();
+        if (oldRoom) await syncRoom(oldRoom);
+        await syncRoom(roomIdNum);
+        await broadcastRooms();
 
         const userState = await getUserState(userId);
         if (userState) socket.emit('user_update', userState);
@@ -485,10 +518,12 @@ io.on('connection', (socket) => {
     socket.on('auth', async ({ tg_id, profile_pic }) => {
         try {
             if (!tg_id) return;
-            currentUser = String(tg_id);
-            socket.currentUser = currentUser; 
+            socket.data.currentUser = String(tg_id);
+            const currentUser = socket.data.currentUser;
             
-            if (profile_pic) userProfiles.set(currentUser, profile_pic);
+            if (profile_pic) {
+                await redis.hset('user_profiles', currentUser, profile_pic);
+            }
 
             if (disconnectTimeouts.has(currentUser)) {
                 clearTimeout(disconnectTimeouts.get(currentUser));
@@ -505,50 +540,62 @@ io.on('connection', (socket) => {
             }
 
             const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-            if (dbUser.length > 0 && !userCredits.has(currentUser)) {
-                userCredits.set(currentUser, parseFloat(dbUser[0].credits));
+            if (dbUser.length > 0) {
+                const hasCredit = await redis.hexists('user_credits', currentUser);
+                if (!hasCredit) await redis.hset('user_credits', currentUser, parseFloat(dbUser[0].credits));
             }
 
             const userState = await getUserState(currentUser);
             
-            for (const [id, room] of memoryRooms.entries()) {
-                if (room.members.some(m => String(m.user_id) === currentUser)) {
-                    currentRoom = id;
-                    socket.join(`room_${currentRoom}`);
-                    syncRoom(currentRoom);
+            const activeRooms = await redis.smembers('active_rooms');
+            let foundRoom = null;
+            for (const id of activeRooms) {
+                const room = await getRoom(id);
+                if (room && room.members.some(m => String(m.user_id) === currentUser)) {
+                    foundRoom = id;
+                    socket.data.currentRoom = foundRoom;
+                    socket.join(`room_${foundRoom}`);
+                    await syncRoom(foundRoom);
                     break;
                 }
             }
 
-            if (!currentRoom) {
+            if (!foundRoom) {
                 socket.join('lobby');
             }
 
             const roomsList = [];
-            for (const [id, room] of memoryRooms.entries()) {
-                roomsList.push({
-                    id: room.id, status: room.status, is_private: room.is_private, max_members: room.max_members,
-                    creator_id: room.creator_id, member_count: room.members.length
-                });
+            for (const id of activeRooms) {
+                const room = await getRoom(id);
+                if(room) {
+                    roomsList.push({
+                        id: room.id, status: room.status, is_private: room.is_private, max_members: room.max_members,
+                        creator_id: room.creator_id, member_count: room.members.length
+                    });
+                }
             }
 
-            socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom });
+            socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom });
         } catch (err) {}
     });
     
-    socket.on('request_initial_drawings', () => {
-        if (currentRoom && roomDrawings[currentRoom]) {
-            socket.emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
+    socket.on('request_initial_drawings', async () => {
+        const currentRoom = socket.data.currentRoom;
+        if (currentRoom) {
+            const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+            const drawings = rawDrawings.map(d => JSON.parse(d));
+            socket.emit('sync_initial_drawings', drawings.map(d => ({ lines: d.lines, color: d.color })));
         }
     });
 
     socket.on('active_event', () => {
-        socket.lastActiveEvent = Date.now();
-        socket.idleWarned = false;
+        socket.data.lastActiveEvent = Date.now();
+        socket.data.idleWarned = false;
     });
 
     socket.on('claim_reward', async ({ type }) => {
         try {
+            const currentUser = socket.data.currentUser;
             if (!currentUser) return;
             let success = false;
             let msg = '';
@@ -597,7 +644,8 @@ io.on('connection', (socket) => {
             }
 
             if (success) {
-                userCredits.set(currentUser, (userCredits.get(currentUser) || 0) + rewardAmount);
+                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
+                await redis.hset('user_credits', currentUser, currentCredits + rewardAmount);
                 
                 socket.emit('reward_success', msg);
                 const userState = await getUserState(currentUser);
@@ -610,15 +658,21 @@ io.on('connection', (socket) => {
 
     socket.on('create_room', async ({ is_private, password, max_members, expire_hours, auto_join }) => {
         try {
+            const currentUser = socket.data.currentUser;
             if (!currentUser) return;
             const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
-            let cost = 0; // Public room auto-join is free
+            let cost = 0; 
             let expDate = null;
             
             if (is_private) {
-                const hasRoom = Array.from(memoryRooms.values()).some(r => r.creator_id === currentUser);
-                if (hasRoom) return socket.emit('create_error', 'You can only have 1 private room active at a time.');
+                const activeRooms = await redis.smembers('active_rooms');
+                let hasRoom = false;
+                for(const id of activeRooms) {
+                    const r = await getRoom(id);
+                    if(r && r.creator_id === currentUser) { hasRoom = true; break; }
+                }
 
+                if (hasRoom) return socket.emit('create_error', 'You can only have 1 private room active at a time.');
                 if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                 
                 const limitCost = limit === 2 ? 1 : (limit === 3 ? 3 : 4);
@@ -630,25 +684,21 @@ io.on('connection', (socket) => {
             }
 
             if (cost > 0) {
-                const currentCredits = userCredits.get(currentUser) || 0;
+                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
                 if (currentCredits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
                 
-                userCredits.set(currentUser, currentCredits - cost);
+                await redis.hset('user_credits', currentUser, currentCredits - cost);
                 db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
             }
 
-            const newRoomId = nextRoomId++;
-            memoryRooms.set(newRoomId, {
+            const newRoomId = await redis.incr('next_room_id');
+            await saveRoom({
                 id: newRoomId, status: 'WAITING', current_drawer_id: null, word_to_draw: null,
                 round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null, turn_index: 0,
                 modified_at: new Date(), is_private: is_private ? 1 : 0, password: is_private ? password : null,
                 max_members: limit, base_hints: '[]', creator_id: is_private ? currentUser : null, expire_at: expDate,
                 members: []
             });
-            roomChats[newRoomId] = [];
-            roomGuesses[newRoomId] = [];
-            roomDrawings[newRoomId] = [];
-            roomRedoStacks[newRoomId] = [];
 
             if (auto_join) {
                 await performJoinRoom(currentUser, newRoomId, password, true);
@@ -658,27 +708,30 @@ io.on('connection', (socket) => {
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
-            broadcastRooms();
+            await broadcastRooms();
         } catch (err) { console.error('Create room error:', err); }
     });
 
-    socket.on('search_room', ({ room_id }) => {
-        const room = memoryRooms.get(Number(room_id));
+    socket.on('search_room', async ({ room_id }) => {
+        const room = await getRoom(Number(room_id));
         if (!room) return socket.emit('join_error', 'Room not found.');
         socket.emit('search_result', { id: room.id, is_private: room.is_private });
     });
 
     socket.on('join_room', async ({ room_id, password }) => {
         try {
-            if (!currentUser) return;
-            await performJoinRoom(currentUser, Number(room_id), password, false);
+            if (!socket.data.currentUser) return;
+            await performJoinRoom(socket.data.currentUser, Number(room_id), password, false);
         } catch (err) {}
     });
 
-    socket.on('leave_room', () => {
+    socket.on('leave_room', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        terminateCallsForUser(currentUser); 
-        const room = memoryRooms.get(currentRoom);
+
+        await terminateCallsForUser(currentUser); 
+        const room = await getRoom(currentRoom);
         if (room) {
             if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                 room.status = 'BREAK';
@@ -686,113 +739,128 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.word_to_draw = null;
                 room.round_end_time = null;
-                if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-                roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'Drawer left the game.', created_at: new Date() });
+                
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: 'Drawer left the game.', created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
             }
 
             room.members = room.members.filter(m => m.user_id !== currentUser);
-            checkRoomReset(currentRoom);
+            await saveRoom(room);
+            await checkRoomReset(currentRoom);
         }
         socket.leave(`room_${currentRoom}`);
         socket.join('lobby'); 
-        syncRoom(currentRoom);
-        currentRoom = null;
-        broadcastRooms();
+        await syncRoom(currentRoom);
+        socket.data.currentRoom = null;
+        await broadcastRooms();
     });
 
-    socket.on('delete_room', () => {
+    socket.on('delete_room', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || room.creator_id !== currentUser) return;
 
         io.to(`room_${currentRoom}`).emit('room_expired'); 
         
-        deleteRoom(currentRoom);
+        await deleteRoomData(currentRoom);
         
-        io.in(`room_${currentRoom}`).fetchSockets().then(sockets => {
-            sockets.forEach(s => {
-                s.leave(`room_${currentRoom}`);
-                s.join('lobby'); 
-                s.currentRoom = null;
-            });
+        const sockets = await io.in(`room_${currentRoom}`).fetchSockets();
+        sockets.forEach(s => {
+            s.leave(`room_${currentRoom}`);
+            s.join('lobby'); 
+            s.data.currentRoom = null;
         });
         
-        broadcastRooms();
+        await broadcastRooms();
     });
 
     socket.on('extend_room', async ({ expire_hours }) => {
         try {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
             const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
             let cost = hours === 4 ? 2 : 1;
             
-            const currentCredits = userCredits.get(currentUser) || 0;
+            const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
             if (currentCredits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
             
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
-            userCredits.set(currentUser, currentCredits - cost);
+            await redis.hset('user_credits', currentUser, currentCredits - cost);
             db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
             
             room.expire_at = new Date(room.expire_at.getTime() + hours * 3600000);
+            await saveRoom(room);
             
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
-            syncRoom(currentRoom);
+            await syncRoom(currentRoom);
         } catch(err) { console.error('Extend room error:', err); }
     });
 
-    socket.on('change_password', ({ password }) => {
+    socket.on('change_password', async ({ password }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
         if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be 6-10 characters.');
         
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || !room.is_private || room.creator_id !== currentUser) return socket.emit('create_error', 'Unauthorized.');
 
         room.password = password;
+        await saveRoom(room);
         socket.emit('reward_success', `Room password updated successfully! New password: ${password}`);
-        broadcastRooms();
-        syncRoom(currentRoom);
+        await broadcastRooms();
+        await syncRoom(currentRoom);
     });
 
     socket.on('kick_player', async ({ target_id }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
         room.members = room.members.filter(m => m.user_id !== target_id);
+        await saveRoom(room);
         
         io.to(`user_${target_id}`).emit('kicked_by_admin');
         const sockets = await io.in(`user_${target_id}`).fetchSockets();
         sockets.forEach(s => {
             s.leave(`room_${currentRoom}`);
             s.join('lobby'); 
-            if (s.currentRoom === currentRoom) s.currentRoom = null;
+            if (s.data.currentRoom === currentRoom) s.data.currentRoom = null;
         });
 
-        syncRoom(currentRoom);
-        broadcastRooms();
+        await syncRoom(currentRoom);
+        await broadcastRooms();
     });
 
-    socket.on('chat', ({ message }) => {
+    socket.on('chat', async ({ message }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom || !message.trim()) return;
         
-        if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
+        const cId = await redis.incr('global_chat_id');
+        const newChat = { id: cId, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
         
-        const newChat = { id: chatCounter++, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
-        roomChats[currentRoom].push(newChat);
-        
-        if (roomChats[currentRoom].length >= 30) {
-            roomChats[currentRoom].splice(0, 15);
-        }
+        await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(newChat));
+        await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
 
         io.to(`room_${currentRoom}`).emit('new_chat', newChat);
     });
 
-    socket.on('give_up', () => {
+    socket.on('give_up', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || !['DRAWING', 'PRE_DRAW'].includes(room.status)) return;
 
         const isDrawer = room.current_drawer_id === currentUser;
@@ -802,20 +870,26 @@ io.on('connection', (socket) => {
                 room.status = 'BREAK';
                 room.end_reason = 'drawer_skipped';
             } else {
-                room.status = 'REVEAL'; // Show word, don't clear canvas yet
+                room.status = 'REVEAL'; 
                 room.end_reason = 'drawer_gave_up';
             }
             room.break_end_time = new Date(Date.now() + 5000); 
             room.round_end_time = null;
-            if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-            roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() });
+            
+            const cId = await redis.incr('global_chat_id');
+            const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: 'The drawer gave up their turn.', created_at: new Date() };
+            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+            await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
+            await saveRoom(room);
         } else {
             if (room.status !== 'DRAWING') return; 
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) member.has_given_up = 1;
             
-            if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-            roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} voted to give up.`, created_at: new Date() });
+            const cId = await redis.incr('global_chat_id');
+            const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} voted to give up.`, created_at: new Date() };
+            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+            await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
 
             const guessers = room.members.filter(m => m.user_id !== room.current_drawer_id);
             const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
@@ -826,58 +900,65 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000);
                 room.round_end_time = null;
                 room.last_winner_id = null;
-                roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'All guessers gave up.', created_at: new Date() });
+                
+                const cId2 = await redis.incr('global_chat_id');
+                const sysChat2 = { id: cId2, room_id: currentRoom, user_id: 'System', message: 'All guessers gave up.', created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat2));
+                await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
             }
+            await saveRoom(room);
         }
-        syncRoom(currentRoom);
+        await syncRoom(currentRoom);
     });
 
     socket.on('guess', async ({ guess }) => {
         try {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
             if (!guess || !guess.trim()) return;
             
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (!room) return;
             if (room.status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
             if (room.current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
             
-            const currentGuesses = roomGuesses[currentRoom] || [];
-            const myGuessCount = currentGuesses.filter(g => g.user_id === currentUser).length;
+            const rawGuesses = await redis.lrange(`room:${currentRoom}:guesses`, 0, -1);
+            const myGuessCount = rawGuesses.map(g => JSON.parse(g)).filter(g => g.user_id === currentUser).length;
             
             if (myGuessCount >= 6) {
                 return socket.emit('create_error', 'No more guesses allowed this round.');
             }
 
             if (myGuessCount === 4) {
-                if (activeGuessPayments.has(currentUser)) return;
-                activeGuessPayments.add(currentUser);
+                const lockKey = `guess_payment_lock:${currentUser}`;
+                const locked = await redis.set(lockKey, "1", "EX", 10, "NX");
+                if (!locked) return; // Wait for transaction
+
                 try {
-                    const currentCredits = userCredits.get(currentUser) || 0;
+                    const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
                     if (currentCredits < 1) {
-                        activeGuessPayments.delete(currentUser);
+                        await redis.del(lockKey);
                         return socket.emit('create_error', 'Not enough credits to unlock extra guesses! (Cost: 1 Credit)');
                     }
                     
-                    userCredits.set(currentUser, currentCredits - 1);
+                    await redis.hset('user_credits', currentUser, currentCredits - 1);
                     db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
                     
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
                 } catch (e) {
-                    activeGuessPayments.delete(currentUser);
+                    await redis.del(lockKey);
                     return console.error('Guess Payment Error:', e);
                 }
-                activeGuessPayments.delete(currentUser);
+                await redis.del(lockKey);
             }
-            
-            if ((roomGuesses[currentRoom] || []).filter(g => g.user_id === currentUser).length >= 6) return;
 
             const isCorrect = room.word_to_draw && room.word_to_draw.toLowerCase() === guess.trim().toLowerCase();
+            const gId = await redis.incr('global_guess_id');
+            const newGuess = { id: gId, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() };
             
-            const newGuess = { id: guessCounter++, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() };
-            roomGuesses[currentRoom].push(newGuess);
-
+            await redis.rpush(`room:${currentRoom}:guesses`, JSON.stringify(newGuess));
             io.to(`room_${currentRoom}`).emit('new_guess', newGuess);
 
             if (isCorrect) {
@@ -886,7 +967,8 @@ io.on('connection', (socket) => {
                 room.break_end_time = new Date(Date.now() + 5000); 
                 room.round_end_time = null;
                 room.last_winner_id = currentUser;
-                syncRoom(currentRoom); 
+                await saveRoom(room);
+                await syncRoom(currentRoom); 
             }
 
         } catch (err) {
@@ -896,9 +978,11 @@ io.on('connection', (socket) => {
 
     socket.on('buy_hint', async ({ index }) => {
         try {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
 
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (!room) return;
             const member = room.members.find(m => m.user_id === currentUser);
             if (!member) return;
@@ -907,31 +991,36 @@ io.on('connection', (socket) => {
             if (purchased.length >= 1) return socket.emit('create_error', 'You can only buy 1 hint per round.');
 
             if (!purchased.includes(index)) {
-                const currentCredits = userCredits.get(currentUser) || 0;
+                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
                 if (currentCredits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
-                userCredits.set(currentUser, currentCredits - 1);
+                await redis.hset('user_credits', currentUser, currentCredits - 1);
                 db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
                 
                 purchased.push(index);
                 member.purchased_hints = JSON.stringify(purchased);
+                await saveRoom(room);
                 
-                if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-                roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint for 1 Credit!`, created_at: new Date() });
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint for 1 Credit!`, created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
                 
-                syncRoom(currentRoom);
+                await syncRoom(currentRoom);
             }
         } catch (err) {
             console.error('Buy Hint Error:', err);
         }
     });
 
-    socket.on('set_word', ({ word }) => {
+    socket.on('set_word', async ({ word }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || room.current_drawer_id !== currentUser) return;
 
         const wordClean = word.trim().toUpperCase();
@@ -972,15 +1061,17 @@ io.on('connection', (socket) => {
             m.ink_extra = {}; 
         });
         
-        releaseRoomMemory(currentRoom); 
+        await saveRoom(room);
+        await releaseRoomMemory(currentRoom); 
         io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
-        
-        syncRoom(currentRoom);
+        await syncRoom(currentRoom);
     });
 
-    socket.on('set_ready', () => {
+    socket.on('set_ready', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room) return;
         const member = room.members.find(m => m.user_id === currentUser);
         if (member) {
@@ -1002,18 +1093,21 @@ io.on('connection', (socket) => {
                 room.members.forEach(m => m.is_ready = 0);
                 room.turn_index = idx + 1; 
 
-                releaseRoomMemory(currentRoom); 
-                roomGuesses[currentRoom] = []; 
+                await releaseRoomMemory(currentRoom); 
+                await redis.del(`room:${currentRoom}:guesses`); 
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
             }
 
-            syncRoom(currentRoom);
+            await saveRoom(room);
+            await syncRoom(currentRoom);
         }
     });
 
-    socket.on('draw', ({ lines }) => {
+    socket.on('draw', async ({ lines }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        const room = memoryRooms.get(currentRoom);
+        const room = await getRoom(currentRoom);
         if (!room || room.status !== 'DRAWING') return;
 
         const member = room.members.find(m => m.user_id === currentUser);
@@ -1030,26 +1124,24 @@ io.on('connection', (socket) => {
         if (member) {
             if (!member.ink_used) member.ink_used = {};
             member.ink_used[activeColor] = (member.ink_used[activeColor] || 0) + strokeLength;
+            await saveRoom(room);
         }
 
-        roomRedoStacks[currentRoom] = []; 
-        if (!roomDrawings[currentRoom]) roomDrawings[currentRoom] = [];
+        await redis.del(`room:${currentRoom}:redo`); 
         
-        roomDrawings[currentRoom].push({ 
-            id: drawingCounter++, 
-            lines: lines,
-            ink_cost: strokeLength,
-            color: activeColor,
-            user_id: currentUser
-        });
+        const dId = await redis.incr('global_drawing_id');
+        const drawing = { id: dId, lines, ink_cost: strokeLength, color: activeColor, user_id: currentUser };
+        await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawing));
         
         socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
     });
 
     socket.on('buy_ink', async () => {
         try {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (!room || room.status !== 'DRAWING') return;
             
             const targetColor = 'black'; 
@@ -1063,140 +1155,165 @@ io.on('connection', (socket) => {
                     return socket.emit('create_error', 'You can only buy ink once per round.');
                 }
 
-                const currentCredits = userCredits.get(currentUser) || 0;
+                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
                 if (currentCredits < cost) {
                     return socket.emit('create_error', `Not enough credits to buy ink.`);
                 }
 
-                userCredits.set(currentUser, currentCredits - cost);
+                await redis.hset('user_credits', currentUser, currentCredits - cost);
                 db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
 
                 member.ink_extra[targetColor] = extraInkAmount; 
+                await saveRoom(room);
+
                 socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
-                
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
                 
-                syncRoom(currentRoom); 
+                await syncRoom(currentRoom); 
             }
         } catch (err) {
             console.error('Buy Ink Error:', err);
         }
     });
 
-    socket.on('undo', () => {
+    socket.on('undo', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        if (roomDrawings[currentRoom] && roomDrawings[currentRoom].length > 0) {
-            if (!roomRedoStacks[currentRoom]) roomRedoStacks[currentRoom] = [];
+        
+        const lastRaw = await redis.rpop(`room:${currentRoom}:drawings`);
+        if (lastRaw) {
+            await redis.rpush(`room:${currentRoom}:redo`, lastRaw);
+            const toRestore = JSON.parse(lastRaw);
             
-            const toRestore = roomDrawings[currentRoom].pop();
-            roomRedoStacks[currentRoom].push(toRestore);
-            
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
                 if (member && toRestore.ink_cost) {
                     if (!member.ink_used) member.ink_used = {};
                     member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
+                    await saveRoom(room);
                 }
             }
             
-            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
-            syncRoom(currentRoom);
+            const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+            const allDrawings = allRaw.map(d => JSON.parse(d));
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
+            await syncRoom(currentRoom);
         }
     });
 
-    socket.on('redo', () => {
+    socket.on('redo', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
-        if (roomRedoStacks[currentRoom] && roomRedoStacks[currentRoom].length > 0) {
-            const toRestore = roomRedoStacks[currentRoom].pop();
-            roomDrawings[currentRoom].push(toRestore);
+
+        const toRestoreRaw = await redis.rpop(`room:${currentRoom}:redo`);
+        if (toRestoreRaw) {
+            await redis.rpush(`room:${currentRoom}:drawings`, toRestoreRaw);
+            const toRestore = JSON.parse(toRestoreRaw);
             
-            const room = memoryRooms.get(currentRoom);
+            const room = await getRoom(currentRoom);
             if (room) {
                 const member = room.members.find(m => m.user_id === toRestore.user_id);
                 if (member && toRestore.ink_cost) {
                     if (!member.ink_used) member.ink_used = {};
                     member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
+                    await saveRoom(room);
                 }
             }
             
-            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', roomDrawings[currentRoom].map(d => ({ lines: d.lines, color: d.color })));
-            syncRoom(currentRoom);
+            const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+            const allDrawings = allRaw.map(d => JSON.parse(d));
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
+            await syncRoom(currentRoom);
         }
     });
 
     socket.on('initiate_call', async ({ receiver_id }) => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
         
-        const isInCall = Array.from(activeCalls.values()).some(
-            c => c.caller === currentUser || c.receiver === currentUser ||
-                 c.caller === receiver_id || c.receiver === receiver_id
-        );
+        const allCalls = await redis.hgetall('active_calls');
+        const isInCall = Object.values(allCalls).some(str => {
+            const c = JSON.parse(str);
+            return c.caller === currentUser || c.receiver === currentUser ||
+                   c.caller === receiver_id || c.receiver === receiver_id;
+        });
         
         if (isInCall) return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
 
         const callId = `call_${Date.now()}_${Math.random()}`;
         const callObj = { id: callId, caller: currentUser, receiver: String(receiver_id), status: 'RINGING', room_id: currentRoom };
-        activeCalls.set(callId, callObj);
+        
+        await redis.hset('active_calls', callId, JSON.stringify(callObj));
         io.to(`room_${currentRoom}`).emit('call_update', callObj);
-        syncRoom(currentRoom);
+        await syncRoom(currentRoom);
     });
 
     socket.on('accept_call', async ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call && String(call.receiver) === currentUser) {
-            
-            const currentCredits = userCredits.get(call.caller) || 0;
-            if (currentCredits < 1) {
-                activeCalls.delete(call_id);
-                io.to(`room_${call.room_id}`).emit('call_ended', call_id);
-                syncRoom(call.room_id);
-                return;
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
+        const callStr = await redis.hget('active_calls', call_id);
+        if (callStr) {
+            const call = JSON.parse(callStr);
+            if (String(call.receiver) === currentUser) {
+                const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
+                if (currentCredits < 1) {
+                    await redis.hdel('active_calls', call_id);
+                    io.to(`room_${call.room_id}`).emit('call_ended', call_id);
+                    await syncRoom(call.room_id);
+                    return;
+                }
+
+                await redis.hset('user_credits', call.caller, currentCredits - 1);
+                db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
+
+                call.status = 'ACTIVE';
+                call.startTime = Date.now();
+                call.nextChargeTime = Date.now() + 180000; 
+                await redis.hset('active_calls', call_id, JSON.stringify(call));
+                
+                io.to(`room_${call.room_id}`).emit('call_update', call);
+                
+                const uState1 = await getUserState(call.caller);
+                if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
+
+                await syncRoom(currentRoom);
             }
-
-            userCredits.set(call.caller, currentCredits - 1);
-            db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
-
-            call.status = 'ACTIVE';
-            call.startTime = Date.now();
-            call.nextChargeTime = Date.now() + 180000; 
-            activeCalls.set(call_id, call);
-            
-            io.to(`room_${call.room_id}`).emit('call_update', call);
-            
-            const uState1 = await getUserState(call.caller);
-            if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
-
-            syncRoom(currentRoom);
         }
     });
 
-    socket.on('end_call', ({ call_id }) => {
-        const call = activeCalls.get(call_id);
-        if (call) {
-            activeCalls.delete(call_id);
+    socket.on('end_call', async ({ call_id }) => {
+        const currentRoom = socket.data.currentRoom;
+        const callStr = await redis.hget('active_calls', call_id);
+        if (callStr) {
+            const call = JSON.parse(callStr);
+            await redis.hdel('active_calls', call_id);
             io.to(`room_${currentRoom || call.room_id}`).emit('call_ended', call_id);
-            syncRoom(currentRoom || call.room_id);
+            await syncRoom(currentRoom || call.room_id);
         }
     });
 
-    // ⚡ WebRTC Target Routing ⚡
     socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
         socket.to(`user_${String(target_id)}`).emit('webrtc_signal_receive', { 
             call_id, 
-            sender_id: currentUser, 
+            sender_id: socket.data.currentUser, 
             target_id: String(target_id), 
             signal 
         });
     });
 
     socket.on('disconnect', () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
         if (currentUser) {
-            const timeoutId = setTimeout(() => {
-                terminateCallsForUser(currentUser); 
+            const timeoutId = setTimeout(async () => {
+                await terminateCallsForUser(currentUser); 
                 if (currentRoom) {
-                    const room = memoryRooms.get(currentRoom);
+                    const room = await getRoom(currentRoom);
                     if (room) {
                         if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                             room.status = 'BREAK';
@@ -1204,15 +1321,19 @@ io.on('connection', (socket) => {
                             room.break_end_time = new Date(Date.now() + 5000); 
                             room.word_to_draw = null;
                             room.round_end_time = null;
-                            if (!roomChats[currentRoom]) roomChats[currentRoom] = [];
-                            roomChats[currentRoom].push({ id: chatCounter++, room_id: currentRoom, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() });
+                            
+                            const cId = await redis.incr('global_chat_id');
+                            const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() };
+                            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                            await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
                         }
 
                         room.members = room.members.filter(m => m.user_id !== currentUser);
-                        checkRoomReset(currentRoom);
+                        await saveRoom(room);
+                        await checkRoomReset(currentRoom);
                     }
-                    syncRoom(currentRoom);
-                    broadcastRooms();
+                    await syncRoom(currentRoom);
+                    await broadcastRooms();
                 }
                 disconnectTimeouts.delete(currentUser);
             }, 30000); 
@@ -1223,34 +1344,48 @@ io.on('connection', (socket) => {
 });
 
 // ---------------------------------------------------------
-// RAM-BASED GAME LOOP ENGINE
+// REFACTORED REDIS GAME LOOP ENGINE
 // ---------------------------------------------------------
-setInterval(() => {
+let isGameLoopRunning = false;
+setInterval(async () => {
+    if (isGameLoopRunning) return;
+    isGameLoopRunning = true;
+
     try {
         const now = Date.now();
         
         // Handle Prepaid Voice Call Billing
-        for (const [callId, call] of activeCalls.entries()) {
+        const allCalls = await redis.hgetall('active_calls');
+        for (const [callId, callStr] of Object.entries(allCalls)) {
+            const call = JSON.parse(callStr);
             if (call.status === 'ACTIVE' && now >= call.nextChargeTime) {
-                const currentCredits = userCredits.get(call.caller) || 0;
+                const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
                 if (currentCredits < 1) {
-                    activeCalls.delete(callId);
+                    await redis.hdel('active_calls', callId);
                     io.to(`room_${call.room_id}`).emit('call_ended', callId);
-                    syncRoom(call.room_id);
+                    await syncRoom(call.room_id);
                 } else {
-                    userCredits.set(call.caller, currentCredits - 1);
+                    await redis.hset('user_credits', call.caller, currentCredits - 1);
                     db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
-                    call.nextChargeTime = now + 180000;
                     
-                    getUserState(call.caller).then(uState => {
-                        if (uState) io.to(`user_${call.caller}`).emit('user_update', uState);
-                    });
+                    call.nextChargeTime = now + 180000;
+                    await redis.hset('active_calls', callId, JSON.stringify(call));
+
+                    const uState = await getUserState(call.caller);
+                    if (uState) io.to(`user_${call.caller}`).emit('user_update', uState);
                 }
             }
         }
         
-        for (const [roomId, room] of memoryRooms.entries()) {
-            
+        const activeRooms = await redis.smembers('active_rooms');
+        let roomsChanged = false;
+
+        for (const roomId of activeRooms) {
+            const room = await getRoom(roomId);
+            if (!room) continue;
+
+            let needsSync = false;
+
             if (room.status === 'PRE_DRAW' && room.round_end_time && now >= room.round_end_time.getTime()) {
                 room.status = 'BREAK';
                 room.end_reason = 'timeout_predraw';
@@ -1258,42 +1393,58 @@ setInterval(() => {
                 room.word_to_draw = null;
                 room.round_end_time = null;
                 
-                if (!roomChats[roomId]) roomChats[roomId] = [];
-                roomChats[roomId].push({ id: chatCounter++, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() });
-                syncRoom(roomId);
-                continue;
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() };
+                await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                needsSync = true;
             }
 
             if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                 room.status = 'BREAK';
                 room.break_end_time = new Date(now + 10000); 
                 room.members.forEach(m => m.has_given_up = 0);
-                syncRoom(roomId);
+                needsSync = true;
             }
 
             if (room.is_private && room.expire_at && now >= room.expire_at.getTime()) {
                 io.to(`room_${roomId}`).emit('room_expired');
-                deleteRoom(roomId); 
+                await deleteRoomData(roomId);
                 
-                io.in(`room_${roomId}`).fetchSockets().then(sockets => {
-                    sockets.forEach(s => {
-                        s.leave(`room_${roomId}`);
-                        s.join('lobby'); 
-                        s.currentRoom = null;
-                    });
-                });
-                broadcastRooms();
+                const roomSockets = await io.in(`room_${roomId}`).fetchSockets();
+                for (const s of roomSockets) {
+                    s.leave(`room_${roomId}`);
+                    s.join('lobby');
+                    s.data.currentRoom = null;
+                }
+                roomsChanged = true;
+                continue; 
+            }
+
+            if (needsSync) {
+                await saveRoom(room);
+                await syncRoom(roomId);
             }
         }
+
+        if (roomsChanged) {
+            await broadcastRooms();
+        }
         
-        io.sockets.sockets.forEach(s => {
-            if (s.currentRoom) {
-                const idleTime = now - (s.lastActiveEvent || now);
+        // Handle Socket Idle Kick natively
+        const sockets = await io.fetchSockets();
+        let idleChangedRooms = new Set();
+
+        for (const s of sockets) {
+            if (s.data.currentRoom) {
+                const idleTime = now - (s.data.lastActiveEvent || now);
                 if (idleTime > 60000) {
                     s.emit('kick_idle');
-                    const room = memoryRooms.get(s.currentRoom);
+                    const roomId = s.data.currentRoom;
+                    const room = await getRoom(roomId);
+
                     if (room) {
-                        if (room.current_drawer_id === s.currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
+                        if (room.current_drawer_id === s.data.currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
                             room.status = 'BREAK';
                             room.end_reason = 'drawer_disconnected';
                             room.break_end_time = new Date(now + 5000); 
@@ -1301,24 +1452,35 @@ setInterval(() => {
                             room.round_end_time = null;
                         }
 
-                        room.members = room.members.filter(m => m.user_id !== s.currentUser);
-                        checkRoomReset(s.currentRoom);
-                        syncRoom(s.currentRoom);
-                        broadcastRooms();
+                        room.members = room.members.filter(m => m.user_id !== s.data.currentUser);
+                        await saveRoom(room);
+                        await checkRoomReset(roomId);
+                        idleChangedRooms.add(roomId);
                     }
-                    s.leave(`room_${s.currentRoom}`);
+                    s.leave(`room_${roomId}`);
                     s.join('lobby'); 
-                    s.currentRoom = null;
-                } else if (idleTime > 50000 && !s.idleWarned) {
-                    s.idleWarned = true;
+                    s.data.currentRoom = null;
+                } else if (idleTime > 50000 && !s.data.idleWarned) {
+                    s.data.idleWarned = true;
                     s.emit('idle_warning');
                 } else if (idleTime <= 50000) {
-                    s.idleWarned = false;
+                    s.data.idleWarned = false;
                 }
             }
-        });
+        }
 
-    } catch (e) { console.error("Game Loop Error:", e); }
+        for (const roomId of idleChangedRooms) {
+            await syncRoom(roomId);
+        }
+        if (idleChangedRooms.size > 0) {
+            await broadcastRooms();
+        }
+
+    } catch (e) { 
+        console.error("Game Loop Error:", e); 
+    } finally {
+        isGameLoopRunning = false;
+    }
 }, 10000); 
 
 const PORT = process.env.PORT || 3000;
