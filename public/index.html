@@ -170,30 +170,13 @@
             const initPeerConnection = useCallback((stream, targetId, callId) => {
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
-                        // Dual-Stack / IPv4 Google STUN Servers
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        
-                        // Dedicated IPv6 STUN Servers (Essential for proper Dual-Stack gathering)
                         { urls: 'stun:stun.ipv6.google.com:19302' },
-                        
-                        // External STUN (often resolves automatically to both IPv4/v6)
                         { urls: 'stun:stun.cloudflare.com:3478' },
-                        { urls: 'stun:stun.twilio.com:3478' },
-                        
-                        // TURN servers for relay (when p2p is completely blocked)
-                        { 
-                            urls: 'turn:openrelay.metered.ca:80',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        },
-                        { 
-                            urls: 'turn:openrelay.metered.ca:443',
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        }
+                        { urls: 'stun:stun.twilio.com:3478' }
                     ],
-                    iceTransportPolicy: 'all' // Explicitly allow all paths (IPv4/IPv6/Relay)
+                    iceTransportPolicy: 'all'
                 });
                 
                 if (stream) {
@@ -397,6 +380,7 @@
 
         // --- Main App Component ---
         const App = () => {
+            const [loadingState, setLoadingState] = useState('Connecting to server...');
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
@@ -623,8 +607,9 @@
             }, [activeCall, tgId, policyAccepted]);
 
             useEffect(() => {
+                // Removed forced ['websocket'] transport allowing fallback to polling
+                // This resolves connection loading stuck errors when behind proxies/load balancers
                 const newSocket = io({ 
-                    transports: ['websocket'], // Force WebSockets to bypass Railway load balancer state issues
                     reconnection: true,
                     reconnectionDelay: 1000,
                     reconnectionDelayMax: 5000,
@@ -632,6 +617,7 @@
                 });
 
                 newSocket.on('connect', () => {
+                    setLoadingState('Authenticating with server...');
                     newSocket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
                     
                     if (lastKnownRoomRef.current) {
@@ -639,6 +625,15 @@
                             newSocket.emit('join_room', { room_id: lastKnownRoomRef.current });
                         }, 500);
                     }
+                });
+
+                newSocket.on('connect_error', (err) => {
+                    setLoadingState('Server connection failed. Retrying...');
+                    console.error('Socket error:', err);
+                });
+
+                newSocket.on('auth_error', (msg) => {
+                    setLoadingState(`Auth Error: ${msg}`);
                 });
 
                 newSocket.on('lobby_data', (data) => {
@@ -751,7 +746,17 @@
                 setTouchStartPos(null);
             };
 
-            if (!user || !socket) return <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-1 text-primary"></i></div>;
+            if (!user || !socket) {
+                return (
+                    <div className="container mt-5 text-center px-4">
+                        <div className="alert alert-light border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
+                            <i className="fas fa-circle-notch fa-spin fs-1 text-primary mb-3"></i>
+                            <h4 className="fw-bold">{loadingState}</h4>
+                            <p className="text-muted small mt-2">If it stays stuck here, please ensure your backend Server, MySQL, and Redis services are running.</p>
+                        </div>
+                    </div>
+                );
+            }
 
             let timeLeftText = '';
             if (roomData && roomData.room.is_private && roomData.room.expire_at) {
@@ -936,7 +941,7 @@
                                         )}
                                     </div>
                                 </div>
-                            ) : <div className="text-center mt-5">Loading room...</div>}
+                            ) : <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i><p>Loading room data...</p></div>}
                         </>
                     )}
 
