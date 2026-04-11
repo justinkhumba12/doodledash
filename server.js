@@ -265,8 +265,7 @@ if (cluster.isPrimary) {
             const username = update.message.from.username;
             
             try {
-                // FIXED: Corrected invalid SQL Syntax by using VALUES keyword
-                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
+                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
                 await db.query('UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?', [username || null, tgId.toString()]);
             } catch (e) {
                 console.error('Webhook DB Error:', e);
@@ -621,8 +620,8 @@ if (cluster.isPrimary) {
 
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom });
             } catch (err) { 
-                console.error('Auth Error - DB/Redis issues expected:', err); 
-                socket.emit('auth_error', 'Internal Server Databases disconnected (MySQL/Redis). Please check server logs.');
+                console.error('Auth Error', err); 
+                socket.emit('auth_error', 'Database or Server configuration issue.');
             }
         });
         
