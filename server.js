@@ -66,8 +66,6 @@ const INK_CONFIG = {
     black: { free: 2500, extra: 1000, cost: 0.5 }
 };
 
-const disconnectTimeouts = new Map(); // Kept local for socket teardown timers
-
 // ---------------------------------------------------------
 // REDIS HELPERS
 // ---------------------------------------------------------
@@ -222,7 +220,7 @@ app.post('/webhook', async (req, res) => {
         const username = update.message.from.username;
         
         try {
-            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
+            await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
             await db.query('UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?', [username || null, tgId.toString()]);
         } catch (e) {
             console.error('Webhook DB Error:', e);
@@ -525,10 +523,8 @@ io.on('connection', (socket) => {
                 await redis.hset('user_profiles', currentUser, profile_pic);
             }
 
-            if (disconnectTimeouts.has(currentUser)) {
-                clearTimeout(disconnectTimeouts.get(currentUser));
-                disconnectTimeouts.delete(currentUser);
-            }
+            // Clear disconnect timer from Redis if they reconnect
+            await redis.hdel('user_disconnects', currentUser);
 
             socket.join(`user_${currentUser}`);
             
@@ -1306,39 +1302,11 @@ io.on('connection', (socket) => {
         });
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
         const currentUser = socket.data.currentUser;
-        const currentRoom = socket.data.currentRoom;
         if (currentUser) {
-            const timeoutId = setTimeout(async () => {
-                await terminateCallsForUser(currentUser); 
-                if (currentRoom) {
-                    const room = await getRoom(currentRoom);
-                    if (room) {
-                        if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
-                            room.status = 'BREAK';
-                            room.end_reason = 'drawer_disconnected';
-                            room.break_end_time = new Date(Date.now() + 5000); 
-                            room.word_to_draw = null;
-                            room.round_end_time = null;
-                            
-                            const cId = await redis.incr('global_chat_id');
-                            const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() };
-                            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
-                            await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
-                        }
-
-                        room.members = room.members.filter(m => m.user_id !== currentUser);
-                        await saveRoom(room);
-                        await checkRoomReset(currentRoom);
-                    }
-                    await syncRoom(currentRoom);
-                    await broadcastRooms();
-                }
-                disconnectTimeouts.delete(currentUser);
-            }, 30000); 
-
-            disconnectTimeouts.set(currentUser, timeoutId);
+            // Write disconnect timestamp to Redis instead of local memory
+            await redis.hset('user_disconnects', currentUser, Date.now());
         }
     });
 });
@@ -1348,11 +1316,48 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------
 let isGameLoopRunning = false;
 setInterval(async () => {
+    // 1. Acquire Distributed Lock (Expires in 9 seconds to prevent overlap)
+    const lock = await redis.set('game_loop_lock', '1', 'EX', 9, 'NX');
+    if (!lock) return; // Another vCPU instance is already processing this tick
+
     if (isGameLoopRunning) return;
     isGameLoopRunning = true;
 
     try {
         const now = Date.now();
+
+        // 2. Process Global Disconnects (30s timeout) across all vCPUs
+        const disconnects = await redis.hgetall('user_disconnects');
+        for (const [userId, disconnectTimeStr] of Object.entries(disconnects)) {
+            if (now - parseInt(disconnectTimeStr) >= 30000) {
+                await terminateCallsForUser(userId);
+                
+                const activeRooms = await redis.smembers('active_rooms');
+                for (const roomId of activeRooms) {
+                    const room = await getRoom(roomId);
+                    if (room && room.members.some(m => String(m.user_id) === userId)) {
+                        if (room.current_drawer_id === userId && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
+                            room.status = 'BREAK';
+                            room.end_reason = 'drawer_disconnected';
+                            room.break_end_time = new Date(now + 5000); 
+                            room.word_to_draw = null;
+                            room.round_end_time = null;
+                            
+                            const cId = await redis.incr('global_chat_id');
+                            const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() };
+                            await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
+                            await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                        }
+                        room.members = room.members.filter(m => m.user_id !== userId);
+                        await saveRoom(room);
+                        await checkRoomReset(roomId);
+                        await syncRoom(roomId);
+                    }
+                }
+                await redis.hdel('user_disconnects', userId);
+                await broadcastRooms();
+            }
+        }
         
         // Handle Prepaid Voice Call Billing
         const allCalls = await redis.hgetall('active_calls');
