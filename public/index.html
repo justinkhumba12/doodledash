@@ -624,7 +624,7 @@
 
             useEffect(() => {
                 const newSocket = io({ 
-                    transports: ['websocket', 'polling'], 
+                    transports: ['websocket'], // Force WebSockets to bypass Railway load balancer state issues
                     reconnection: true,
                     reconnectionDelay: 1000,
                     reconnectionDelayMax: 5000,
