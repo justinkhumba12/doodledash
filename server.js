@@ -80,6 +80,7 @@ if (cluster.isPrimary) {
                         round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null,
                         turn_index: 0, modified_at: new Date(), is_private: 0,
                         password: null, max_members: 4, base_hints: '[]', creator_id: null, expire_at: null,
+                        undo_steps: 0, redo_steps: 0,
                         members: [] 
                     };
                     await redis.set(`room:${i}`, JSON.stringify(room));
@@ -168,7 +169,7 @@ if (cluster.isPrimary) {
     const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
     const INK_CONFIG = {
-        black: { free: 2500, extra: 1000, cost: 0.5 }
+        black: { free: 2500, extra: 2000, cost: 0.5 }
     };
 
     // ---------------------------------------------------------
@@ -706,12 +707,17 @@ if (cluster.isPrimary) {
             try {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
+
+                const activeRooms = await redis.smembers('active_rooms');
+                if (activeRooms.length >= 1250) {
+                    return socket.emit('create_error', 'Maximum room limit (1250) reached. Cannot create more rooms at this time.');
+                }
+
                 const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
                 let cost = 0; 
                 let expDate = null;
                 
                 if (is_private) {
-                    const activeRooms = await redis.smembers('active_rooms');
                     let hasRoom = false;
                     for(const id of activeRooms) {
                         const r = await getRoom(id);
@@ -743,6 +749,7 @@ if (cluster.isPrimary) {
                     round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null, turn_index: 0,
                     modified_at: new Date(), is_private: is_private ? 1 : 0, password: is_private ? password : null,
                     max_members: limit, base_hints: '[]', creator_id: is_private ? currentUser : null, expire_at: expDate,
+                    undo_steps: 0, redo_steps: 0,
                     members: []
                 });
 
@@ -1096,6 +1103,9 @@ if (cluster.isPrimary) {
             room.end_reason = null; 
             room.round_end_time = null; 
             
+            room.undo_steps = 0;
+            room.redo_steps = 0;
+
             room.members.forEach(m => {
                 m.purchased_hints = '[]';
                 m.has_given_up = 0;
@@ -1105,6 +1115,7 @@ if (cluster.isPrimary) {
             
             await saveRoom(room);
             await releaseRoomMemory(currentRoom); 
+            await redis.del(`room:${currentRoom}:redo`);
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
             await syncRoom(currentRoom);
         });
@@ -1166,6 +1177,8 @@ if (cluster.isPrimary) {
             if (member) {
                 if (!member.ink_used) member.ink_used = {};
                 member.ink_used[activeColor] = (member.ink_used[activeColor] || 0) + strokeLength;
+                room.undo_steps = Math.min((room.undo_steps || 0) + 1, 3);
+                room.redo_steps = 0;
                 await saveRoom(room);
             }
 
@@ -1221,21 +1234,24 @@ if (cluster.isPrimary) {
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || (room.undo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
             
             const lastRaw = await redis.rpop(`room:${currentRoom}:drawings`);
             if (lastRaw) {
                 await redis.rpush(`room:${currentRoom}:redo`, lastRaw);
                 const toRestore = JSON.parse(lastRaw);
                 
-                const room = await getRoom(currentRoom);
-                if (room) {
-                    const member = room.members.find(m => m.user_id === toRestore.user_id);
-                    if (member && toRestore.ink_cost) {
-                        if (!member.ink_used) member.ink_used = {};
-                        member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
-                        await saveRoom(room);
-                    }
+                room.undo_steps = (room.undo_steps || 0) - 1;
+                room.redo_steps = Math.min((room.redo_steps || 0) + 1, 3);
+
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                if (member && toRestore.ink_cost) {
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
                 }
+                await saveRoom(room);
                 
                 const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
                 const allDrawings = allRaw.map(d => JSON.parse(d));
@@ -1249,26 +1265,50 @@ if (cluster.isPrimary) {
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
 
+            const room = await getRoom(currentRoom);
+            if (!room || (room.redo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
+
             const toRestoreRaw = await redis.rpop(`room:${currentRoom}:redo`);
             if (toRestoreRaw) {
                 await redis.rpush(`room:${currentRoom}:drawings`, toRestoreRaw);
                 const toRestore = JSON.parse(toRestoreRaw);
                 
-                const room = await getRoom(currentRoom);
-                if (room) {
-                    const member = room.members.find(m => m.user_id === toRestore.user_id);
-                    if (member && toRestore.ink_cost) {
-                        if (!member.ink_used) member.ink_used = {};
-                        member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
-                        await saveRoom(room);
-                    }
+                room.redo_steps = (room.redo_steps || 0) - 1;
+                room.undo_steps = Math.min((room.undo_steps || 0) + 1, 3);
+                
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                if (member && toRestore.ink_cost) {
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
                 }
+                await saveRoom(room);
                 
                 const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
                 const allDrawings = allRaw.map(d => JSON.parse(d));
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
                 await syncRoom(currentRoom);
             }
+        });
+
+        socket.on('clear_all', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+            const room = await getRoom(currentRoom);
+            if (!room || room.status !== 'DRAWING' || room.current_drawer_id !== currentUser) return;
+
+            await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`);
+            room.undo_steps = 0;
+            room.redo_steps = 0;
+            
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (member) {
+                if (member.ink_used) member.ink_used['black'] = 0;
+            }
+            await saveRoom(room);
+            
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
+            await syncRoom(currentRoom);
         });
 
         socket.on('initiate_call', async ({ receiver_id }) => {
