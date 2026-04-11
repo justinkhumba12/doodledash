@@ -72,7 +72,7 @@
         .cursor-pointer { cursor: pointer; }
         .cursor-pointer:hover { opacity: 0.8; transform: scale(1.05); }
 
-        .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 20px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
+        .lobby-tabs-wrapper { background: #fff; padding: 4px; border-radius: 50px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); display: flex; margin-bottom: 15px; border: 1px solid #e2e8f0; align-items: center; justify-content: space-between; gap: 4px; height: 48px; overflow: hidden; }
         .lobby-tab { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 4px; border-radius: 50px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); color: #64748b; user-select: none; white-space: nowrap; }
         .lobby-tab.active { background: var(--primary); color: white; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); font-size: 0.85rem; flex: 1.1; }
         .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
@@ -90,7 +90,7 @@
 
     <script type="text/babel">
         const INK_CONFIG = {
-            black: { free: 2500, extra: 1000, cost: 0.5 }
+            black: { free: 2500, extra: 2000, cost: 0.5 }
         };
 
         const { useState, useEffect, useRef, useCallback } = React;
@@ -607,8 +607,6 @@
             }, [activeCall, tgId, policyAccepted]);
 
             useEffect(() => {
-                // Removed forced ['websocket'] transport allowing fallback to polling
-                // This resolves connection loading stuck errors when behind proxies/load balancers
                 const newSocket = io({ 
                     reconnection: true,
                     reconnectionDelay: 1000,
@@ -1235,6 +1233,7 @@
             const [searchId, setSearchId] = useState('');
             const [adState, setAdState] = useState({ show: false });
             const [activeTab, setActiveTab] = useState('public');
+            const [hideFull, setHideFull] = useState(false);
             
             const [touchStartPos, setTouchStartPos] = useState(null);
 
@@ -1321,9 +1320,13 @@
             };
 
             let filteredRooms = rooms.filter(r => {
+                if (hideFull && r.member_count >= r.max_members) return false;
                 if (activeTab === 'my_rooms') return r.creator_id === user.tg_id;
                 return activeTab === 'private' ? r.is_private : !r.is_private;
             });
+
+            const totalRooms = rooms.length;
+            const isRoomLimitReached = totalRooms >= 1250;
 
             if (searchId) {
                 const searchNum = searchId.replace(/\D/g, '');
@@ -1371,12 +1374,18 @@
                     
                     <div className="d-flex justify-content-between align-items-center mb-3">
                         <h3 className="fw-bold m-0">Game Lobbies</h3>
-                        <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
-                            <i className="fas fa-plus"></i> Create
-                        </button>
+                        {!isRoomLimitReached ? (
+                            <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
+                                <i className="fas fa-plus"></i> Create
+                            </button>
+                        ) : (
+                            <div className="text-muted small fw-bold text-end">
+                                <i className="fas fa-ban text-danger"></i> Room limit (1250) reached.
+                            </div>
+                        )}
                     </div>
 
-                    <div className="lobby-tabs-wrapper">
+                    <div className="lobby-tabs-wrapper mb-2">
                         <div className={`lobby-tab ${activeTab === 'public' ? 'active' : ''}`} onClick={() => setActiveTab('public')}>
                             <i className="fas fa-globe me-2"></i>Public
                         </div>
@@ -1386,6 +1395,14 @@
                         <div className={`lobby-tab ${activeTab === 'my_rooms' ? 'active' : ''}`} onClick={() => setActiveTab('my_rooms')}>
                             <i className="fas fa-user me-2"></i>My Rooms
                         </div>
+                    </div>
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3 px-2">
+                        <div className="form-check form-switch">
+                            <input className="form-check-input" type="checkbox" id="hideFullCheck" checked={hideFull} onChange={e => setHideFull(e.target.checked)} />
+                            <label className="form-check-label small fw-bold text-muted" htmlFor="hideFullCheck">Hide Full Rooms</label>
+                        </div>
+                        <div className="small text-muted fw-bold">{filteredRooms.length} Rooms</div>
                     </div>
 
                     <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="swipe-container" style={{ minHeight: '300px' }}>
@@ -1813,7 +1830,7 @@
                 if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
                     emitTimeoutRef.current = setTimeout(() => {
                         flushDrawQueue();
-                    }, 100);
+                    }, 500);
                 }
             };
 
@@ -1907,14 +1924,29 @@
                                 )}
                             </div>
                         )}
-
-                        {isDrawer && isDrawingPhase && (
-                            <div className="position-absolute bottom-0 end-0 m-2 d-flex gap-2">
-                                <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('undo')} title="Undo"><i className="fas fa-undo"></i></button>
-                                <button className="btn btn-sm btn-light shadow rounded-circle" onClick={() => socket.emit('redo')} title="Redo"><i className="fas fa-redo"></i></button>
-                            </div>
-                        )}
                     </div>
+
+                    {isDrawer && isDrawingPhase && (
+                        <div className="d-flex gap-2 justify-content-center mt-3 w-100">
+                            <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                                    onClick={() => socket.emit('undo')} 
+                                    disabled={(room.undo_steps || 0) === 0}
+                                    title="Undo">
+                                <i className="fas fa-undo"></i> <span className="badge bg-secondary rounded-circle">{room.undo_steps || 0}</span>
+                            </button>
+                            <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-danger d-flex align-items-center gap-2 border border-danger" 
+                                    onClick={() => socket.emit('clear_all')} 
+                                    title="Clear All">
+                                <i className="fas fa-trash-alt"></i> Clear All
+                            </button>
+                            <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                                    onClick={() => socket.emit('redo')} 
+                                    disabled={(room.redo_steps || 0) === 0}
+                                    title="Redo">
+                                <i className="fas fa-redo"></i> <span className="badge bg-secondary rounded-circle">{room.redo_steps || 0}</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
             );
         };
