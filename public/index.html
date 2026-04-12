@@ -187,19 +187,13 @@
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun.ipv6.google.com:19302' },
                         { urls: 'stun:stun.cloudflare.com:3478' },
-                        // Forcing TCP transport explicitly first. Mobile ISPs (IPv6 NAT64) often block UDP TURN packets.
-                        {
-                            urls: [
-                                'turn:openrelay.metered.ca:443?transport=tcp',
-                                'turn:openrelay.metered.ca:443?transport=udp',
-                                'turn:openrelay.metered.ca:80?transport=tcp',
-                                'turn:openrelay.metered.ca:80?transport=udp'
-                            ],
-                            username: 'openrelayproject',
-                            credential: 'openrelayproject'
-                        }
+                        // Separating TURN URLs into individual objects for strict mobile browser compatibility
+                        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                        { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+                        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
                     ],
                     iceTransportPolicy: 'all',
                     bundlePolicy: 'max-bundle',
@@ -224,7 +218,14 @@
                             hasRelayCandidate = true;
                         }
 
-                        candidateBatchRef.current.push(e.candidate);
+                        // Serialize candidate safely! Socket.io sometimes strips WebRTC object properties.
+                        const candidateObj = e.candidate.toJSON ? e.candidate.toJSON() : {
+                            candidate: e.candidate.candidate,
+                            sdpMid: e.candidate.sdpMid,
+                            sdpMLineIndex: e.candidate.sdpMLineIndex
+                        };
+                        candidateBatchRef.current.push(candidateObj);
+
                         if (!batchTimerRef.current) {
                             batchTimerRef.current = setTimeout(() => {
                                 console.log(`[WebRTC] Sending batch of ${candidateBatchRef.current.length} ICE candidates.`);
@@ -285,7 +286,7 @@
                     if (pc.iceConnectionState === 'failed') {
                         console.error('[WebRTC] ICE Connection failed! Check firewall or TURN server configurations.');
                         if (!hasRelayCandidate) {
-                            setModal({ type: 'error', title: 'TURN Relay Blocked', content: 'Connection failed. Your network or the public TURN server blocked the relay. You may need to provide your own Metered.ca TURN API credentials in the code.' });
+                            setModal({ type: 'error', title: 'TURN Relay Blocked', content: 'Connection failed. The free public TURN server blocked your IPs. You must get your own free TURN server from metered.ca' });
                         } else {
                             setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked routing. Ensure firewall permits TURN/WebRTC.' });
                         }
