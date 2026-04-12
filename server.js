@@ -331,12 +331,8 @@ if (cluster.isPrimary) {
         if (rows.length === 0) return null;
         let u = rows[0];
         
-        const redisCredits = await redis.hget('user_credits', tg_id);
-        if (redisCredits !== null) {
-            u.credits = parseFloat(redisCredits);
-        } else {
-            await redis.hset('user_credits', tg_id, u.credits);
-        }
+        // Fix for manual DB Edits: ALWAYS sync DB value to Redis cache
+        await redis.hset('user_credits', tg_id, u.credits);
         
         if (!u.ad1_is_today) u.ad_claims_today = 0;
         if (!u.ad2_is_today) u.ad2_claims_today = 0;
@@ -583,12 +579,7 @@ if (cluster.isPrimary) {
                     await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                 }
 
-                const [dbUser] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (dbUser.length > 0) {
-                    const hasCredit = await redis.hexists('user_credits', currentUser);
-                    if (!hasCredit) await redis.hset('user_credits', currentUser, parseFloat(dbUser[0].credits));
-                }
-
+                // Removed redundant Redis setting here because getUserState will handle DB priority.
                 const userState = await getUserState(currentUser);
                 
                 const activeRooms = await redis.smembers('active_rooms');
@@ -740,7 +731,7 @@ if (cluster.isPrimary) {
                     if (currentCredits < cost) return socket.emit('create_error', `Not enough credits. Costs ${cost} credits.`);
                     
                     await redis.hset('user_credits', currentUser, currentCredits - cost);
-                    db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
+                    await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
                 }
 
                 const newRoomId = await redis.incr('next_room_id');
@@ -846,7 +837,7 @@ if (cluster.isPrimary) {
                 if (!room || !room.is_private || room.creator_id !== currentUser) return;
 
                 await redis.hset('user_credits', currentUser, currentCredits - cost);
-                db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
                 
                 room.expire_at = new Date(room.expire_at.getTime() + hours * 3600000);
                 await saveRoom(room);
@@ -996,7 +987,7 @@ if (cluster.isPrimary) {
                         }
                         
                         await redis.hset('user_credits', currentUser, currentCredits - 1);
-                        db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
+                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                         
                         const userState = await getUserState(currentUser);
                         if (userState) socket.emit('user_update', userState);
@@ -1046,7 +1037,7 @@ if (cluster.isPrimary) {
                     if (currentCredits < 1) return socket.emit('create_error', 'Not enough credits to buy a hint.');
 
                     await redis.hset('user_credits', currentUser, currentCredits - 1);
-                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]).catch(console.error);
+                    await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                     
                     purchased.push(index);
                     member.purchased_hints = JSON.stringify(purchased);
@@ -1216,7 +1207,7 @@ if (cluster.isPrimary) {
                     }
 
                     await redis.hset('user_credits', currentUser, currentCredits - cost);
-                    db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]).catch(console.error);
+                    await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
 
                     member.ink_extra[targetColor] = extraInkAmount; 
                     await saveRoom(room);
@@ -1334,36 +1325,38 @@ if (cluster.isPrimary) {
         });
 
         socket.on('accept_call', async ({ call_id }) => {
-            const currentUser = socket.data.currentUser;
-            const currentRoom = socket.data.currentRoom;
-            const callStr = await redis.hget('active_calls', call_id);
-            if (callStr) {
-                const call = JSON.parse(callStr);
-                if (String(call.receiver) === currentUser) {
-                    const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
-                    if (currentCredits < 1) {
-                        await redis.hdel('active_calls', call_id);
-                        io.to(`room_${call.room_id}`).emit('call_ended', call_id);
-                        await syncRoom(call.room_id);
-                        return;
+            try {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                const callStr = await redis.hget('active_calls', call_id);
+                if (callStr) {
+                    const call = JSON.parse(callStr);
+                    if (String(call.receiver) === currentUser) {
+                        const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
+                        if (currentCredits < 1) {
+                            await redis.hdel('active_calls', call_id);
+                            io.to(`room_${call.room_id}`).emit('call_ended', call_id);
+                            await syncRoom(call.room_id);
+                            return;
+                        }
+
+                        await redis.hset('user_credits', call.caller, currentCredits - 1);
+                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]);
+
+                        call.status = 'ACTIVE';
+                        call.startTime = Date.now();
+                        call.nextChargeTime = Date.now() + 180000; 
+                        await redis.hset('active_calls', call_id, JSON.stringify(call));
+                        
+                        io.to(`room_${call.room_id}`).emit('call_update', call);
+                        
+                        const uState1 = await getUserState(call.caller);
+                        if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
+
+                        await syncRoom(currentRoom);
                     }
-
-                    await redis.hset('user_credits', call.caller, currentCredits - 1);
-                    db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
-
-                    call.status = 'ACTIVE';
-                    call.startTime = Date.now();
-                    call.nextChargeTime = Date.now() + 180000; 
-                    await redis.hset('active_calls', call_id, JSON.stringify(call));
-                    
-                    io.to(`room_${call.room_id}`).emit('call_update', call);
-                    
-                    const uState1 = await getUserState(call.caller);
-                    if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
-
-                    await syncRoom(currentRoom);
                 }
-            }
+            } catch (err) { console.error('Accept call error:', err); }
         });
 
         socket.on('end_call', async ({ call_id }) => {
@@ -1451,7 +1444,7 @@ if (cluster.isPrimary) {
                         await syncRoom(call.room_id);
                     } else {
                         await redis.hset('user_credits', call.caller, currentCredits - 1);
-                        db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]).catch(console.error);
+                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]);
                         
                         call.nextChargeTime = now + 180000;
                         await redis.hset('active_calls', callId, JSON.stringify(call));
