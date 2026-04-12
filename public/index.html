@@ -793,6 +793,13 @@
                 newSocket.on('user_update', (userData) => setUser(userData));
                 newSocket.on('room_sync', (data) => setRoomData(data));
                 
+                newSocket.on('update_undo_redo', ({ undo_steps, redo_steps }) => {
+                    setRoomData(prev => {
+                        if (!prev) return prev;
+                        return { ...prev, room: { ...prev.room, undo_steps, redo_steps } };
+                    });
+                });
+
                 newSocket.on('kick_idle', () => {
                     setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
                     setCurrentRoomId(null);
@@ -2182,34 +2189,4 @@
                                 <div className="d-flex w-100">
                                     <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
                                         value={input} onChange={e=>setInput(e.target.value)} 
-                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
-                                        disabled={isBlocked}
-                                        placeholder={placeholderText} />
-                                    <button className="btn btn-success rounded-end-pill px-3" onClick={handleGuessSubmit} disabled={isBlocked}>
-                                        <i className="fas fa-check"></i>
-                                    </button>
-                                </div>
-                            ) : null}
-
-                            {(!isDrawer && hasGivenUp) ? (
-                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
-                                    You've given up. Waiting for others ({givenUpCount}/{totalGuessers})
-                                </div>
-                            ) : null}
-
-                            {isDrawer ? (
-                                <div className="text-center text-muted p-2 fst-italic small fw-bold">
-                                    {roomData.room.status === 'PRE_DRAW' ? 'Choose a word to draw!' : 'You are the drawer. Use tools to draw!'}
-                                </div>
-                            ) : null}
-                        </div>
-                    ) : null}
-                </div>
-            );
-        };
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit
