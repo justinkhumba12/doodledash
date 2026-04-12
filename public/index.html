@@ -809,7 +809,7 @@
             loadRooms(false);
             startRoomPolling();
         } else {
-            fetch(`api.php?action=check_room_status&tg_id=${tg_id}&room_id=${currentRoom}&tg_data=${encodeURIComponent(tg_data)}`)
+            fetch(`/api?action=check_room_status&tg_id=${tg_id}&room_id=${currentRoom}&tg_data=${encodeURIComponent(tg_data)}`)
             .then(res => res.json())
             .then(data => {
                 if(data.in_room) {
@@ -848,7 +848,7 @@
             if (checkAFK()) return;
             if(currentRoom) {
                 // Background fetch to exclusively sync the credit badge while in a room (e.g. while call deductions happen)
-                fetch(`api.php?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}`)
+                fetch(`/api?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}`)
                     .then(res => res.json())
                     .then(data => {
                         if (data.user_data && data.user_data.credits !== undefined) {
@@ -957,7 +957,7 @@
         fd.append('tg_id', tg_id);
         fd.append('tg_data', tg_data);
         
-        fetch('api.php', { method: 'POST', body: fd })
+        fetch('/api', { method: 'POST', body: fd })
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
@@ -987,7 +987,7 @@
         fd.append('tg_id', tg_id);
         fd.append('tg_data', tg_data);
         
-        fetch('api.php', { method: 'POST', body: fd })
+        fetch('/api', { method: 'POST', body: fd })
             .then(res => res.json())
             .then(data => {
                 if (data.success) {
@@ -1032,7 +1032,7 @@
     }
 
     function loadRooms(isInitialLoad) {
-        fetch(`api.php?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}&photo_url=${encodeURIComponent(tg_photo_url)}`)
+        fetch(`/api?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}&photo_url=${encodeURIComponent(tg_photo_url)}`)
             .then(res => res.json())
             .then(data => {
                 if(data.error) {
@@ -1112,7 +1112,7 @@
         fd.append('tg_id', tg_id);
         fd.append('tg_data', tg_data);
 
-        fetch('api.php', { method: 'POST', body: fd })
+        fetch('/api', { method: 'POST', body: fd })
             .then(res => res.json())
             .then(data => {
                 if(data.success) {
@@ -1126,7 +1126,7 @@
     }
 
     function joinRandomRoom() {
-        fetch(`api.php?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}`)
+        fetch(`/api?action=get_rooms&tg_id=${tg_id}&tg_data=${encodeURIComponent(tg_data)}`)
             .then(res => res.json())
             .then(data => {
                 let availableRooms = data.rooms.filter(r => r.member_count < 4);
@@ -1149,7 +1149,7 @@
             formData.append('tg_data', tg_data);
             formData.append('room_id', id);
 
-            fetch('api.php', { method: 'POST', body: formData })
+            fetch('/api', { method: 'POST', body: formData })
                 .then(res => res.json())
                 .then(data => {
                     if(data.success) {
@@ -1197,7 +1197,7 @@
         formData.append('tg_id', tg_id);
         formData.append('tg_data', tg_data);
         
-        fetch('api.php', { method: 'POST', body: formData }).then(() => {
+        fetch('/api', { method: 'POST', body: formData }).then(() => {
             cleanupCall(); // Instantly destroy WebRTC state locally
             
             currentRoom = null;
@@ -1233,7 +1233,7 @@
         if(!currentRoom || isLeaving) return; 
         if (checkAFK()) return;
         
-        fetch(`api.php?action=sync&tg_id=${tg_id}&room_id=${currentRoom}&tg_data=${encodeURIComponent(tg_data)}&photo_url=${encodeURIComponent(tg_photo_url)}`)
+        fetch(`/api?action=sync&tg_id=${tg_id}&room_id=${currentRoom}&tg_data=${encodeURIComponent(tg_data)}&photo_url=${encodeURIComponent(tg_photo_url)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.error && data.error === 'Room deleted') {
@@ -1463,7 +1463,7 @@
         fd.append('receiver_id', receiverId);
         fd.append('type', type);
         fd.append('payload', JSON.stringify(payloadObj));
-        fetch('api.php', { method: 'POST', body: fd });
+        fetch('/api', { method: 'POST', body: fd });
     }
 
     // Call Actions invoked by UI buttons
@@ -1482,7 +1482,7 @@
                     fd.append('tg_data', tg_data);
                     fd.append('room_id', currentRoom);
                     fd.append('receiver_id', receiverId);
-                    fetch('api.php', { method: 'POST', body: fd })
+                    fetch('/api', { method: 'POST', body: fd })
                         .then(r => r.json())
                         .then(data => {
                             if(!data.success) {
@@ -1513,7 +1513,7 @@
             fd.append('tg_id', tg_id);
             fd.append('tg_data', tg_data);
             fd.append('call_id', currentCallData.id);
-            fetch('api.php', { method: 'POST', body: fd }).then(r=>r.json()).then(data => {
+            fetch('/api', { method: 'POST', body: fd }).then(r=>r.json()).then(data => {
                 if(!data.success) showCustomAlert(data.message, 'warning');
             });
         });
@@ -1528,7 +1528,7 @@
         fd.append('tg_id', tg_id);
         fd.append('tg_data', tg_data);
         fd.append('call_id', currentCallData.id);
-        fetch('api.php', { method: 'POST', body: fd });
+        fetch('/api', { method: 'POST', body: fd });
         cleanupCall();
     }
 
@@ -1539,7 +1539,7 @@
         fd.append('tg_id', tg_id);
         fd.append('tg_data', tg_data);
         fd.append('call_id', currentCallData.id);
-        fetch('api.php', { method: 'POST', body: fd });
+        fetch('/api', { method: 'POST', body: fd });
         cleanupCall();
     }
 
@@ -2016,7 +2016,7 @@
         fd.append('tg_data', tg_data); 
         fd.append('room_id', currentRoom); 
         fd.append('word', word);
-        fetch('api.php', { method: 'POST', body: fd }).then(() => {
+        fetch('/api', { method: 'POST', body: fd }).then(() => {
             sync();
         });
     }
@@ -2040,7 +2040,7 @@
         fd.append('tg_data', tg_data); 
         fd.append('room_id', currentRoom); 
         fd.append('message', msg);
-        fetch('api.php', { method: 'POST', body: fd }).then(res => res.json()).then(data => {
+        fetch('/api', { method: 'POST', body: fd }).then(res => res.json()).then(data => {
             if(!data.success && data.message) showCustomAlert(data.message, "warning");
             sync(); 
         });
@@ -2066,7 +2066,7 @@
         fd.append('room_id', currentRoom); 
         fd.append('guess', guessVal);
         
-        fetch('api.php', { method: 'POST', body: fd })
+        fetch('/api', { method: 'POST', body: fd })
             .then(res => res.json())
             .then(data => {
                 if(!data.success) {
@@ -2084,7 +2084,7 @@
         fd.append('tg_id', tg_id); 
         fd.append('tg_data', tg_data);
         fd.append('room_id', currentRoom);
-        fetch('api.php', { method: 'POST', body: fd }).then(sync);
+        fetch('/api', { method: 'POST', body: fd }).then(sync);
     }
 
     function togglePanel() {
@@ -2257,7 +2257,7 @@
             fd.append('tg_id', tg_id);
             fd.append('tg_data', tg_data);
             fd.append('room_id', currentRoom);
-            fetch('api.php', { method: 'POST', body: fd })
+            fetch('/api', { method: 'POST', body: fd })
                 .then(r => r.json())
                 .then(data => {
                     if (data.success && data.line_data) {
@@ -2299,7 +2299,7 @@
         fd.append('tg_data', tg_data); 
         fd.append('room_id', currentRoom); 
         fd.append('lines', linesJson);
-        fetch('api.php', { method: 'POST', body: fd });
+        fetch('/api', { method: 'POST', body: fd });
     }
 
     function drawFromServer(drawingsJSON) {
