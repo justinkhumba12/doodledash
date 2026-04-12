@@ -136,6 +136,29 @@
             </div>
         );
 
+        // --- WebRTC IPv4 to IPv6 Wrapper Methods ---
+        const wrapIPv4ToIPv6SDP = (sdpObj) => {
+            if (!sdpObj || !sdpObj.sdp) return sdpObj;
+            let newSdp = sdpObj.sdp;
+            // Map standard connection lines
+            newSdp = newSdp.replace(/IN IP4 ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})/g, 'IN IP6 ::ffff:$1');
+            // Map embedded candidate strings
+            newSdp = newSdp.split('\n').map(line => {
+                if (line.trim().startsWith('a=candidate')) {
+                    return line.replace(/\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b/g, '::ffff:$1');
+                }
+                return line;
+            }).join('\n');
+            return { type: sdpObj.type, sdp: newSdp };
+        };
+
+        const wrapIPv4ToIPv6Candidate = (candidateObj) => {
+            if (!candidateObj || !candidateObj.candidate) return candidateObj;
+            let obj = typeof candidateObj.toJSON === 'function' ? candidateObj.toJSON() : { ...candidateObj };
+            obj.candidate = obj.candidate.replace(/\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b/g, '::ffff:$1');
+            return obj;
+        };
+
         // --- Custom React Hook for WebRTC Logic ---
         const useWebRTC = (socket, tgIdRef, setModal) => {
             const [activeCall, setActiveCall] = useState(null);
@@ -185,7 +208,8 @@
                 
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
-                        candidateBatchRef.current.push(e.candidate);
+                        const wrappedCand = wrapIPv4ToIPv6Candidate(e.candidate);
+                        candidateBatchRef.current.push(wrappedCand);
                         if (!batchTimerRef.current) {
                             batchTimerRef.current = setTimeout(() => {
                                 if (socket) {
@@ -272,8 +296,11 @@
                         
                         const pc = initPeerConnection(stream, sender_id, call_id);
                         
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                        const answer = await pc.createAnswer();
+                        const wrappedOffer = wrapIPv4ToIPv6SDP(signal.offer);
+                        await pc.setRemoteDescription(new RTCSessionDescription(wrappedOffer));
+                        
+                        let answer = await pc.createAnswer();
+                        answer = wrapIPv4ToIPv6SDP(answer);
                         await pc.setLocalDescription(answer);
                         socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
                         
@@ -283,7 +310,9 @@
                     } else if (signal.type === 'answer') {
                         const pc = peerConnectionRef.current;
                         if (!pc) return;
-                        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+                        
+                        const wrappedAnswer = wrapIPv4ToIPv6SDP(signal.answer);
+                        await pc.setRemoteDescription(new RTCSessionDescription(wrappedAnswer));
                         
                         while (candidateQueue.current.length > 0) {
                             try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch (e) {}
@@ -291,10 +320,12 @@
                     } else if (signal.type === 'candidates') {
                         const pc = peerConnectionRef.current;
                         for (const c of signal.candidates) {
+                            const wrappedCand = wrapIPv4ToIPv6Candidate(c);
+                            const rtcCand = new RTCIceCandidate(wrappedCand);
                             if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+                                try { await pc.addIceCandidate(rtcCand); } catch (e) {}
                             } else {
-                                candidateQueue.current.push(new RTCIceCandidate(c));
+                                candidateQueue.current.push(rtcCand);
                             }
                         }
                     }
@@ -308,7 +339,8 @@
                         const targetId = call.receiver;
                         const pc = initPeerConnection(stream, targetId, call.id);
                         try {
-                            const offer = await pc.createOffer({ offerToReceiveAudio: true });
+                            let offer = await pc.createOffer({ offerToReceiveAudio: true });
+                            offer = wrapIPv4ToIPv6SDP(offer);
                             await pc.setLocalDescription(offer);
                             socket.emit('webrtc_signal', { 
                                 call_id: call.id, 
