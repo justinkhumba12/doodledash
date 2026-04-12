@@ -168,19 +168,28 @@
             };
 
             const initPeerConnection = useCallback((stream, targetId, callId) => {
-                // ADDED: Turn servers to act as NAT64 translators for IPv4 <-> IPv6 bridging
+                // NAT64/DNS64 Bridging Optimization: 
+                // Grouped TURN URLs, added max-bundle and candidate pooling to ensure reliable FQDN resolution and relay.
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.ipv6.google.com:19302' }, // Explicit IPv6 STUN mapping
+                        { urls: 'stun:stun.ipv6.google.com:19302' }, 
                         { urls: 'stun:stun.cloudflare.com:3478' },
-                        // TURN Server: This acts as the gateway/relay when direct IPv6 to IPv4 routing fails
-                        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+                        {
+                            urls: [
+                                'turn:openrelay.metered.ca:80',
+                                'turn:openrelay.metered.ca:443',
+                                'turn:openrelay.metered.ca:443?transport=tcp'
+                            ],
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
                     ],
-                    iceTransportPolicy: 'all'
+                    iceTransportPolicy: 'all',
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require',
+                    iceCandidatePoolSize: 10
                 });
                 
                 if (stream) {
