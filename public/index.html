@@ -172,30 +172,33 @@
 
             const initPeerConnection = useCallback((stream, targetId, callId) => {
                 console.log('[WebRTC] Initializing PeerConnection for call_id:', callId, 'target_id:', targetId);
-                // NAT64/DNS64 Bridging Optimization: 
-                // Grouped TURN URLs, added max-bundle and candidate pooling to ensure reliable FQDN resolution and relay.
                 const pc = new RTCPeerConnection({ 
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.ipv6.google.com:19302' }, 
-                        { urls: 'stun:stun.cloudflare.com:3478' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        // TURN servers are strictly REQUIRED for IPv4 <-> IPv6 bridging.
+                        // We separate the URLs into individual objects for max browser compatibility.
                         {
-                            urls: [
-                                'turn:openrelay.metered.ca:80',
-                                'turn:openrelay.metered.ca:443',
-                                'turn:openrelay.metered.ca:443?transport=tcp'
-                            ],
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        {
+                            urls: 'turn:openrelay.metered.ca:443',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        },
+                        {
+                            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
                             username: 'openrelayproject',
                             credential: 'openrelayproject'
                         }
-                    ],
-                    iceTransportPolicy: 'all',
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require',
-                    iceCandidatePoolSize: 10
+                    ]
                 });
                 
+                let hasRelayCandidate = false;
+
                 if (stream) {
                     console.log('[WebRTC] Adding local tracks to PeerConnection.');
                     stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -206,6 +209,11 @@
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
                         console.log(`[WebRTC] Local ICE Candidate gathered: ${e.candidate.candidate}`);
+                        
+                        if (e.candidate.candidate.includes('typ relay')) {
+                            hasRelayCandidate = true;
+                        }
+
                         candidateBatchRef.current.push(e.candidate);
                         if (!batchTimerRef.current) {
                             batchTimerRef.current = setTimeout(() => {
@@ -223,6 +231,13 @@
                         }
                     } else {
                         console.log('[WebRTC] ICE Candidate gathering complete (null candidate).');
+                        
+                        if (!hasRelayCandidate) {
+                            console.warn('\n[WebRTC CRITICAL WARNING]: ICE gathering finished but NO TURN relay candidates were gathered!');
+                            console.warn('-> This means the free public TURN server (openrelay.metered.ca) is currently down, or blocking/rate-limiting your IP.');
+                            console.warn('-> Without a relay candidate, IPv4 and IPv6 users CANNOT connect. The call will get stuck in "checking".\n');
+                        }
+
                         if (candidateBatchRef.current.length > 0) {
                             if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
                             console.log(`[WebRTC] Sending final batch of ${candidateBatchRef.current.length} ICE candidates.`);
