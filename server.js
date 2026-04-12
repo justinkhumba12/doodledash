@@ -496,6 +496,16 @@ if (cluster.isPrimary) {
         socket.data.idleWarned = false;
         socket.data.currentUser = null;
         socket.data.currentRoom = null;
+        
+        // Prevent race conditions exclusively per-socket for synchronous actions like drawing/undo
+        socket.actionLock = Promise.resolve();
+        const queuedAction = async (fn) => {
+            const prev = socket.actionLock;
+            let resolveLock;
+            socket.actionLock = new Promise(r => resolveLock = r);
+            await prev;
+            try { await fn(); } catch(e){ console.error(e) } finally { resolveLock(); }
+        };
 
         const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
             const room = await getRoom(roomIdNum);
@@ -579,7 +589,6 @@ if (cluster.isPrimary) {
                     await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
                 }
 
-                // Removed redundant Redis setting here because getUserState will handle DB priority.
                 const userState = await getUserState(currentUser);
                 
                 const activeRooms = await redis.smembers('active_rooms');
@@ -1108,6 +1117,7 @@ if (cluster.isPrimary) {
             await releaseRoomMemory(currentRoom); 
             await redis.del(`room:${currentRoom}:redo`);
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []); 
+            io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: 0, redo_steps: 0 });
             await syncRoom(currentRoom);
         });
 
@@ -1147,7 +1157,7 @@ if (cluster.isPrimary) {
             }
         });
 
-        socket.on('draw', async ({ lines }) => {
+        socket.on('draw', ({ lines }) => queuedAction(async () => {
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
@@ -1180,7 +1190,94 @@ if (cluster.isPrimary) {
             await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawing));
             
             socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
-        });
+            
+            // Instantly sync undo/redo state safely to enable drawing UI buttons properly
+            io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+        }));
+
+        socket.on('undo', () => queuedAction(async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || (room.undo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
+            
+            const lastRaw = await redis.rpop(`room:${currentRoom}:drawings`);
+            if (lastRaw) {
+                await redis.rpush(`room:${currentRoom}:redo`, lastRaw);
+                // Strict enforcement to only store 3 recent redo actions
+                await redis.ltrim(`room:${currentRoom}:redo`, -3, -1);
+                
+                const toRestore = JSON.parse(lastRaw);
+                
+                room.undo_steps = (room.undo_steps || 0) - 1;
+                room.redo_steps = Math.min((room.redo_steps || 0) + 1, 3);
+
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                if (member && toRestore.ink_cost) {
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
+                }
+                await saveRoom(room);
+                
+                const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+                const allDrawings = allRaw.map(d => JSON.parse(d));
+                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+            }
+        }));
+
+        socket.on('redo', () => queuedAction(async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || (room.redo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
+
+            const toRestoreRaw = await redis.rpop(`room:${currentRoom}:redo`);
+            if (toRestoreRaw) {
+                await redis.rpush(`room:${currentRoom}:drawings`, toRestoreRaw);
+                const toRestore = JSON.parse(toRestoreRaw);
+                
+                room.redo_steps = (room.redo_steps || 0) - 1;
+                room.undo_steps = Math.min((room.undo_steps || 0) + 1, 3);
+                
+                const member = room.members.find(m => m.user_id === toRestore.user_id);
+                if (member && toRestore.ink_cost) {
+                    if (!member.ink_used) member.ink_used = {};
+                    member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
+                }
+                await saveRoom(room);
+                
+                const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+                const allDrawings = allRaw.map(d => JSON.parse(d));
+                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+            }
+        }));
+
+        socket.on('clear_all', () => queuedAction(async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+            const room = await getRoom(currentRoom);
+            if (!room || room.status !== 'DRAWING' || room.current_drawer_id !== currentUser) return;
+
+            await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`);
+            room.undo_steps = 0;
+            room.redo_steps = 0;
+            
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (member) {
+                if (member.ink_used) member.ink_used['black'] = 0;
+            }
+            await saveRoom(room);
+            
+            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
+            io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: 0, redo_steps: 0 });
+        }));
 
         socket.on('buy_ink', async () => {
             try {
@@ -1219,87 +1316,6 @@ if (cluster.isPrimary) {
                     await syncRoom(currentRoom); 
                 }
             } catch (err) { console.error('Buy Ink Error:', err); }
-        });
-
-        socket.on('undo', async () => {
-            const currentUser = socket.data.currentUser;
-            const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom) return;
-
-            const room = await getRoom(currentRoom);
-            if (!room || (room.undo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
-            
-            const lastRaw = await redis.rpop(`room:${currentRoom}:drawings`);
-            if (lastRaw) {
-                await redis.rpush(`room:${currentRoom}:redo`, lastRaw);
-                const toRestore = JSON.parse(lastRaw);
-                
-                room.undo_steps = (room.undo_steps || 0) - 1;
-                room.redo_steps = Math.min((room.redo_steps || 0) + 1, 3);
-
-                const member = room.members.find(m => m.user_id === toRestore.user_id);
-                if (member && toRestore.ink_cost) {
-                    if (!member.ink_used) member.ink_used = {};
-                    member.ink_used[toRestore.color] = Math.max(0, (member.ink_used[toRestore.color] || 0) - toRestore.ink_cost);
-                }
-                await saveRoom(room);
-                
-                const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
-                const allDrawings = allRaw.map(d => JSON.parse(d));
-                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
-                await syncRoom(currentRoom);
-            }
-        });
-
-        socket.on('redo', async () => {
-            const currentUser = socket.data.currentUser;
-            const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom) return;
-
-            const room = await getRoom(currentRoom);
-            if (!room || (room.redo_steps || 0) <= 0 || room.current_drawer_id !== currentUser) return;
-
-            const toRestoreRaw = await redis.rpop(`room:${currentRoom}:redo`);
-            if (toRestoreRaw) {
-                await redis.rpush(`room:${currentRoom}:drawings`, toRestoreRaw);
-                const toRestore = JSON.parse(toRestoreRaw);
-                
-                room.redo_steps = (room.redo_steps || 0) - 1;
-                room.undo_steps = Math.min((room.undo_steps || 0) + 1, 3);
-                
-                const member = room.members.find(m => m.user_id === toRestore.user_id);
-                if (member && toRestore.ink_cost) {
-                    if (!member.ink_used) member.ink_used = {};
-                    member.ink_used[toRestore.color] = (member.ink_used[toRestore.color] || 0) + toRestore.ink_cost;
-                }
-                await saveRoom(room);
-                
-                const allRaw = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
-                const allDrawings = allRaw.map(d => JSON.parse(d));
-                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
-                await syncRoom(currentRoom);
-            }
-        });
-
-        socket.on('clear_all', async () => {
-            const currentUser = socket.data.currentUser;
-            const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom) return;
-            const room = await getRoom(currentRoom);
-            if (!room || room.status !== 'DRAWING' || room.current_drawer_id !== currentUser) return;
-
-            await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`);
-            room.undo_steps = 0;
-            room.redo_steps = 0;
-            
-            const member = room.members.find(m => m.user_id === currentUser);
-            if (member) {
-                if (member.ink_used) member.ink_used['black'] = 0;
-            }
-            await saveRoom(room);
-            
-            io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
-            await syncRoom(currentRoom);
         });
 
         socket.on('initiate_call', async ({ receiver_id }) => {
