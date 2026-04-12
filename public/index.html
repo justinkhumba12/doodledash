@@ -136,20 +136,29 @@
             </div>
         );
 
-        // --- WebRTC IPv4 to IPv6 Wrapper Methods ---
+        // --- WebRTC IPv4 to IPv6 Wrapper Methods (Strictly mapped, no dual-stack) ---
         const wrapIPv4ToIPv6SDP = (sdpObj) => {
             if (!sdpObj || !sdpObj.sdp) return sdpObj;
             let newSdp = sdpObj.sdp;
+            
             // Map standard connection lines
             newSdp = newSdp.replace(/IN IP4 ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})/g, 'IN IP6 ::ffff:$1');
-            // Map embedded candidate strings
-            newSdp = newSdp.split('\n').map(line => {
+            
+            // Map embedded candidate strings with precise \r\n line breaks
+            const lines = newSdp.split(/\r?\n/);
+            const processedLines = lines.map(line => {
                 if (line.trim().startsWith('a=candidate')) {
                     return line.replace(/\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b/g, '::ffff:$1');
                 }
                 return line;
-            }).join('\n');
-            return { type: sdpObj.type, sdp: newSdp };
+            });
+            
+            // Clean up trailing empty elements from split before re-joining to avoid double blanks
+            while(processedLines.length && processedLines[processedLines.length - 1] === "") {
+                processedLines.pop();
+            }
+            
+            return { type: sdpObj.type, sdp: processedLines.join('\r\n') + '\r\n' };
         };
 
         const wrapIPv4ToIPv6Candidate = (candidateObj) => {
@@ -260,9 +269,6 @@
                     } else if (state === 'closed') {
                         if (socket) socket.emit('end_call', { call_id: callId });
                     }
-                    // Note: Intentionally ignoring 'disconnected' state! 
-                    // WebRTC will often temporarily bounce to 'disconnected' during the "checking" phase.
-                    // Leaving this alone stops the call from prematurely cutting off.
                 };
 
                 peerConnectionRef.current = pc;
@@ -308,9 +314,10 @@
                         await pc.setRemoteDescription(new RTCSessionDescription(wrappedOffer));
                         
                         let answer = await pc.createAnswer();
-                        answer = wrapIPv4ToIPv6SDP(answer);
-                        await pc.setLocalDescription(answer);
-                        socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
+                        await pc.setLocalDescription(answer); // CRITICAL: Must set UNMODIFIED local description to not break internal network sockets
+                        
+                        let wrappedAnswer = wrapIPv4ToIPv6SDP(answer);
+                        socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer: wrappedAnswer } });
                         
                         while (candidateQueue.current.length > 0) {
                             try { await pc.addIceCandidate(candidateQueue.current.shift()); } catch(e) {}
@@ -348,12 +355,13 @@
                         const pc = initPeerConnection(stream, targetId, call.id);
                         try {
                             let offer = await pc.createOffer({ offerToReceiveAudio: true });
-                            offer = wrapIPv4ToIPv6SDP(offer);
-                            await pc.setLocalDescription(offer);
+                            await pc.setLocalDescription(offer); // CRITICAL: Must set UNMODIFIED local description to not break internal network sockets
+                            
+                            let wrappedOffer = wrapIPv4ToIPv6SDP(offer);
                             socket.emit('webrtc_signal', { 
                                 call_id: call.id, 
                                 target_id: targetId, 
-                                signal: { type: 'offer', offer } 
+                                signal: { type: 'offer', offer: wrappedOffer } 
                             });
                         } catch(e) {}
                     }
