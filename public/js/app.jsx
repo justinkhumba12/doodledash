@@ -7,20 +7,14 @@ window.INK_CONFIG = {
 window.tg = window.Telegram.WebApp;
 window.tg.expand();
 
+// Platform Hard Check to enforce Mobile Usage and block circumvention
+const platform = window.tg.platform;
+const blockedPlatforms = ['tdesktop', 'web', 'weba', 'webk', 'macos'];
+window.isBlockedPlatform = blockedPlatforms.includes(platform) || !window.tg.initData;
+
 window.initData = window.tg.initData; 
 window.tgId = window.tg.initDataUnsafe?.user?.id?.toString();
 window.profilePic = window.tg.initDataUnsafe?.user?.photo_url || '';
-
-// Web Fallback
-if (!window.initData) {
-    window.tgId = localStorage.getItem('doodledash_web_id');
-    if (!window.tgId) {
-        window.tgId = Math.floor(Math.random() * 1000000000).toString();
-        localStorage.setItem('doodledash_web_id', window.tgId);
-    }
-    const mockUser = { id: parseInt(window.tgId), username: 'WebUser_' + window.tgId.slice(-4) };
-    window.initData = 'mock_web_auth=true&user=' + encodeURIComponent(JSON.stringify(mockUser));
-}
 
 window.toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
@@ -87,6 +81,23 @@ const App = () => {
     const lastKnownRoomRef = useRef(null);
 
     const [idleTimer, setIdleTimer] = useState(10);
+
+    // Hard block unsupported platforms and environments immediately
+    if (window.isBlockedPlatform) {
+        return (
+            <div className="container mt-5 text-center px-4">
+                <div className="alert bg-white border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
+                    <i className="fas fa-mobile-alt fs-1 text-danger mb-3"></i>
+                    <h4 className="fw-bold">{!window.initData ? "Access Denied" : "Mobile Only"}</h4>
+                    <p className="text-muted small mt-2">
+                        {!window.initData ? 
+                            "Please open this app directly inside Telegram." : 
+                            "DoodleDash is strictly available on Telegram Mobile apps (Android / iOS). Please open it on your phone."}
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     useEffect(() => {
         let isMounted = true;
@@ -465,7 +476,7 @@ const App = () => {
                 {!currentRoomId ? (
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
-                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} />}
+                        {mainPageTab === 'tasks' && <TasksView />}
                         {mainPageTab === 'leaderboard' && <LeaderboardView />}
                         {mainPageTab === 'profile' && <ProfileView user={user} />}
                         
