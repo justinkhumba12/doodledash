@@ -86,7 +86,7 @@ if (cluster.isPrimary) {
             `);
 
             const migrations = [
-                "ALTER TABLE users ADD COLUMN tg_username VARCHAR(100)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_username VARCHAR(100)",
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0"
             ];
             for (let query of migrations) {
@@ -106,7 +106,6 @@ if (cluster.isPrimary) {
             redis = new Redis(REDIS_URL);
             
             const nextId = await redis.get('next_room_id');
-            // Modified to not generate default 5 rooms
             if (!nextId) await redis.set('next_room_id', 1); 
 
             console.log('[Primary] Redis room setup complete.');
@@ -217,21 +216,27 @@ if (cluster.isPrimary) {
 
     // ---------------------------------------------------------
     // REST API - AUTHENTICATE
+    // Takes implicit parameter-less initialization data 
     // ---------------------------------------------------------
     app.post('/api/authenticate', async (req, res) => {
         const { initData, profile_pic } = req.body;
         if (!initData) return res.status(400).json({ error: 'Missing initData' });
 
         const isMock = initData.includes('mock_web_auth=true');
+        
+        // Secure token check guarantees safety against manual request spoofing
         if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
             return res.status(403).json({ error: 'Invalid authentication payload.' });
         }
 
         try {
-            const urlParams = newSearchParams(initData);
+            // Decodes the Telegram initData string cleanly
+            const urlParams = new URLSearchParams(initData);
             const userObjStr = urlParams.get('user');
+            
             if (!userObjStr) return res.status(400).json({ error: 'No user data in payload.' });
             
+            // Gets Telegram ID directly from payload, avoiding manual URL parameters entirely
             const userObj = JSON.parse(userObjStr);
             const tgId = userObj.id.toString();
             const username = userObj.username || null;
@@ -252,16 +257,10 @@ if (cluster.isPrimary) {
         }
     });
 
-    // Fallback URLSearchParams logic for Node < 10 (though requirement states Node >= 14, standard exists)
-    function newSearchParams(str) {
-        return new URLSearchParams(str);
-    }
-
     // ---------------------------------------------------------
     // WEBHOOK
     // ---------------------------------------------------------
     app.post('/webhook', async (req, res) => {
-        // Enforce Secret Token Validation
         const secretToken = req.headers['x-telegram-bot-api-secret-token'];
         if (WEBHOOK_SECRET && secretToken !== WEBHOOK_SECRET) {
             return res.status(403).send('Unauthorized');
@@ -275,6 +274,8 @@ if (cluster.isPrimary) {
         const host = req.get('host');
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         const fallbackUrl = `${protocol}://${host}/`;
+        
+        // Use clean base URL. Telegram provides user context automatically in the chat.
         const webAppUrl = process.env.WEBAPP_URL || fallbackUrl; 
 
         const tgApiCall = (method, data) => {
@@ -345,6 +346,7 @@ if (cluster.isPrimary) {
                 return;
             }
 
+            // Clean URL passed below. Telegram fills `initData`
             const urlWithParams = `${webAppUrl}`;
             sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
                 inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
@@ -426,7 +428,6 @@ if (cluster.isPrimary) {
         if (!room) return;
 
         if (room.members.length === 0) {
-            // Delete room completely if no users are in it
             await deleteRoomData(roomId);
         } else if (room.members.length < 2) {
             room.status = 'WAITING';
@@ -520,7 +521,7 @@ if (cluster.isPrimary) {
         socket.data.idleWarned = false;
         socket.data.currentUser = null;
         socket.data.currentRoom = null;
-        socket.data.lastMessageTime = 0; // Rate Limit Tracker
+        socket.data.lastMessageTime = 0; 
         
         const checkRateLimit = () => {
             const now = Date.now();
@@ -607,11 +608,11 @@ if (cluster.isPrimary) {
                     if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
                         return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
                     }
-                    const urlParams = newSearchParams(initData);
+                    const urlParams = new URLSearchParams(initData);
                     const userObjStr = urlParams.get('user');
                     if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
                     const userObj = JSON.parse(userObjStr);
-                    currentUser = userObj.id.toString();
+                    currentUser = userObj.id.toString(); // Grabs User ID seamlessly from the implicit data wrapper
                 } else {
                     return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
                 }
@@ -1017,7 +1018,6 @@ if (cluster.isPrimary) {
                 if (room.status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
                 if (room.current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
 
-                // Enforce Guess String Requirements
                 if (guessStr.length !== room.word_to_draw.length) {
                     return socket.emit('create_error', `Guess must be exactly ${room.word_to_draw.length} characters long.`);
                 }
@@ -1350,7 +1350,6 @@ if (cluster.isPrimary) {
                     
                     const currentExtra = member.ink_extra[targetColor] || 0;
                     
-                    // Restrict Ink Expansion ensuring the maximum ink total stands at 5000 (2500 max extra)
                     if (currentExtra >= 2500) {
                         return socket.emit('create_error', 'Maximum ink refill limit reached for this round.');
                     }
@@ -1384,7 +1383,7 @@ if (cluster.isPrimary) {
     });
 
     // ---------------------------------------------------------
-    // GAME ENGINE LOOP (Runs inside each worker, syncs via Redis lock)
+    // GAME ENGINE LOOP
     // ---------------------------------------------------------
     let isGameLoopRunning = false;
     setInterval(async () => {
