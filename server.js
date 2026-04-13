@@ -65,7 +65,8 @@ if (cluster.isPrimary) {
             console.log('[Primary] Connecting to MySQL for initial setup...');
             db = await mysql.createConnection(MYSQL_URL);
             
-            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages'];
+            // Added 'calls' table to drop array as requested
+            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages', 'calls'];
             for (let table of tablesToDrop) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
