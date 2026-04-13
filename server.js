@@ -175,15 +175,11 @@ if (cluster.isPrimary) {
     app.get('/sw.js', (req, res) => {
         res.setHeader('Content-Type', 'application/javascript');
         res.send(`
-            const CACHE_NAME = 'doodledash-cache-v2';
+            const CACHE_NAME = 'doodledash-cache-v3';
             const urlsToCache = [
                 '/',
                 '/audio/mgs_notification.mp3',
                 '/audio/guess_notification.mp3',
-                '/thememusic/themesongdefault.mp3',
-                '/thememusic/Pencils%20Down.mp3',
-                '/thememusic/Pencils%20Down%202.mp3',
-                '/thememusic/Quick%20Draw%20Frenzy.mp3',
                 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
                 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
                 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
@@ -234,7 +230,48 @@ if (cluster.isPrimary) {
     }
 
     // ---------------------------------------------------------
-    // WEBHOOK & REST API
+    // REST API - AUTHENTICATE
+    // ---------------------------------------------------------
+    app.post('/api/authenticate', async (req, res) => {
+        const { initData, profile_pic } = req.body;
+        if (!initData) return res.status(400).json({ error: 'Missing initData' });
+
+        if (BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
+            return res.status(403).json({ error: 'Invalid authentication payload.' });
+        }
+
+        try {
+            const urlParams = newSearchParams(initData);
+            const userObjStr = urlParams.get('user');
+            if (!userObjStr) return res.status(400).json({ error: 'No user data in payload.' });
+            
+            const userObj = JSON.parse(userObjStr);
+            const tgId = userObj.id.toString();
+            const username = userObj.username || null;
+
+            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)`, [tgId, username]);
+            
+            if (profile_pic) {
+                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [profile_pic, username, tgId]);
+                await redis.hset('user_profiles', tgId, profile_pic);
+            } else {
+                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [username, tgId]);
+            }
+
+            res.json({ success: true, userId: tgId });
+        } catch (err) {
+            console.error('/api/authenticate error:', err);
+            res.status(500).json({ error: 'Internal server error during authentication.' });
+        }
+    });
+
+    // Fallback URLSearchParams logic for Node < 10 (though requirement states Node >= 14, standard exists)
+    function newSearchParams(str) {
+        return new URLSearchParams(str);
+    }
+
+    // ---------------------------------------------------------
+    // WEBHOOK
     // ---------------------------------------------------------
     app.post('/webhook', async (req, res) => {
         // Enforce Secret Token Validation
@@ -302,7 +339,8 @@ if (cluster.isPrimary) {
             const username = update.message.from.username;
             
             try {
-                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
+                // Fixed syntax error from original setup
+                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
                 await db.query('UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?', [username || null, tgId.toString()]);
             } catch (e) {
                 console.error('Webhook DB Error:', e);
@@ -587,16 +625,16 @@ if (cluster.isPrimary) {
             if (userState) socket.emit('user_update', userState);
         };
 
-        socket.on('auth', async ({ initData, profile_pic }) => {
+        socket.on('auth', async ({ initData }) => {
             try {
                 let currentUser;
                 
                 if (initData) {
-                    // Strict Cryptographic Validation Requirement fulfilled
+                    // API has already authenticated the DB entry, but we still parse token safely for socket binding.
                     if (BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
                         return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
                     }
-                    const urlParams = new URLSearchParams(initData);
+                    const urlParams = newSearchParams(initData);
                     const userObjStr = urlParams.get('user');
                     if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
                     const userObj = JSON.parse(userObjStr);
@@ -606,21 +644,9 @@ if (cluster.isPrimary) {
                 }
                 
                 socket.data.currentUser = currentUser;
-                
-                if (profile_pic) {
-                    await redis.hset('user_profiles', currentUser, profile_pic);
-                }
-
                 await redis.hdel('user_disconnects', currentUser);
 
                 socket.join(`user_${currentUser}`);
-                
-                await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [currentUser]);
-                if (profile_pic) {
-                    await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [profile_pic, currentUser]);
-                } else {
-                    await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [currentUser]);
-                }
 
                 const userState = await getUserState(currentUser);
                 
@@ -1486,7 +1512,6 @@ if (cluster.isPrimary) {
             const sockets = await io.fetchSockets();
             let idleChangedRooms = new Set();
 
-            // Refined Idle Logic & Kick Timers
             for (const s of sockets) {
                 const idleTime = now - (s.data.lastActiveEvent || now);
                 
@@ -1513,16 +1538,14 @@ if (cluster.isPrimary) {
                         s.leave(`room_${roomId}`);
                         s.join('lobby'); 
                         s.data.currentRoom = null;
-                        s.data.idleWarned = false; // Reset the idle flag once returned to lobby
+                        s.data.idleWarned = false;
                     } else if (idleTime > 50000 && !s.data.idleWarned) {
                         s.data.idleWarned = true;
-                        // Determine precisely how much time is left relative to 60s max limit.
                         s.emit('idle_warning', { timeLeft: Math.ceil((60000 - idleTime) / 1000) });
                     } else if (idleTime <= 50000) {
                         s.data.idleWarned = false;
                     }
                 } else {
-                    // Lobby level AFK check - Disconnects socket outright
                     if (idleTime > 60000) {
                         s.emit('disconnect_idle');
                         s.disconnect(true);
