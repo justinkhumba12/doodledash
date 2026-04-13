@@ -321,7 +321,7 @@ if (cluster.isPrimary) {
                 return;
             }
 
-            const urlWithParams = `${webAppUrl}?user_id=${tgId}`;
+            const urlWithParams = `${webAppUrl}`;
             sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
                 inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
             });
@@ -591,18 +591,15 @@ if (cluster.isPrimary) {
             try {
                 let currentUser;
                 
-                if (BOT_TOKEN && initData) {
-                    // Strict Cryptographic Validation
-                    if (!validateInitData(initData, BOT_TOKEN)) {
+                if (initData) {
+                    // Strict Cryptographic Validation Requirement fulfilled
+                    if (BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
                         return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
                     }
                     const urlParams = new URLSearchParams(initData);
-                    const userObj = JSON.parse(urlParams.get('user'));
-                    currentUser = userObj.id.toString();
-                } else if (initData) {
-                    // Fallback for missing bot token locally
-                    const urlParams = new URLSearchParams(initData);
-                    const userObj = JSON.parse(urlParams.get('user'));
+                    const userObjStr = urlParams.get('user');
+                    if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
+                    const userObj = JSON.parse(userObjStr);
                     currentUser = userObj.id.toString();
                 } else {
                     return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
@@ -1273,6 +1270,10 @@ if (cluster.isPrimary) {
                 const allDrawings = allRaw.map(d => JSON.parse(d));
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
                 io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+                
+                if (member) {
+                    io.to(`user_${toRestore.user_id}`).emit('update_ink', { color: toRestore.color, used: member.ink_used[toRestore.color] || 0 });
+                }
             }
         }));
 
@@ -1303,6 +1304,10 @@ if (cluster.isPrimary) {
                 const allDrawings = allRaw.map(d => JSON.parse(d));
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', allDrawings.map(d => ({ lines: d.lines, color: d.color })));
                 io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+                
+                if (member) {
+                    io.to(`user_${toRestore.user_id}`).emit('update_ink', { color: toRestore.color, used: member.ink_used[toRestore.color] || 0 });
+                }
             }
         }));
 
@@ -1325,6 +1330,7 @@ if (cluster.isPrimary) {
             
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
             io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: 0, redo_steps: 0 });
+            io.to(`user_${currentUser}`).emit('update_ink', { color: 'black', used: 0 });
         }));
 
         socket.on('buy_ink', async () => {
@@ -1480,9 +1486,11 @@ if (cluster.isPrimary) {
             const sockets = await io.fetchSockets();
             let idleChangedRooms = new Set();
 
+            // Refined Idle Logic & Kick Timers
             for (const s of sockets) {
+                const idleTime = now - (s.data.lastActiveEvent || now);
+                
                 if (s.data.currentRoom) {
-                    const idleTime = now - (s.data.lastActiveEvent || now);
                     if (idleTime > 60000) {
                         s.emit('kick_idle');
                         const roomId = s.data.currentRoom;
@@ -1505,11 +1513,19 @@ if (cluster.isPrimary) {
                         s.leave(`room_${roomId}`);
                         s.join('lobby'); 
                         s.data.currentRoom = null;
+                        s.data.idleWarned = false; // Reset the idle flag once returned to lobby
                     } else if (idleTime > 50000 && !s.data.idleWarned) {
                         s.data.idleWarned = true;
-                        s.emit('idle_warning');
+                        // Determine precisely how much time is left relative to 60s max limit.
+                        s.emit('idle_warning', { timeLeft: Math.ceil((60000 - idleTime) / 1000) });
                     } else if (idleTime <= 50000) {
                         s.data.idleWarned = false;
+                    }
+                } else {
+                    // Lobby level AFK check - Disconnects socket outright
+                    if (idleTime > 60000) {
+                        s.emit('disconnect_idle');
+                        s.disconnect(true);
                     }
                 }
             }
