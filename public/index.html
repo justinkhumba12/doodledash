@@ -85,6 +85,8 @@
         .nav-item.active { color: var(--primary); }
         .nav-item i { font-size: 1.25rem; margin-bottom: 4px; transition: transform 0.2s; }
         .nav-item.active i { transform: scale(1.15); }
+        
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
     </style>
 </head>
 <body>
@@ -485,7 +487,15 @@
                             <i className="fas fa-plug fs-1 text-danger mb-3"></i>
                             <h4 className="fw-bold">Connection Lost</h4>
                             <p className="text-muted small mt-2">You have been disconnected from the server.</p>
-                            <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" disabled={isReloading} onClick={() => { setIsReloading(true); window.location.reload(); }}>
+                            <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" disabled={isReloading} onClick={() => { 
+                                setIsReloading(true); 
+                                if (socket) {
+                                    socket.connect();
+                                    setTimeout(() => setIsReloading(false), 2000);
+                                } else {
+                                    window.location.reload();
+                                }
+                            }}>
                                 {isReloading ? <><i className="fas fa-spinner fa-spin me-2"></i> Reconnecting...</> : <><i className="fas fa-redo me-2"></i> Reconnect</>}
                             </button>
                         </div>
@@ -559,7 +569,7 @@
                                         <i className="fas fa-tasks"></i><span>Tasks</span>
                                     </div>
                                     <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
-                                        <i className="fas fa-trophy"></i><span>Notice</span>
+                                        <i className="fas fa-bullhorn"></i><span>Notice</span>
                                     </div>
                                     <div className={`nav-item ${mainPageTab === 'profile' ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                         <i className="fas fa-user"></i><span>Profile</span>
@@ -664,7 +674,7 @@
                         <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
                            {!profileModal.full ? (
                                <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
-                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer" width="100" height="100" onClick={() => setProfileModal({...profileModal, full: true})} />
+                                   <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer border" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} />
                                    <h3>{toHex(profileModal.user_id)}</h3>
                                    <button className="btn btn-secondary w-100 mt-3 rounded-pill fw-bold" onClick={() => setProfileModal(null)}>Close Profile</button>
                                </div>
@@ -681,27 +691,9 @@
 
         // --- Bottom Navigation Tab Views ---
         const ProfileView = ({ user }) => (
-            <div className="container mt-4 text-center">
-                <h3 className="fw-bold mb-4">Player Profile</h3>
-                <img src={user.profile_pic || 'https://via.placeholder.com/100'} className="rounded-circle shadow mb-3" width="100" height="100" />
-                <h4>{user.tg_username || toHex(user.tg_id)}</h4>
-                <p className="text-muted">ID: {user.tg_id}</p>
-                <div className="row mt-4">
-                    <div className="col-6">
-                        <div className="p-3 bg-white rounded shadow-sm border">
-                            <i className="fas fa-coins fs-2 text-warning mb-2"></i>
-                            <h5>{user.credits}</h5>
-                            <span className="small text-muted">Credits</span>
-                        </div>
-                    </div>
-                    <div className="col-6">
-                        <div className="p-3 bg-white rounded shadow-sm border">
-                            <i className="fas fa-play-circle fs-2 text-primary mb-2"></i>
-                            <h5>Active</h5>
-                            <span className="small text-muted">Status</span>
-                        </div>
-                    </div>
-                </div>
+            <div className="container mt-5 text-center">
+                <img src={profilePic || 'https://via.placeholder.com/120'} className="rounded-circle shadow-lg mb-4 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} />
+                <h3 className="fw-bold text-dark">{toHex(user.tg_id)}</h3>
             </div>
         );
 
@@ -811,13 +803,8 @@
 
         const LeaderboardView = () => (
             <div className="container mt-4 text-center">
-                <h3 className="fw-bold mb-4">Notice & Leaderboard</h3>
-                <div className="alert alert-info border-0 shadow-sm rounded-4 text-start">
-                    <h5 className="fw-bold"><i className="fas fa-bullhorn me-2"></i> Welcome to DoodleDash!</h5>
-                    <p className="mb-0 small">The leaderboard feature is coming soon. Play matches to earn a spot in the top 100 global players!</p>
-                </div>
                 <i className="fas fa-trophy text-light mt-5" style={{ fontSize: '6rem' }}></i>
-                <h4 className="text-muted mt-3">Coming Soon</h4>
+                <h4 className="text-muted mt-3 fw-bold">Coming Soon</h4>
             </div>
         );
 
@@ -828,9 +815,8 @@
             const [isPriv, setIsPriv] = useState(false);
             const [maxMembers, setMaxMembers] = useState(4);
             const [expireHours, setExpireHours] = useState(2);
-            const [autoJoin, setAutoJoin] = useState(false);
 
-            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); };
+            const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
 
             let content = null;
             if (modal.type === 'idle_warning') {
@@ -857,15 +843,19 @@
                 let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
                 let durationCost = expireHours === 2 ? 1 : 2;
                 let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
-                let autoJoinCost = 0; 
-                let totalCostDisplay = baseRoomCost + autoJoinCost;
 
                 content = (
                     <>
-                        <div className="form-check mb-3">
-                            <input className="form-check-input" type="checkbox" checked={isPriv} onChange={e => setIsPriv(e.target.checked)} id="privCheck" />
-                            <label className="form-check-label" htmlFor="privCheck">Make Room Private</label>
+                        <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
+                            <div>
+                                <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-lock text-danger me-2"></i>Private Room</h6>
+                                <small className="text-muted">Require password</small>
+                            </div>
+                            <div className="form-check form-switch fs-4 mb-0">
+                                <input className="form-check-input mt-0 cursor-pointer" type="checkbox" checked={isPriv} readOnly />
+                            </div>
                         </div>
+
                         {isPriv ? (
                             <>
                                 <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
@@ -889,11 +879,7 @@
                             <>
                                 <div className="mb-3">
                                     <label className="form-label text-muted small mb-1">Max Players</label>
-                                    <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
-                                        <option value={2}>2 Players</option>
-                                        <option value={3}>3 Players</option>
-                                        <option value={4}>4 Players</option>
-                                    </select>
+                                    <input type="text" className="form-control text-dark" value="4 Players (Fixed)" disabled />
                                 </div>
                                 <div className="alert alert-success py-2 small mb-3">
                                     <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
@@ -901,27 +887,25 @@
                                 </div>
                             </>
                         )}
-                        
-                        <hr className="my-2" />
-                        <div className="form-check mb-3">
-                            <input className="form-check-input" type="checkbox" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} id="autoJoinCheck" />
-                            <label className="form-check-label text-dark fw-bold" htmlFor="autoJoinCheck">Join Room After Creating</label>
-                        </div>
-                        {autoJoin && isPriv && (
-                            <div className="alert alert-success py-2 small mb-3">
-                                <i className="fas fa-info-circle me-1"></i> Auto-joining your private room is free!
-                            </div>
-                        )}
 
                         {(isPriv) && (
                             <div className="alert alert-warning py-2 small mb-3">
-                                <i className="fas fa-coins text-warning me-1"></i> Total Cost: {totalCostDisplay} Credits
+                                <i className="fas fa-coins text-warning me-1"></i> Total Cost: {baseRoomCost} Credits
                             </div>
                         )}
 
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { socket.emit('create_room', { is_private: isPriv, password: pwd, max_members: maxMembers, expire_hours: expireHours, auto_join: autoJoin }); close(); }}>Create</button>
+                            <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
+                                socket.emit('create_room', { 
+                                    is_private: isPriv, 
+                                    password: pwd, 
+                                    max_members: isPriv ? maxMembers : 4, 
+                                    expire_hours: expireHours, 
+                                    auto_join: true 
+                                }); 
+                                close(); 
+                            }}>Create</button>
                         </div>
                     </>
                 );
@@ -1406,6 +1390,45 @@
             
             const currentMaxInk = INK_CONFIG.black.free + (inkExtraObj['black'] || 0);
 
+            // Ref caching solves stale closure update issues smoothly
+            const currentMaxInkRef = useRef(currentMaxInk);
+            useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
+
+            const updateInkUI = useCallback(() => {
+                if (!isDrawer || !isDrawingPhase) return;
+                const max = currentMaxInkRef.current;
+                const inkLeft = Math.max(0, max - inkUsedRef.current);
+                const inkPercent = max > 0 ? (inkLeft / max) * 100 : 0;
+                
+                const bar = document.getElementById('inkProgressBar');
+                const text = document.getElementById('inkProgressText');
+                const buyBtn = document.getElementById('buyInkBtn');
+                
+                if (bar) {
+                    bar.style.width = `${inkPercent}%`;
+                    if (inkLeft <= (max * 0.2) && max > 0) {
+                        bar.style.backgroundColor = '';
+                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+                    } else {
+                        bar.style.backgroundColor = '#1e293b';
+                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+                    }
+                }
+                if (text) {
+                    text.className = (inkLeft <= (max * 0.2) && max > 0) ? 'text-danger fw-bold' : 'text-muted';
+                    text.innerText = `${Math.floor(inkLeft)} / ${max}`;
+                }
+                
+                const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
+                if (buyBtn) {
+                    buyBtn.style.display = (inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
+                }
+            }, [isDrawer, isDrawingPhase, inkExtraObj]);
+
+            // Track update logic
+            const updateInkUIRef = useRef(updateInkUI);
+            useEffect(() => { updateInkUIRef.current = updateInkUI; });
+
             useEffect(() => {
                 if (room.status !== 'DRAWING') {
                     localInkRef.current = {};
@@ -1415,16 +1438,16 @@
                 localInkRef.current['black'] = inkUsedObj['black'] || 0;
                 inkUsedRef.current = localInkRef.current['black'] || 0;
                 updateInkUI();
-            }, [inkUsedObj, room.status]);
+            }, [inkUsedObj, room.status, updateInkUI]);
 
-            // Sync ink strictly with undo, redo and clear_all events
+            // Sync ink strictly with undo, redo and clear_all events natively updated on backend
             useEffect(() => {
                 if (!socket) return;
                 const handleUpdateInk = ({ color, used }) => {
                     if (color === 'black') {
                         inkUsedRef.current = used;
                         localInkRef.current['black'] = used;
-                        updateInkUI();
+                        updateInkUIRef.current();
                     }
                 };
                 socket.on('update_ink', handleUpdateInk);
@@ -1460,36 +1483,6 @@
                     return () => clearInterval(intv);
                 }
             }, [room.status, room.round_end_time, roomData.server_time]);
-
-            const updateInkUI = () => {
-                if (!isDrawer || !isDrawingPhase) return;
-                const inkLeft = Math.max(0, currentMaxInk - inkUsedRef.current);
-                const inkPercent = currentMaxInk > 0 ? (inkLeft / currentMaxInk) * 100 : 0;
-                
-                const bar = document.getElementById('inkProgressBar');
-                const text = document.getElementById('inkProgressText');
-                const buyBtn = document.getElementById('buyInkBtn');
-                
-                if (bar) {
-                    bar.style.width = `${inkPercent}%`;
-                    if (inkLeft <= (currentMaxInk * 0.2) && currentMaxInk > 0) {
-                        bar.style.backgroundColor = '';
-                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
-                    } else {
-                        bar.style.backgroundColor = '#1e293b';
-                        bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
-                    }
-                }
-                if (text) {
-                    text.className = (inkLeft <= (currentMaxInk * 0.2) && currentMaxInk > 0) ? 'text-danger fw-bold' : 'text-muted';
-                    text.innerText = `${Math.floor(inkLeft)} / ${currentMaxInk}`;
-                }
-                
-                const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
-                if (buyBtn) {
-                    buyBtn.style.display = (inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
-                }
-            };
 
             const redraw = useCallback(() => {
                 const canvas = canvasRef.current;
@@ -1581,7 +1574,7 @@
                 
                 const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
                 
-                if (inkUsedRef.current + dist > currentMaxInk) {
+                if (inkUsedRef.current + dist > currentMaxInkRef.current) {
                     stopDraw(e); 
                     if (!hasMaxInk) {
                         setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
@@ -1636,7 +1629,7 @@
 
                             <div className="d-flex justify-content-between small fw-bold mb-1">
                                 <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInk - (inkUsedRef.current || 0)))} / {currentMaxInk}</span>
+                                <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
                             </div>
                             <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
                                 <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
@@ -1892,25 +1885,32 @@
                                                     return wordData.map((item, i) => {
                                                         let displayChar = '';
                                                         let isHint = item.revealed;
+                                                        let showCursor = false;
                                                         if (isHint) {
                                                             displayChar = item.char;
                                                         } else {
                                                             displayChar = rawInput[rawIdx] || '';
+                                                            if (rawIdx === rawInput.length && !isBlocked) showCursor = true;
                                                             rawIdx++;
                                                         }
                                                         return (
-                                                            <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
+                                                            <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
                                                                 {displayChar}
+                                                                {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
                                                             </div>
                                                         );
                                                     })
                                                 })()
                                             ) : (
-                                                Array.from({length: wordLength}).map((_, i) => (
-                                                    <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
-                                                        {rawInput[i] || ''}
-                                                    </div>
-                                                ))
+                                                Array.from({length: wordLength}).map((_, i) => {
+                                                    const showCursor = (i === rawInput.length) && !isBlocked;
+                                                    return (
+                                                        <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                            {rawInput[i] || ''}
+                                                            {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                        </div>
+                                                    );
+                                                })
                                             )}
                                         </div>
                                         
