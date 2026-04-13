@@ -276,7 +276,8 @@ if (cluster.isPrimary) {
         const { initData, profile_pic } = req.body;
         if (!initData) return res.status(400).json({ error: 'Missing initData' });
 
-        const isMock = initData.includes('mock_web_auth=true');
+        // Only allow mock auth in non-production environments
+        const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
         
         // Secure token check guarantees safety against manual request spoofing
         if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
@@ -656,7 +657,8 @@ if (cluster.isPrimary) {
                 let currentUser;
                 
                 if (initData) {
-                    const isMock = initData.includes('mock_web_auth=true');
+                    // Only allow mock auth in non-production environments
+                    const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
                     if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
                         return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
                     }
@@ -1429,7 +1431,11 @@ if (cluster.isPrimary) {
         socket.on('disconnect', async () => {
             const currentUser = socket.data.currentUser;
             if (currentUser) {
-                await redis.hset('user_disconnects', currentUser, Date.now());
+                // Only mark as disconnected if they have no other open tabs/sockets
+                const activeSockets = await io.in(`user_${currentUser}`).fetchSockets();
+                if (activeSockets.length === 0) {
+                    await redis.hset('user_disconnects', currentUser, Date.now());
+                }
             }
         });
     });
