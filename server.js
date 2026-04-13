@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const Redis = require('ioredis');
 const { createAdapter } = require('@socket.io/redis-adapter');
 
@@ -13,6 +14,43 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MYSQL_URL = process.env.MYSQL_URL || 'mysql://root:password@localhost:3306/db';
 const PORT = process.env.PORT || 3000;
 const NUM_WORKERS = process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cpus().length || 8);
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+
+// Allowed Origins Control
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['https://t.me', 'https://web.telegram.org'];
+if (process.env.WEBAPP_URL) ALLOWED_ORIGINS.push(process.env.WEBAPP_URL);
+
+const corsOptions = {
+    origin: function (origin, callback) {
+        if (!origin || ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    methods: ["GET", "POST"]
+};
+
+// Cryptographic Validation of Telegram Init Data
+function validateInitData(initData, token) {
+    if (!initData || !token) return false;
+    try {
+        const urlParams = new URLSearchParams(initData);
+        const hash = urlParams.get('hash');
+        urlParams.delete('hash');
+        
+        const keys = Array.from(urlParams.keys()).sort();
+        const dataCheckString = keys.map(key => `${key}=${urlParams.get(key)}`).join('\n');
+        
+        const secretKey = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
+        const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+        
+        return calculatedHash === hash;
+    } catch (e) {
+        return false;
+    }
+}
 
 // ---------------------------------------------------------
 // PRIMARY PROCESS (Run once on startup)
@@ -22,7 +60,6 @@ if (cluster.isPrimary) {
     console.log(`[Primary] Preparing to fork ${NUM_WORKERS} workers...`);
 
     const setupPrimary = async () => {
-        // 1. DATABASE SETUP (Run only once to avoid race conditions)
         let db;
         try {
             console.log('[Primary] Connecting to MySQL for initial setup...');
@@ -53,7 +90,7 @@ if (cluster.isPrimary) {
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0"
             ];
             for (let query of migrations) {
-                try { await db.query(query); } catch (e) { /* Ignore existing column errors */ }
+                try { await db.query(query); } catch (e) { /* Ignore */ }
             }
             console.log('[Primary] MySQL setup complete.');
         } catch (err) {
@@ -63,7 +100,6 @@ if (cluster.isPrimary) {
             if (db) await db.end();
         }
 
-        // 2. REDIS SETUP (Initialize default rooms)
         let redis;
         try {
             console.log('[Primary] Connecting to Redis for initial setup...');
@@ -95,7 +131,6 @@ if (cluster.isPrimary) {
             if (redis) await redis.quit();
         }
 
-        // 3. FORK WORKERS
         for (let i = 0; i < NUM_WORKERS; i++) {
             cluster.fork();
         }
@@ -115,7 +150,6 @@ if (cluster.isPrimary) {
     const app = express();
     const server = http.createServer(app);
 
-    // Redis Connections for this worker
     const redis = new Redis(REDIS_URL);
     const pubClient = redis.duplicate();
     const subClient = redis.duplicate();
@@ -123,11 +157,10 @@ if (cluster.isPrimary) {
     redis.on('error', (err) => console.error(`[Worker ${process.pid}] Redis Error:`, err));
 
     const io = new Server(server, {
-        cors: { origin: "*", methods: ["GET", "POST"] },
+        cors: corsOptions,
         adapter: createAdapter(pubClient, subClient)
     });
 
-    // Database Connection Pool for this worker (Limited to 5 to avoid Max Connections errors across 8 workers)
     const db = mysql.createPool({ 
         uri: MYSQL_URL, 
         timezone: 'Z', 
@@ -135,11 +168,10 @@ if (cluster.isPrimary) {
         connectionLimit: 5 
     });
 
-    app.use(cors());
+    app.use(cors(corsOptions));
     app.use(express.json());
     app.use(express.static(path.join(__dirname, 'public')));
 
-    // Service Worker for Caching
     app.get('/sw.js', (req, res) => {
         res.setHeader('Content-Type', 'application/javascript');
         res.send(`
@@ -168,7 +200,7 @@ if (cluster.isPrimary) {
     const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
     const INK_CONFIG = {
-        black: { free: 2500, extra: 2000, cost: 0.5 }
+        black: { free: 2500, extra: 2500, cost: 0.5 }
     };
 
     // ---------------------------------------------------------
@@ -205,11 +237,16 @@ if (cluster.isPrimary) {
     // WEBHOOK & REST API
     // ---------------------------------------------------------
     app.post('/webhook', async (req, res) => {
+        // Enforce Secret Token Validation
+        const secretToken = req.headers['x-telegram-bot-api-secret-token'];
+        if (WEBHOOK_SECRET && secretToken !== WEBHOOK_SECRET) {
+            return res.status(403).send('Unauthorized');
+        }
+
         const update = req.body;
         res.sendStatus(200); 
 
-        const token = process.env.BOT_TOKEN; 
-        if (!token) return;
+        if (!BOT_TOKEN) return;
 
         const host = req.get('host');
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
@@ -222,7 +259,7 @@ if (cluster.isPrimary) {
             const options = {
                 hostname: 'api.telegram.org',
                 port: 443,
-                path: `/bot${token}/${method}`,
+                path: `/bot${BOT_TOKEN}/${method}`,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
             };
@@ -330,7 +367,6 @@ if (cluster.isPrimary) {
         if (rows.length === 0) return null;
         let u = rows[0];
         
-        // Fix for manual DB Edits: ALWAYS sync DB value to Redis cache
         await redis.hset('user_credits', tg_id, u.credits);
         
         if (!u.ad1_is_today) u.ad_claims_today = 0;
@@ -473,8 +509,15 @@ if (cluster.isPrimary) {
         socket.data.idleWarned = false;
         socket.data.currentUser = null;
         socket.data.currentRoom = null;
+        socket.data.lastMessageTime = 0; // Rate Limit Tracker
         
-        // Prevent race conditions exclusively per-socket for synchronous actions like drawing/undo
+        const checkRateLimit = () => {
+            const now = Date.now();
+            if (now - socket.data.lastMessageTime < 1000) return false;
+            socket.data.lastMessageTime = now;
+            return true;
+        };
+
         socket.actionLock = Promise.resolve();
         const queuedAction = async (fn) => {
             const prev = socket.actionLock;
@@ -544,11 +587,28 @@ if (cluster.isPrimary) {
             if (userState) socket.emit('user_update', userState);
         };
 
-        socket.on('auth', async ({ tg_id, profile_pic }) => {
+        socket.on('auth', async ({ initData, profile_pic }) => {
             try {
-                if (!tg_id) return;
-                socket.data.currentUser = String(tg_id);
-                const currentUser = socket.data.currentUser;
+                let currentUser;
+                
+                if (BOT_TOKEN && initData) {
+                    // Strict Cryptographic Validation
+                    if (!validateInitData(initData, BOT_TOKEN)) {
+                        return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
+                    }
+                    const urlParams = new URLSearchParams(initData);
+                    const userObj = JSON.parse(urlParams.get('user'));
+                    currentUser = userObj.id.toString();
+                } else if (initData) {
+                    // Fallback for missing bot token locally
+                    const urlParams = new URLSearchParams(initData);
+                    const userObj = JSON.parse(urlParams.get('user'));
+                    currentUser = userObj.id.toString();
+                } else {
+                    return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
+                }
+                
+                socket.data.currentUser = currentUser;
                 
                 if (profile_pic) {
                     await redis.hset('user_profiles', currentUser, profile_pic);
@@ -598,7 +658,7 @@ if (cluster.isPrimary) {
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom });
             } catch (err) { 
                 console.error('Auth Error', err); 
-                socket.emit('auth_error', 'Database or Server configuration issue.');
+                socket.emit('auth_error', 'Authentication processing failed.');
             }
         });
         
@@ -871,12 +931,18 @@ if (cluster.isPrimary) {
         });
 
         socket.on('chat', async ({ message }) => {
+            if (!message || typeof message !== 'string') return;
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom || !message.trim()) return;
-            
+            if (!currentUser || !currentRoom) return;
+
+            const msgStr = message.trim();
+            if (!msgStr) return;
+            if (msgStr.length > 200) return socket.emit('create_error', 'Message exceeds 200 character limit.');
+            if (!checkRateLimit()) return socket.emit('create_error', 'Rate limit active: Please wait 1 second between messages.');
+
             const cId = await redis.incr('global_chat_id');
-            const newChat = { id: cId, room_id: currentRoom, user_id: currentUser, message, created_at: new Date() };
+            const newChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: msgStr, created_at: new Date() };
             
             await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(newChat));
             await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
@@ -941,15 +1007,24 @@ if (cluster.isPrimary) {
 
         socket.on('guess', async ({ guess }) => {
             try {
+                if (!guess || typeof guess !== 'string') return;
                 const currentUser = socket.data.currentUser;
                 const currentRoom = socket.data.currentRoom;
                 if (!currentUser || !currentRoom) return socket.emit('create_error', 'Not logged in or in room.');
-                if (!guess || !guess.trim()) return;
+                
+                const guessStr = guess.trim().toUpperCase();
+                if (!guessStr) return;
+                if (!checkRateLimit()) return socket.emit('create_error', 'Rate limit active: Please wait 1 second between guesses.');
                 
                 const room = await getRoom(currentRoom);
                 if (!room) return;
                 if (room.status !== 'DRAWING') return socket.emit('create_error', 'You can only guess during the drawing phase.');
                 if (room.current_drawer_id === currentUser) return socket.emit('create_error', 'The drawer cannot guess.');
+
+                // Enforce Guess String Requirements
+                if (guessStr.length !== room.word_to_draw.length) {
+                    return socket.emit('create_error', `Guess must be exactly ${room.word_to_draw.length} characters long.`);
+                }
                 
                 const rawGuesses = await redis.lrange(`room:${currentRoom}:guesses`, 0, -1);
                 const myGuessCount = rawGuesses.map(g => JSON.parse(g)).filter(g => g.user_id === currentUser).length;
@@ -982,9 +1057,9 @@ if (cluster.isPrimary) {
                     await redis.del(lockKey);
                 }
 
-                const isCorrect = room.word_to_draw && room.word_to_draw.toLowerCase() === guess.trim().toLowerCase();
+                const isCorrect = room.word_to_draw && room.word_to_draw.toUpperCase() === guessStr;
                 const gId = await redis.incr('global_guess_id');
-                const newGuess = { id: gId, room_id: currentRoom, user_id: currentUser, guess_text: guess.trim(), is_correct: isCorrect ? 1 : 0, created_at: new Date() };
+                const newGuess = { id: gId, room_id: currentRoom, user_id: currentUser, guess_text: guessStr, is_correct: isCorrect ? 1 : 0, created_at: new Date() };
                 
                 await redis.rpush(`room:${currentRoom}:guesses`, JSON.stringify(newGuess));
                 io.to(`room_${currentRoom}`).emit('new_guess', newGuess);
@@ -1166,7 +1241,6 @@ if (cluster.isPrimary) {
             
             socket.to(`room_${currentRoom}`).emit('live_draw', { lines, color: activeColor });
             
-            // Instantly sync undo/redo state safely to enable drawing UI buttons properly
             io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
         }));
 
@@ -1181,7 +1255,6 @@ if (cluster.isPrimary) {
             const lastRaw = await redis.rpop(`room:${currentRoom}:drawings`);
             if (lastRaw) {
                 await redis.rpush(`room:${currentRoom}:redo`, lastRaw);
-                // Strict enforcement to only store 3 recent redo actions
                 await redis.ltrim(`room:${currentRoom}:redo`, -3, -1);
                 
                 const toRestore = JSON.parse(lastRaw);
@@ -1269,8 +1342,12 @@ if (cluster.isPrimary) {
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
                     if (!member.ink_extra) member.ink_extra = {};
-                    if (member.ink_extra[targetColor]) {
-                        return socket.emit('create_error', 'You can only buy ink once per round.');
+                    
+                    const currentExtra = member.ink_extra[targetColor] || 0;
+                    
+                    // Restrict Ink Expansion ensuring the maximum ink total stands at 5000 (2500 max extra)
+                    if (currentExtra >= 2500) {
+                        return socket.emit('create_error', 'Maximum ink refill limit reached for this round.');
                     }
 
                     const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
@@ -1281,7 +1358,7 @@ if (cluster.isPrimary) {
                     await redis.hset('user_credits', currentUser, currentCredits - cost);
                     await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
 
-                    member.ink_extra[targetColor] = extraInkAmount; 
+                    member.ink_extra[targetColor] = Math.min(currentExtra + extraInkAmount, 2500); 
                     await saveRoom(room);
 
                     socket.emit('reward_success', `+${extraInkAmount} Ink added!`);
