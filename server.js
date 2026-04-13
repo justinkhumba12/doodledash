@@ -80,7 +80,6 @@ if (cluster.isPrimary) {
                     last_ad_claim_time DATETIME,
                     ad2_claims_today INT DEFAULT 0,
                     last_ad2_claim_time DATETIME,
-                    profile_pic VARCHAR(255),
                     last_active DATETIME,
                     tg_username VARCHAR(100)
                 )
@@ -88,7 +87,8 @@ if (cluster.isPrimary) {
 
             const migrations = [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_username VARCHAR(100)",
-                "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0"
+                "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
+                "ALTER TABLE users DROP COLUMN IF EXISTS profile_pic"
             ];
             for (let query of migrations) {
                 try { await db.query(query); } catch (e) { /* Ignore */ }
@@ -271,12 +271,10 @@ if (cluster.isPrimary) {
             const username = userObj.username || null;
 
             await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)`, [tgId, username]);
+            await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [username, tgId]);
             
             if (profile_pic) {
-                await db.query(`UPDATE users SET profile_pic = ?, last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [profile_pic, username, tgId]);
                 await redis.hset('user_profiles', tgId, profile_pic);
-            } else {
-                await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [username, tgId]);
             }
 
             res.json({ success: true, userId: tgId });
