@@ -12,7 +12,7 @@
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
     
-    <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
+    <!-- Telegram Official WebApp SDK (Required to natively grab users ID and Info) -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     
@@ -90,14 +90,17 @@
 
         const { useState, useEffect, useRef, useCallback } = React;
         
+        // Telegram Initialization
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        let initData = tg.initData;
+        // **CORE LOGIC: Extract Telegram User WITHOUT URL Parameters**
+        // Telegram silently attaches `initData` directly to the web environment via the JS SDK.
+        let initData = tg.initData; 
         let tgId = tg.initDataUnsafe?.user?.id?.toString();
         let profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
-        // Web Fallback (If accessed without Telegram App)
+        // Web Fallback (If accessed entirely without Telegram App for Debugging purposes)
         if (!initData) {
             tgId = localStorage.getItem('doodledash_web_id');
             if (!tgId) {
@@ -167,6 +170,7 @@
             useEffect(() => {
                 let isMounted = true;
                 
+                // We POST the cleanly obtained `initData` from the SDK over to the Node Server
                 fetch('/api/authenticate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
