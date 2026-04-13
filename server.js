@@ -9,6 +9,8 @@ const path = require('path');
 const crypto = require('crypto');
 const Redis = require('ioredis');
 const { createAdapter } = require('@socket.io/redis-adapter');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MYSQL_URL = process.env.MYSQL_URL || 'mysql://root:password@localhost:3306/db';
@@ -135,6 +137,9 @@ if (cluster.isPrimary) {
     // ---------------------------------------------------------
     const app = express();
     const server = http.createServer(app);
+    
+    // Hide Server Metadata
+    app.disable('x-powered-by');
 
     const redis = new Redis(REDIS_URL);
     const pubClient = redis.duplicate();
@@ -153,6 +158,12 @@ if (cluster.isPrimary) {
         waitForConnections: true, 
         connectionLimit: 5 
     });
+
+    // HTTP Header Security
+    app.use(helmet({
+        contentSecurityPolicy: false,
+        crossOriginEmbedderPolicy: false
+    }));
 
     app.use(cors(corsOptions));
     app.use(express.json());
@@ -264,7 +275,17 @@ if (cluster.isPrimary) {
     // ---------------------------------------------------------
     // REST API - AUTHENTICATE
     // ---------------------------------------------------------
-    app.post('/api/authenticate', async (req, res) => {
+    
+    // API Rate Limiting for Auth
+    const authLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100, // Limit each IP to 100 requests per windowMs
+        message: { error: 'Too many authentication requests from this IP, please try again after 15 minutes.' },
+        standardHeaders: true, 
+        legacyHeaders: false,
+    });
+
+    app.post('/api/authenticate', authLimiter, async (req, res) => {
         const { initData, profile_pic } = req.body;
         if (!initData) return res.status(400).json({ error: 'Missing initData' });
 
@@ -1272,6 +1293,11 @@ if (cluster.isPrimary) {
         });
 
         socket.on('draw', ({ lines }) => queuedAction(async () => {
+            // Payload validation
+            if (!Array.isArray(lines) || lines.length > 2000) {
+                return socket.emit('create_error', 'Drawing payload rejected: invalid or exceeded maximum points limit.');
+            }
+
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
