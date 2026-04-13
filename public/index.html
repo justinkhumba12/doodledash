@@ -80,7 +80,6 @@
 <body>
     <audio id="mgsSound" src="/audio/mgs_notification.mp3" playsinline preload="auto"></audio>
     <audio id="guessSound" src="/audio/guess_notification.mp3" playsinline preload="auto"></audio>
-    <audio id="bgmSound" loop playsinline preload="auto"></audio>
 
     <div id="root"></div>
 
@@ -123,8 +122,11 @@
 
         // --- Main App Component ---
         const App = () => {
-            const [loadingState, setLoadingState] = useState('Connecting to server...');
+            const [loadingState, setLoadingState] = useState('Authenticating securely...');
+            const [isAuthComplete, setIsAuthComplete] = useState(false);
             const [isDisconnected, setIsDisconnected] = useState(false);
+            const [isReloading, setIsReloading] = useState(false);
+            
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
@@ -142,13 +144,6 @@
             const [unreadGuess, setUnreadGuess] = useState(false);
 
             const [appVol, setAppVol] = useState(() => parseFloat(localStorage.getItem('appVol') ?? '1.0'));
-            const [bgmVol, setBgmVol] = useState(() => parseFloat(localStorage.getItem('bgmVol') ?? '0.15'));
-            
-            const defaultBGM = 'themesongdefault.mp3';
-            const availableMusics = ['themesongdefault.mp3', 'Pencils Down.mp3', 'Pencils Down 2.mp3', 'Quick Draw Frenzy.mp3'];
-            
-            const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
-            const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
@@ -170,6 +165,31 @@
                     </div>
                 );
             }
+
+            useEffect(() => {
+                let isMounted = true;
+                
+                fetch('/api/authenticate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ initData, profile_pic: profilePic })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (!isMounted) return;
+                    if (data.success) {
+                        setIsAuthComplete(true);
+                    } else {
+                        setLoadingState('Authentication failed: ' + (data.error || 'Unauthorized'));
+                    }
+                })
+                .catch(err => {
+                    if (!isMounted) return;
+                    setLoadingState('Network error during authentication. Check your connection.');
+                });
+
+                return () => { isMounted = false; };
+            }, []);
 
             useEffect(() => {
                 if (currentRoomId) {
@@ -215,14 +235,6 @@
                 localStorage.setItem('appVol', appVol);
             }, [appVol]);
 
-            useEffect(() => {
-                const s = document.getElementById('bgmSound');
-                if (s) {
-                    s.volume = bgmVol;
-                }
-                localStorage.setItem('bgmVol', bgmVol);
-            }, [bgmVol]);
-
             const playAudioSafe = (id) => {
                 if (!audioUnlocked.current) return;
                 const el = document.getElementById(id);
@@ -267,35 +279,10 @@
                 }
             }, [roomData, activeTab, panelOpen]);
 
-            useEffect(() => {
-                if (currentRoomId) {
-                    if (currentBgmMode === 'random') {
-                        const randomIndex = Math.floor(Math.random() * availableMusics.length);
-                        setActiveTrack(availableMusics[randomIndex]);
-                    } else {
-                        setActiveTrack(currentBgmMode);
-                    }
-                }
-            }, [currentRoomId, currentBgmMode]);
-
-            useEffect(() => {
-                const bgm = document.getElementById('bgmSound');
-                if (!bgm) return;
-                if (currentRoomId && audioUnlocked.current) {
-                    const expectedSrc = window.location.origin + encodeURI('/thememusic/' + activeTrack);
-                    if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== encodeURI('/thememusic/' + activeTrack)) {
-                        bgm.src = encodeURI('/thememusic/' + activeTrack);
-                    }
-                    bgm.play().catch(e => console.log('BGM Autoplay Blocked:', e));
-                } else {
-                    bgm.pause();
-                }
-            }, [currentRoomId, activeTrack]);
-
             const handleGlobalInteraction = () => {
                 if (!audioUnlocked.current) {
                     audioUnlocked.current = true;
-                    ['mgsSound', 'guessSound', 'bgmSound'].forEach(id => {
+                    ['mgsSound', 'guessSound'].forEach(id => {
                         const el = document.getElementById(id);
                         if(el) {
                             el.volume = 0.01; 
@@ -303,25 +290,20 @@
                             if (p !== undefined) {
                                 p.then(() => {
                                     setTimeout(() => {
-                                        if(id !== 'bgmSound') {
-                                            el.pause();
-                                            el.currentTime = 0;
-                                        }
-                                        el.volume = (id === 'bgmSound') ? bgmVol : appVol;
+                                        el.pause();
+                                        el.currentTime = 0;
+                                        el.volume = appVol;
                                     }, 50); 
                                 }).catch(()=>{});
                             }
                         }
                     });
-                } else {
-                    const bgm = document.getElementById('bgmSound');
-                    if (bgm && bgm.paused && currentRoomId) {
-                        bgm.play().catch(()=>{});
-                    }
                 }
             };
 
             useEffect(() => {
+                if (!isAuthComplete) return;
+
                 const newSocket = io({ 
                     reconnection: true,
                     reconnectionDelay: 1000,
@@ -330,9 +312,10 @@
                 });
 
                 newSocket.on('connect', () => {
-                    setLoadingState('Authenticating with server...');
+                    setLoadingState('Connecting to server...');
                     setIsDisconnected(false);
-                    newSocket.emit('auth', { initData: initData, profile_pic: profilePic });
+                    setIsReloading(false);
+                    newSocket.emit('auth', { initData: initData });
                     
                     if (lastKnownRoomRef.current) {
                         setTimeout(() => {
@@ -458,7 +441,7 @@
                     window.removeEventListener('keydown', resetIdle);
                     newSocket.disconnect();
                 }
-            }, []); 
+            }, [isAuthComplete]); 
 
             const [touchStartPos, setTouchStartPos] = useState(null);
             const onTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
@@ -490,13 +473,15 @@
                             <i className="fas fa-plug fs-1 text-danger mb-3"></i>
                             <h4 className="fw-bold">Connection Lost</h4>
                             <p className="text-muted small mt-2">You have been disconnected from the server.</p>
-                            <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" onClick={() => window.location.reload()}><i className="fas fa-redo me-2"></i> Reconnect</button>
+                            <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" disabled={isReloading} onClick={() => { setIsReloading(true); window.location.reload(); }}>
+                                {isReloading ? <><i className="fas fa-spinner fa-spin me-2"></i> Reconnecting...</> : <><i className="fas fa-redo me-2"></i> Reconnect</>}
+                            </button>
                         </div>
                     </div>
                 );
             }
 
-            if (!user || !socket) {
+            if (!user || !socket || !isAuthComplete) {
                 return (
                     <div className="container mt-5 text-center px-4">
                         <div className="alert alert-light border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
@@ -599,11 +584,11 @@
                                                 <div className="accordion" id="soundAccordion">
                                                     <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
                                                         <h2 className="accordion-header">
-                                                            <button className={`accordion-button fw-bold ${openAcc === 'volumes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'volumes' ? '' : 'volumes')} style={{backgroundColor: openAcc === 'volumes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
+                                                            <button className="accordion-button fw-bold" type="button" onClick={() => setOpenAcc('volumes')} style={{backgroundColor: '#e0e7ff', color: 'var(--text-main)', boxShadow: 'none'}}>
                                                                 <i className="fas fa-volume-up text-primary me-2"></i> Master Volume
                                                             </button>
                                                         </h2>
-                                                        <div className={`accordion-collapse collapse ${openAcc === 'volumes' ? 'show' : ''}`}>
+                                                        <div className="accordion-collapse collapse show">
                                                             <div className="accordion-body bg-white pb-1">
                                                                 <div className="mb-3 mt-1">
                                                                     <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
@@ -623,56 +608,6 @@
                                                             </div>
                                                         </div>
                                                     </div>
-
-                                                    <div className="accordion-item border-0 shadow-sm rounded-4 overflow-hidden">
-                                                        <h2 className="accordion-header">
-                                                            <button className={`accordion-button fw-bold ${openAcc === 'themes' ? '' : 'collapsed'}`} type="button" onClick={() => setOpenAcc(openAcc === 'themes' ? '' : 'themes')} style={{backgroundColor: openAcc === 'themes' ? '#e0e7ff' : '#f8fafc', color: 'var(--text-main)', boxShadow: 'none'}}>
-                                                                <i className="fas fa-music text-primary me-2"></i> Theme Music
-                                                            </button>
-                                                        </h2>
-                                                        <div className={`accordion-collapse collapse ${openAcc === 'themes' ? 'show' : ''}`}>
-                                                            <div className="accordion-body bg-white">
-                                                                <div className="mb-4">
-                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Music Volume</span>
-                                                                        <span className="text-info">{Math.round(bgmVol * 100)}%</span>
-                                                                    </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={bgmVol} 
-                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                        onChange={e => {
-                                                                            const v = parseFloat(e.target.value);
-                                                                            setBgmVol(v);
-                                                                        }} />
-                                                                </div>
-
-                                                                <button 
-                                                                    className={`btn btn-sm ${currentBgmMode === 'random' ? 'btn-success' : 'btn-outline-primary'} w-100 mb-3 fw-bold rounded-pill shadow-sm`}
-                                                                    onClick={() => {
-                                                                        setCurrentBgmMode('random');
-                                                                        localStorage.setItem('currentBgmMode', 'random');
-                                                                    }}
-                                                                >
-                                                                    <i className="fas fa-random"></i> {currentBgmMode === 'random' ? 'Random Mode Active' : 'Use Randomly'}
-                                                                </button>
-
-                                                                {availableMusics.map(music => (
-                                                                    <div key={music} className="d-flex justify-content-between align-items-center bg-light p-2 rounded shadow-sm mb-2 border">
-                                                                        <span className="small fw-bold text-secondary text-truncate" style={{maxWidth: '180px'}}>{music.replace('.mp3','')}</span>
-                                                                        <button className={`btn btn-sm ${currentBgmMode === music ? 'btn-success' : 'btn-outline-primary'} rounded-pill shadow-sm`} onClick={() => {
-                                                                            setCurrentBgmMode(music);
-                                                                            localStorage.setItem('currentBgmMode', music);
-                                                                            if ('caches' in window) {
-                                                                                caches.open('doodledash-cache-v2').then(cache => cache.add(encodeURI('/thememusic/' + music))).catch(()=>{});
-                                                                            }
-                                                                        }}>
-                                                                            {currentBgmMode === music ? 'Active' : 'Use'}
-                                                                        </button>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
                                                 </div>
                                             </div>
                                         )}
@@ -881,7 +816,7 @@
                 content = (
                     <>
                         <p className="text-muted">You have used your 4 free guesses. Unlock your final 2 guesses for <b>1 Credit</b>.</p>
-                        <div className="alert alert-warning">Your guess: <b>{modal.guess}</b></div>
+                        <div className="alert alert-warning text-center" style={{letterSpacing: '3px'}}><b>{modal.guess}</b></div>
                         <div className="d-flex gap-2 mt-4">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                             <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
@@ -1658,7 +1593,7 @@
         };
 
         const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
-            const [input, setInput] = useState('');
+            const [rawInput, setRawInput] = useState('');
             const isDrawer = roomData.room.current_drawer_id === tgId;
             const messagesEndRef = useRef(null);
 
@@ -1673,28 +1608,53 @@
             const totalGuessers = Math.max(0, roomData.members.length - 1);
             const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
 
-            const wordLength = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word.length : 10;
+            const wordData = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word : null;
+            const wordLength = wordData ? wordData.length : 10;
+            const unrevealedCount = wordData ? wordData.filter(w => !w.revealed).length : wordLength;
+
+            useEffect(() => {
+                if (rawInput.length > unrevealedCount) {
+                    setRawInput(rawInput.slice(0, unrevealedCount));
+                }
+            }, [unrevealedCount, rawInput]);
+
+            const reconstructGuess = () => {
+                if (!wordData) return rawInput;
+                let result = '';
+                let rawIdx = 0;
+                for (const item of wordData) {
+                    if (item.revealed) {
+                        result += item.char;
+                    } else {
+                        result += rawInput[rawIdx] || ' ';
+                        rawIdx++;
+                    }
+                }
+                return result;
+            };
 
             const handleGuessSubmit = () => {
-                if (!input.trim() || isBlocked) return;
-                if (input.length !== wordLength) {
-                    setModal({ type: 'error', title: 'Invalid Guess', content: `Guess must be exactly ${wordLength} letters.`});
+                if (isBlocked) return;
+                if (rawInput.length !== unrevealedCount) {
+                    setModal({ type: 'error', title: 'Invalid Guess', content: `Please fill in all ${unrevealedCount} missing letters.`});
                     return;
                 }
                 
+                const fullGuess = reconstructGuess();
+
                 if (needsPayment) {
-                    setModal({ type: 'confirm_guess_credit', guess: input, title: 'Unlock 2 Extra Guesses?' });
-                    setInput('');
+                    setModal({ type: 'confirm_guess_credit', guess: fullGuess, title: 'Unlock 2 Extra Guesses?' });
+                    setRawInput('');
                 } else {
-                    if (socket) socket.emit('guess', {guess: input});
-                    setInput('');
+                    if (socket) socket.emit('guess', {guess: fullGuess});
+                    setRawInput('');
                 }
             };
 
             const handleInputChange = (e) => {
                 const val = e.target.value.toUpperCase();
-                if (val.length <= wordLength) {
-                    setInput(val);
+                if (val.length <= unrevealedCount) {
+                    setRawInput(val);
                 }
             };
 
@@ -1737,29 +1697,50 @@
                                     <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
                                         
                                         {/* Box-by-Box Overlay */}
-                                        <div className="d-flex gap-1 h-100 position-absolute pointer-events-none" style={{zIndex: 1, pointerEvents: 'none'}}>
-                                            {Array.from({length: wordLength}).map((_, i) => (
-                                                <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
-                                                    {input[i] || ''}
-                                                </div>
-                                            ))}
+                                        <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
+                                            {wordData ? (
+                                                (() => {
+                                                    let rawIdx = 0;
+                                                    return wordData.map((item, i) => {
+                                                        let displayChar = '';
+                                                        let isHint = item.revealed;
+                                                        if (isHint) {
+                                                            displayChar = item.char;
+                                                        } else {
+                                                            displayChar = rawInput[rawIdx] || '';
+                                                            rawIdx++;
+                                                        }
+                                                        return (
+                                                            <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
+                                                                {displayChar}
+                                                            </div>
+                                                        );
+                                                    })
+                                                })()
+                                            ) : (
+                                                Array.from({length: wordLength}).map((_, i) => (
+                                                    <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                        {rawInput[i] || ''}
+                                                    </div>
+                                                ))
+                                            )}
                                         </div>
                                         
                                         {/* Hidden Input that captures key presses seamlessly */}
                                         <input type="text"
                                             className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
                                             style={{opacity: 0, zIndex: 10, cursor: 'text'}}
-                                            value={input}
+                                            value={rawInput}
                                             onChange={handleInputChange}
                                             onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
-                                            maxLength={wordLength}
+                                            maxLength={unrevealedCount}
                                             disabled={isBlocked}
                                             autoComplete="off"
                                             autoCorrect="off"
                                             spellCheck="false"
                                         />
                                     </div>
-                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || input.length !== wordLength}>
+                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || rawInput.length !== unrevealedCount}>
                                         {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
                                     </button>
                                 </div>
