@@ -157,23 +157,51 @@ if (cluster.isPrimary) {
     app.use(express.json());
     app.use(express.static(path.join(__dirname, 'public')));
 
+    // CACHE BUSTED SERVICE WORKER: Forces HTML to always download from the network first
     app.get('/sw.js', (req, res) => {
         res.setHeader('Content-Type', 'application/javascript');
         res.send(`
-            const CACHE_NAME = 'doodledash-cache-v3';
+            const CACHE_NAME = 'doodledash-cache-v4';
             const urlsToCache = [
-                '/',
                 '/audio/mgs_notification.mp3',
                 '/audio/guess_notification.mp3',
                 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css',
                 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
                 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'
             ];
+            
             self.addEventListener('install', event => {
+                self.skipWaiting();
                 event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache)));
             });
+
+            self.addEventListener('activate', event => {
+                event.waitUntil(
+                    caches.keys().then(cacheNames => {
+                        return Promise.all(
+                            cacheNames.map(cacheName => {
+                                if (cacheName !== CACHE_NAME) {
+                                    return caches.delete(cacheName);
+                                }
+                            })
+                        );
+                    })
+                );
+                return self.clients.claim();
+            });
+
             self.addEventListener('fetch', event => {
-                event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
+                if (event.request.mode === 'navigate' || event.request.url.includes('index.html')) {
+                    // Network-First for HTML to prevent sticking on old versions
+                    event.respondWith(
+                        fetch(event.request).catch(() => caches.match(event.request))
+                    );
+                } else {
+                    // Cache-First for static assets
+                    event.respondWith(
+                        caches.match(event.request).then(response => response || fetch(event.request))
+                    );
+                }
             });
         `);
     });
