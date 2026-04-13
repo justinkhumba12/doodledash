@@ -16,6 +16,9 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     
+    <!-- AD NETWORK SCRIPT: Replace with your actual ad network script when ready -->
+    <!-- <script src="//[your-ad-network-url]" data-zone="10604686"></script> -->
+
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -75,6 +78,13 @@
         .hover-up { transition: transform 0.2s, box-shadow 0.2s; }
         .hover-up:hover { transform: translateY(-5px); box-shadow: 0 12px 25px rgba(99, 102, 241, 0.12) !important; }
         .swipe-container { transition: transform 0.3s ease-out; }
+
+        /* Bottom Navigation CSS */
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card-bg); display: flex; justify-content: space-around; padding: 12px 0; box-shadow: 0 -5px 20px rgba(0,0,0,0.05); z-index: 1040; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #e2e8f0; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; font-size: 0.75rem; cursor: pointer; transition: 0.3s; width: 25%; }
+        .nav-item.active { color: var(--primary); }
+        .nav-item i { font-size: 1.25rem; margin-bottom: 4px; transition: transform 0.2s; }
+        .nav-item.active i { transform: scale(1.15); }
     </style>
 </head>
 <body>
@@ -95,12 +105,11 @@
         tg.expand();
 
         // **CORE LOGIC: Extract Telegram User WITHOUT URL Parameters**
-        // Telegram silently attaches `initData` directly to the web environment via the JS SDK.
         let initData = tg.initData; 
         let tgId = tg.initDataUnsafe?.user?.id?.toString();
         let profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
-        // Web Fallback (If accessed entirely without Telegram App for Debugging purposes)
+        // Web Fallback
         if (!initData) {
             tgId = localStorage.getItem('doodledash_web_id');
             if (!tgId) {
@@ -141,6 +150,8 @@
             const [isDisconnected, setIsDisconnected] = useState(false);
             const [isReloading, setIsReloading] = useState(false);
             
+            const [mainPageTab, setMainPageTab] = useState('home'); // Tabs: home, tasks, leaderboard, profile
+
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
@@ -170,7 +181,6 @@
             useEffect(() => {
                 let isMounted = true;
                 
-                // We POST the cleanly obtained `initData` from the SDK over to the Node Server
                 fetch('/api/authenticate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -489,7 +499,6 @@
                         <div className="alert alert-light border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
                             <i className="fas fa-circle-notch fa-spin fs-1 text-primary mb-3"></i>
                             <h4 className="fw-bold">{loadingState}</h4>
-                            <p className="text-muted small mt-2">If it stays stuck here, please ensure your backend Server, MySQL, and Redis services are running.</p>
                         </div>
                     </div>
                 );
@@ -523,8 +532,8 @@
             };
 
             return (
-                <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100">
-                    <div className="app-header">
+                <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
+                    <div className="app-header flex-shrink-0">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                         <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
                             <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{user.credits}</b>
@@ -534,98 +543,120 @@
                         </div>
                     </div>
 
-                    {!currentRoomId ? (
-                        <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />
-                    ) : (
-                        <>
-                            {roomData ? (
-                                <div className="container-fluid pt-3">
-                                    <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
-                                        <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
-                                            <div className="d-flex flex-column">
-                                                <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
-                                                <div className="d-flex align-items-center gap-2 mt-1">
-                                                    {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
-                                                    {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
-                                                    {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
-                                                        <>
-                                                            <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
-                                                            <button className="btn btn-sm btn-outline-danger py-1 px-2 rounded-circle shadow-none fw-bold" title="Delete Room" onClick={() => setModal({type: 'confirm_delete_room', title: 'Delete Room'})}><i className="fas fa-trash"></i></button>
-                                                        </>
-                                                    ) : null}
-                                                </div>
-                                            </div>
-                                            <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
-                                        </div>
-                                        <div className="text-center w-100">
-                                        <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
-                                        <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                    <div className="flex-grow-1 position-relative">
+                        {!currentRoomId ? (
+                            <div style={{ paddingBottom: '80px' }}>
+                                {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
+                                {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} />}
+                                {mainPageTab === 'leaderboard' && <LeaderboardView />}
+                                {mainPageTab === 'profile' && <ProfileView user={user} />}
+                                
+                                <div className="bottom-nav">
+                                    <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
+                                        <i className="fas fa-gamepad"></i><span>Home</span>
+                                    </div>
+                                    <div className={`nav-item ${mainPageTab === 'tasks' ? 'active' : ''}`} onClick={() => setMainPageTab('tasks')}>
+                                        <i className="fas fa-tasks"></i><span>Tasks</span>
+                                    </div>
+                                    <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
+                                        <i className="fas fa-trophy"></i><span>Notice</span>
+                                    </div>
+                                    <div className={`nav-item ${mainPageTab === 'profile' ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
+                                        <i className="fas fa-user"></i><span>Profile</span>
                                     </div>
                                 </div>
-                            
-                                <GameRoom 
-                                    roomData={roomData} 
-                                    tgId={tgId} 
-                                    socket={socket}
-                                    setProfileModal={setProfileModal}
-                                    setModal={setModal}
-                                />
+                            </div>
+                        ) : (
+                            <>
+                                {roomData ? (
+                                    <div className="container-fluid pt-3">
+                                        <div className="col-12 col-lg-8 mx-auto room-header p-2 mb-3">
+                                            <div className="d-flex justify-content-between align-items-center w-100 border-bottom pb-2 mb-2">
+                                                <div className="d-flex flex-column">
+                                                    <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
+                                                    <div className="d-flex align-items-center gap-2 mt-1">
+                                                        {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
+                                                        {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
+                                                        {roomData.room.is_private === 1 && roomData.room.creator_id === tgId ? (
+                                                            <>
+                                                                <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
+                                                                <button className="btn btn-sm btn-outline-danger py-1 px-2 rounded-circle shadow-none fw-bold" title="Delete Room" onClick={() => setModal({type: 'confirm_delete_room', title: 'Delete Room'})}><i className="fas fa-trash"></i></button>
+                                                            </>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+                                                <button className="btn btn-link text-danger p-0 shadow-none" onClick={() => setModal({ type: 'confirm_leave' })}><i className="fas fa-sign-out-alt fs-5"></i></button>
+                                            </div>
+                                            <div className="text-center w-100">
+                                            <strong className="text-primary fs-6">{getStatusText(roomData.room.status)}</strong>
+                                            <div className="text-muted" style={{fontSize: '0.7rem'}}><i className="fas fa-users"></i> {roomData.members.length} / {roomData.room.max_members} Players</div>
+                                        </div>
+                                    </div>
                                 
-                                <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-                                        <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
-                                            <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
-                                        </div>
-                                        <div className="panel-header">
-                                            <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''} ${unreadGuess && activeTab !== 'guess' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('guess'); setUnreadGuess(false); }}>
-                                                Guesses {unreadGuess && activeTab !== 'guess' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                    <GameRoom 
+                                        roomData={roomData} 
+                                        tgId={tgId} 
+                                        socket={socket}
+                                        setProfileModal={setProfileModal}
+                                        setModal={setModal}
+                                    />
+                                    
+                                    <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+                                            <div className={`floating-toggle ${!panelOpen && glowToggle ? 'toggle-glow' : ''}`} onClick={() => { setPanelOpen(!panelOpen); setGlowToggle(false); }}>
+                                                <i className={`fas fa-chevron-${panelOpen ? 'right' : 'left'}`}></i>
                                             </div>
-                                            <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''} ${unreadChat && activeTab !== 'chat' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('chat'); setUnreadChat(false); }}>
-                                                Chat {unreadChat && activeTab !== 'chat' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                            <div className="panel-header">
+                                                <div className={`panel-tab ${activeTab === 'guess' ? 'active' : ''} ${unreadGuess && activeTab !== 'guess' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('guess'); setUnreadGuess(false); }}>
+                                                    Guesses {unreadGuess && activeTab !== 'guess' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                                </div>
+                                                <div className={`panel-tab ${activeTab === 'chat' ? 'active' : ''} ${unreadChat && activeTab !== 'chat' ? 'tab-glow' : ''}`} onClick={() => { setActiveTab('chat'); setUnreadChat(false); }}>
+                                                    Chat {unreadChat && activeTab !== 'chat' ? <span className="ms-1 text-danger fw-bold">!</span> : null}
+                                                </div>
+                                                <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                             </div>
-                                            <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
-                                        </div>
-                                        
-                                        {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                        {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={tgId} />}
-                                        {activeTab === 'sounds' && (
-                                            <div className="panel-body">
-                                                <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
-                                                
-                                                <div className="accordion" id="soundAccordion">
-                                                    <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
-                                                        <h2 className="accordion-header">
-                                                            <button className="accordion-button fw-bold" type="button" onClick={() => setOpenAcc('volumes')} style={{backgroundColor: '#e0e7ff', color: 'var(--text-main)', boxShadow: 'none'}}>
-                                                                <i className="fas fa-volume-up text-primary me-2"></i> Master Volume
-                                                            </button>
-                                                        </h2>
-                                                        <div className="accordion-collapse collapse show">
-                                                            <div className="accordion-body bg-white pb-1">
-                                                                <div className="mb-3 mt-1">
-                                                                    <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Notifications</span>
-                                                                        <span className="text-primary">{Math.round(appVol * 100)}%</span>
-                                                                    </label>
-                                                                    <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
-                                                                        onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                        onChange={e => {
-                                                                            const v = parseFloat(e.target.value);
-                                                                            setAppVol(v);
-                                                                        }} />
-                                                                </div>
-                                                                <div className="alert alert-light border small text-muted">
-                                                                    <i className="fas fa-info-circle text-primary"></i> Master volume for alerts and chats.
+                                            
+                                            {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={tgId} roomData={roomData} socket={socket} setModal={setModal} />}
+                                            {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={tgId} />}
+                                            {activeTab === 'sounds' && (
+                                                <div className="panel-body">
+                                                    <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
+                                                    
+                                                    <div className="accordion" id="soundAccordion">
+                                                        <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
+                                                            <h2 className="accordion-header">
+                                                                <button className="accordion-button fw-bold" type="button" onClick={() => setOpenAcc('volumes')} style={{backgroundColor: '#e0e7ff', color: 'var(--text-main)', boxShadow: 'none'}}>
+                                                                    <i className="fas fa-volume-up text-primary me-2"></i> Master Volume
+                                                                </button>
+                                                            </h2>
+                                                            <div className="accordion-collapse collapse show">
+                                                                <div className="accordion-body bg-white pb-1">
+                                                                    <div className="mb-3 mt-1">
+                                                                        <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
+                                                                            <span>Notifications</span>
+                                                                            <span className="text-primary">{Math.round(appVol * 100)}%</span>
+                                                                        </label>
+                                                                        <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
+                                                                            onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
+                                                                            onChange={e => {
+                                                                                const v = parseFloat(e.target.value);
+                                                                                setAppVol(v);
+                                                                            }} />
+                                                                    </div>
+                                                                    <div className="alert alert-light border small text-muted">
+                                                                        <i className="fas fa-info-circle text-primary"></i> Master volume for alerts and chats.
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )}
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ) : <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i><p>Loading room data...</p></div>}
-                        </>
-                    )}
+                                ) : <div className="text-center mt-5"><i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i><p>Loading room data...</p></div>}
+                            </>
+                        )}
+                    </div>
 
                     <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} />
                     
@@ -647,6 +678,149 @@
                 </div>
             );
         };
+
+        // --- Bottom Navigation Tab Views ---
+        const ProfileView = ({ user }) => (
+            <div className="container mt-4 text-center">
+                <h3 className="fw-bold mb-4">Player Profile</h3>
+                <img src={user.profile_pic || 'https://via.placeholder.com/100'} className="rounded-circle shadow mb-3" width="100" height="100" />
+                <h4>{user.tg_username || toHex(user.tg_id)}</h4>
+                <p className="text-muted">ID: {user.tg_id}</p>
+                <div className="row mt-4">
+                    <div className="col-6">
+                        <div className="p-3 bg-white rounded shadow-sm border">
+                            <i className="fas fa-coins fs-2 text-warning mb-2"></i>
+                            <h5>{user.credits}</h5>
+                            <span className="small text-muted">Credits</span>
+                        </div>
+                    </div>
+                    <div className="col-6">
+                        <div className="p-3 bg-white rounded shadow-sm border">
+                            <i className="fas fa-play-circle fs-2 text-primary mb-2"></i>
+                            <h5>Active</h5>
+                            <span className="small text-muted">Status</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const TasksView = ({ user, socket, setModal }) => {
+            const [adState, setAdState] = useState({ show: false });
+
+            const triggerAdTask = (adNum, prefix) => {
+                setAdState({ show: true });
+                if (typeof window.show_10604686 !== 'function') {
+                    // Fallback to simulate ad if AdBlocker blocks script
+                    setTimeout(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }, 2500);
+                    return;
+                }
+                if (adNum === 1) {
+                    window.show_10604686().then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'Failed to show ad. Try again later.' });
+                    });
+                } else {
+                    window.show_10604686('pop').then(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }).catch(e => {
+                        setAdState({ show: false });
+                        setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now. Try again later.' });
+                    });
+                }
+            };
+
+            const renderTaskAdBtn = (adNum) => {
+                const prefix = adNum === 1 ? 'ad' : 'ad2';
+                const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
+                const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
+                const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
+                const maxClaims = adNum === 1 ? 3 : 5;
+
+                let btnText = `Watch (${claims}/${maxClaims})`;
+                let disabled = false;
+                
+                if (!isAvailable) {
+                    disabled = true;
+                    if (claims >= maxClaims) { 
+                        btnText = `Done`; 
+                    } else { 
+                        const wH = Math.floor(waitMins / 60);
+                        const wM = waitMins % 60;
+                        btnText = `Wait ${wH > 0 ? wH + 'h ' : ''}${wM > 0 ? wM + 'm' : ''}`.trim(); 
+                    }
+                }
+
+                return (
+                    <button className={`btn btn-sm ${disabled ? 'btn-secondary' : 'btn-outline-primary'} rounded-pill px-3`} disabled={disabled} onClick={() => triggerAdTask(adNum, prefix)}>
+                        {btnText}
+                    </button>
+                );
+            };
+
+            return (
+                <div className="container mt-4 pb-5">
+                    <h3 className="fw-bold mb-4 text-center">Daily Tasks</h3>
+                    <div className="card border-0 shadow-sm rounded-4 mb-3">
+                        <div className="card-body d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 className="fw-bold mb-1"><i className="fas fa-calendar-check text-success me-2"></i> Daily Login</h6>
+                                <p className="small text-muted mb-0">Log in every day to get 1 free credit.</p>
+                            </div>
+                            <button className={`btn btn-sm ${!user.daily_available ? 'btn-secondary' : 'btn-primary'} rounded-pill px-3`} disabled={!user.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                                {user.daily_available ? 'Claim' : 'Done'}
+                            </button>
+                        </div>
+                    </div>
+                    <div className="card border-0 shadow-sm rounded-4 mb-3">
+                        <div className="card-body d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 className="fw-bold mb-1"><i className="fas fa-tv text-warning me-2"></i> Watch Ad 1</h6>
+                                <p className="small text-muted mb-0">Watch ads to earn extra credits.</p>
+                            </div>
+                            {renderTaskAdBtn(1)}
+                        </div>
+                    </div>
+                    <div className="card border-0 shadow-sm rounded-4 mb-3">
+                        <div className="card-body d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 className="fw-bold mb-1"><i className="fas fa-play-circle text-danger me-2"></i> Watch Ad 2</h6>
+                                <p className="small text-muted mb-0">Additional ad views for more credits.</p>
+                            </div>
+                            {renderTaskAdBtn(2)}
+                        </div>
+                    </div>
+
+                    {adState.show && (
+                        <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed', top:0, left:0, right:0, bottom:0}}>
+                            <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
+                            <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                            <p className="text-muted mt-5 small">Please wait, do not close.</p>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const LeaderboardView = () => (
+            <div className="container mt-4 text-center">
+                <h3 className="fw-bold mb-4">Notice & Leaderboard</h3>
+                <div className="alert alert-info border-0 shadow-sm rounded-4 text-start">
+                    <h5 className="fw-bold"><i className="fas fa-bullhorn me-2"></i> Welcome to DoodleDash!</h5>
+                    <p className="mb-0 small">The leaderboard feature is coming soon. Play matches to earn a spot in the top 100 global players!</p>
+                </div>
+                <i className="fas fa-trophy text-light mt-5" style={{ fontSize: '6rem' }}></i>
+                <h4 className="text-muted mt-3">Coming Soon</h4>
+            </div>
+        );
+
 
         const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) => {
             if (!modal) return null;
@@ -923,11 +1097,15 @@
             };
 
             const triggerAd = (adNum, prefix) => {
+                setAdState({ show: true });
                 if (typeof window.show_10604686 !== 'function') {
-                    setModal({ type: 'error', title: 'Ad Loading', content: 'Ad system is still loading. Please try again or disable adblockers.' });
+                    // Fallback to simulate ad viewing if the external ad script is blocked
+                    setTimeout(() => {
+                        socket.emit('claim_reward', { type: prefix });
+                        setAdState({ show: false });
+                    }, 2500);
                     return;
                 }
-                setAdState({ show: true });
 
                 if (adNum === 1) {
                     window.show_10604686().then(() => {
@@ -1006,7 +1184,7 @@
             }
 
             return (
-                <div className="container mt-3">
+                <div className="container mt-3 pb-4">
                     <div className="row mb-4">
                         <div className="col-md-6 mb-3">
                             <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
