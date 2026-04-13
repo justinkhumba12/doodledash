@@ -1,5 +1,7 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
+const RANDOM_WORDS = ["bell","belt","bench","berry","bib","bike","bin","bird","blanket","block","blue","board","boat","bolt","bomb","bone","book","boot","bottle","bow","bowl","box","branch","bread","brick","broom","brush","bubble","bucket","bud","bug","bulb","bun","bunny","bus","bush","button","cabin","cactus","cage","cake","camel","camera","camp","can","candy","cane","canoe","cap","cape","card","carrot","cart","castle","cat","cave","chain","chair","chalk","cheese","chest","chin","chip","circle","city","claw","clay","clip","clock","cloud","club","coat","coin","comb","cone","coral","cord","cork","corn","couch","cow","crab","crown","cube","cup","curtain","cushion","dart","deer","desk","dice","dish","dock","dog","doll","door","donut","dot","dove","dragon","mat","medal","melon","mic","milk","mint","mirror","mitt","mole","money","mop","motor","mug","nail","napkin","net","nose","nut","oar","onion","orange","owl","paint","pan","panda","pants","paper","park","parrot","pasta","paw","pea","peach","pear","pen","pencil","pepper","piano","pig","pillow","pin","pine","pipe","pizza","plane","plate","plum","pocket","pond","pony","popcorn","pot","potato","pumpkin","purse","puzzle","quill","rabbit","rake","rat","ribbon","rice","ring","river","robot","rock","rocket","roller","rope","rose","ruler","saddle","salt","sand","saw","scarf","scissors","screw","seed","sheep","shell","shield","ship","shirt","shoe","shovel","sink","skate","skirt","skull","sled","slide","slime","snail","snake","sock","sofa","soil","spear","spider","spoon","spring","square","squid","star","stick","stone","stool","straw","string","stump","sugar","sun","surf","swan","swing","sword","taco","tail","tape","teapot","teddy","tent","tie","tiger","tile","tire","toast","toe","tomato","tooth","top","torch","towel","tower","toy","train","tray","tree","truck","tube","tulip","turtle","tv","umbrella","vase","vest","vine","violin","wagon","wall","wand","watch","wave","web","whale","wheat","wheel","whip","whistle","wig","wind","window","wing","wire","wolf","worm","yarn","yoyo","zebra","zipper","zombie","acorn","airplane","almond","anchor","angel","ant","apron","arm","arrow","ash","axe","badge","bag","bait","ball","bamboo","band","bank","banner","barn","barrel","basket","bat","battery","beach","bean","beard","bee","bagel","bakery","balcony","balloon","bandana","bar","bark","bath","beanbag","beehive","bicycle","blender","bonnet","bracelet","bridge","buckle","buffalo","calendar","campfire","candle","capsule","carpet","catfish","cloth","cobra","collar","compass","cookie","crate","dome","drill","drum","duck","dust","eagle","ear","egg","elbow","elk","engine","envelope","eye","fan","fang","farm","feather","fence","fern","ferry","fig","fin","fire","fish","flag","flame","flute","fly","fog","fork","fox","frame","frog","fruit","gate","gear","gem","gift","glass","glove","glue","goat","goblet","goggles","gold","goose","grape","grass","grill","guitar","hair","hammer","hand","hanger","hat","heart","hive","hook","horn","horse","hose","house","ice","ink","iron","island","jacket","jam","jar","jaw","jeep","jelly","jet","jewel","key","kite","knee","knife","ladder","lake","lamp","land","leaf","leg","lemon","letter","lid","light","lily","lime","line","lock","log","lollipop","loop","magnet","mailbox","map","mask","match","mail","dune","food","foot","girl","gun","hill","lantern","leash","ankle","anvil","applepie","armor","astronaut","avocado","bandage","banjo","beaver","blueberry","broomstick","building","calculator","calf","cherry","chimney","cloak","clover","coconut","comet","cotton","cutlass","dagger","daisy","diamond","eraser","fountain","funnel","galaxy","gamepad","ginger","goldfish","golf","grid","gum","hamster","helmet","icecream","moon","table","bed","car","rain","snow","flower","apple","banana","mango","burger","phone","marker","radio","lion","mouse","shark","penguin","squirrel","mountain","road","garden","ghost","smile","baby","bear","beetle","dolphin","donkey","elephant","flamingo","giraffe","hawk","hippo","iguana","kitten","koala","lizard","llama","monkey","moose","otter","peacock","seal","slug","turkey", "yak","arch","chess","flash","glasses","ladle","needle","nest","ocean","paddle","poster","quilt","sail","scale","spark","tank","ticket","tractor","wallet"];
+
 const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     const canvasRef = useRef(null);
     const [localTimeLeft, setLocalTimeLeft] = useState(0);
@@ -25,17 +27,21 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     
     const [wordInput, setWordInput] = useState('');
     
-    const myData = members.find(m => m.user_id === tgId) || {};
-    const inkUsedObj = myData.ink_used || {};
-    const inkExtraObj = myData.ink_extra || {};
+    // Derived ink data based on drawer
+    const drawerMember = members.find(m => m.user_id === room.current_drawer_id) || {};
+    const drawerInkExtraObj = drawerMember.ink_extra || {};
     
-    const currentMaxInk = window.INK_CONFIG.black.free + (inkExtraObj['black'] || 0);
+    const currentMaxInk = window.INK_CONFIG.black.free + (drawerInkExtraObj['black'] || 0);
 
     const currentMaxInkRef = useRef(currentMaxInk);
     useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
 
+    // Reactions State
+    const [reactionCounts, setReactionCounts] = useState({ '❤️': 0, '😂': 0, '😮': 0, '😢': 0, '🔥': 0, '👏': 0 });
+    const emojis = ['❤️', '😂', '😮', '😢', '🔥', '👏'];
+
     const updateInkUI = useCallback(() => {
-        if (!isDrawer || !isDrawingPhase) return;
+        if (!isDrawingPhase) return;
         const max = currentMaxInkRef.current;
         const inkLeft = Math.max(0, max - inkUsedRef.current);
         const inkPercent = max > 0 ? (inkLeft / max) * 100 : 0;
@@ -59,11 +65,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             text.innerText = `${Math.floor(inkLeft)} / ${max}`;
         }
         
-        const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
+        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
         if (buyBtn) {
-            buyBtn.style.display = (inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
+            buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
         }
-    }, [isDrawer, isDrawingPhase, inkExtraObj]);
+    }, [isDrawer, isDrawingPhase, drawerInkExtraObj]);
 
     const updateInkUIRef = useRef(updateInkUI);
     useEffect(() => { updateInkUIRef.current = updateInkUI; });
@@ -74,10 +80,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             inkUsedRef.current = 0;
             return;
         }
-        localInkRef.current['black'] = inkUsedObj['black'] || 0;
+        // Initialize ink based on drawer state when joining phase
+        const drawerInkUsedObj = drawerMember.ink_used || {};
+        localInkRef.current['black'] = drawerInkUsedObj['black'] || 0;
         inkUsedRef.current = localInkRef.current['black'] || 0;
         updateInkUI();
-    }, [inkUsedObj, room.status, updateInkUI]);
+    }, [room.status, drawerMember.ink_used, updateInkUI]);
 
     useEffect(() => {
         if (!socket) return;
@@ -91,6 +99,26 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
         socket.on('update_ink', handleUpdateInk);
         return () => socket.off('update_ink', handleUpdateInk);
     }, [socket]);
+
+    // Reactions cleanup and handler
+    useEffect(() => {
+        if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
+            setReactionCounts({ '❤️': 0, '😂': 0, '😮': 0, '😢': 0, '🔥': 0, '👏': 0 });
+        }
+    }, [room.status, room.turn_index]);
+
+    useEffect(() => {
+        if (!socket) return;
+        const handleReaction = ({ emoji }) => {
+            setReactionCounts(prev => ({ ...prev, [emoji]: (prev[emoji] || 0) + 1 }));
+        };
+        socket.on('new_reaction', handleReaction);
+        return () => socket.off('new_reaction', handleReaction);
+    }, [socket]);
+
+    const sendReaction = (emoji) => {
+        if (socket) socket.emit('send_reaction', { emoji });
+    };
 
     useEffect(() => {
         if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
@@ -178,10 +206,20 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             }
             
             initialDrawingsRef.current.push({ lines, color });
+            
+            // Increment ink locally for viewers to keep UI smooth
+            if (!isDrawer) {
+                let strokeLength = 0;
+                for (let i = 0; i < lines.length; i += 4) {
+                    strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
+                }
+                inkUsedRef.current += strokeLength;
+                updateInkUIRef.current();
+            }
         };
         socket.on('live_draw', handleLiveDraw);
         return () => socket.off('live_draw', handleLiveDraw);
-    }, [socket]);
+    }, [socket, isDrawer]);
 
     const getMousePos = (e) => {
         const canvas = canvasRef.current;
@@ -210,7 +248,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
         const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
         if (dist < 1) return; 
         
-        const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
+        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
         
         if (inkUsedRef.current + dist > currentMaxInkRef.current) {
             stopDraw(e); 
@@ -262,7 +300,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
 
     return (
         <div className="w-100 d-flex flex-column align-items-center">
-            {isDrawer && isDrawingPhase && (
+            {isDrawingPhase && (
                 <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
 
                     <div className="d-flex justify-content-between small fw-bold mb-1">
@@ -273,13 +311,15 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                         <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                              style={{width: '100%', transition: 'width 0.1s'}}></div>
                     </div>
-                    <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                        <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
-                        }}>
-                            <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
-                        </button>
-                    </div>
+                    {isDrawer && (
+                        <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                            <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                            }}>
+                                <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -300,7 +340,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                         <h5 className="text-danger fw-bold">{preDrawTimeLeft}s</h5>
                         <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
                         <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} />
-                        <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                        
+                        <div className="d-flex gap-2 w-75">
+                            <button className="btn btn-secondary w-50 rounded-pill shadow-sm" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-random"></i> Random</button>
+                            <button className="btn btn-primary w-50 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                        </div>
                     </div>
                 )}
                 
@@ -373,6 +417,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                     </button>
                 </div>
             )}
+            
+            {isDrawingPhase && (
+                <div className="d-flex gap-2 justify-content-center mt-3 w-100 flex-wrap px-2">
+                    {emojis.map(emoji => (
+                        <button key={emoji} className="btn btn-light shadow-sm rounded-pill px-3 py-1 fw-bold text-secondary border d-flex align-items-center gap-1"
+                            onClick={() => sendReaction(emoji)} title="React">
+                            <span className="fs-5 lh-1">{emoji}</span>
+                            {reactionCounts[emoji] > 0 && <span className="small">{reactionCounts[emoji]}</span>}
+                        </button>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };
@@ -403,9 +459,44 @@ const ChatBox = ({ chats, profiles, socket, tgId }) => {
                 ))}
                 <div ref={messagesEndRef} />
             </div>
-            <div className="chat-input-wrapper d-flex mt-auto">
-                <input type="text" maxLength={200} className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
-                <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
+            
+            <div className="chat-input-wrapper d-flex align-items-end mt-auto gap-2" style={{padding: '10px 15px', backgroundColor: 'white', borderTop: '1px solid #e2e8f0'}}>
+                <textarea
+                    className="form-control bg-light border-0"
+                    style={{ resize: 'none', minHeight: '40px', maxHeight: '80px', borderRadius: '20px', padding: '10px 15px', overflowY: 'auto' }}
+                    rows={1}
+                    value={input}
+                    maxLength={200}
+                    placeholder="Type message..."
+                    onChange={(e) => {
+                        setInput(e.target.value);
+                        e.target.style.height = 'auto';
+                        e.target.style.height = Math.min(e.target.scrollHeight, 80) + 'px';
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (input.trim()) {
+                                socket.emit('chat', {message: input.trim()});
+                                setInput('');
+                                e.target.style.height = 'auto';
+                            }
+                        }
+                    }}
+                />
+                <button
+                    className="btn btn-primary rounded-circle flex-shrink-0 shadow-sm"
+                    style={{width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
+                    onClick={() => {
+                        if (input.trim()) {
+                            socket.emit('chat', {message: input.trim()});
+                            setInput('');
+                            const ta = document.querySelector('.chat-input-wrapper textarea');
+                            if (ta) ta.style.height = 'auto';
+                        }
+                    }}>
+                    <i className="fas fa-paper-plane"></i>
+                </button>
             </div>
         </div>
     );
