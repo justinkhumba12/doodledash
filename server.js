@@ -207,6 +207,31 @@ if (cluster.isPrimary) {
         `);
     });
 
+    // ---------------------------------------------------------
+    // MONETAG SERVER-TO-SERVER (S2S) POSTBACK ENDPOINT
+    // ---------------------------------------------------------
+    app.get('/postback', async (req, res) => {
+        const { ymid, event_type, reward_event_type, estimated_price, zone } = req.query;
+
+        // Verify the event is a completed reward video/popup (reward_event_type === 'valued')
+        if (reward_event_type === 'valued' && ymid) {
+            try {
+                console.log(`[Monetag Postback] User ${ymid} successfully completed ad for Zone: ${zone}. Revenue: ${estimated_price}`);
+                // Note: The UI currently triggers the 'claim_reward' socket event internally immediately after the Ad finishes
+                // playing to apply rate limiting/daily caps and provide immediate user feedback.
+                // If you want to use strictly S2S rewarding without rate limits from the database later, you can credit the user here:
+                // await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [ymid]);
+            } catch (err) {
+                console.error('[Monetag Postback DB Error]', err);
+            }
+        }
+        
+        // Always send HTTP 200 OK back to Monetag so they know it processed successfully 
+        // If not, Monetag will continuously retry sending the postback.
+        res.sendStatus(200); 
+    });
+
+
     const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
     const INK_CONFIG = {
