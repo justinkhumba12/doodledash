@@ -11,7 +11,6 @@
     
     <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
     <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
-    <link rel="preload" href="/audio/call.mp3" as="audio">
     
     <script src='//libtl.com/sdk.js' data-zone='10604686' data-sdk='show_10604686'></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -30,7 +29,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        :root { --primary: #6366f1; --primary-hover: #4f46e5; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #1e293b; --call-green: #10b981; }
+        :root { --primary: #6366f1; --primary-hover: #4f46e5; --bg-color: #f8fafc; --card-bg: #ffffff; --text-main: #1e293b; }
         body { background-color: var(--bg-color); font-family: 'Poppins', sans-serif; color: var(--text-main); overflow-x: hidden; touch-action: manipulation; }
         .app-header { background: var(--card-bg); padding: 15px 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; position: sticky; top: 0; z-index: 1050; }
         .app-title { font-weight: 700; color: var(--primary); margin: 0; font-size: 1.5rem; }
@@ -62,8 +61,6 @@
         .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
         
         .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
-        @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
-        .heartbeat { animation: heartbeat 1s infinite; }
         
         @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
         .hint-reveal { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
@@ -83,7 +80,6 @@
 <body>
     <audio id="mgsSound" src="/audio/mgs_notification.mp3" playsinline preload="auto"></audio>
     <audio id="guessSound" src="/audio/guess_notification.mp3" playsinline preload="auto"></audio>
-    <audio id="callSound" src="/audio/call.mp3" loop playsinline preload="auto"></audio>
     <audio id="bgmSound" loop playsinline preload="auto"></audio>
 
     <div id="root"></div>
@@ -125,385 +121,6 @@
             }
         };
 
-        const AudioPolicyModal = ({ onAccept }) => (
-            <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.85)', position: 'fixed'}}>
-                <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}}>
-                    <i className="fas fa-phone-volume fs-1 text-warning mb-3 heartbeat"></i>
-                    <h4 className="fw-bold">Voice Call Warning</h4>
-                    <p className="text-muted small">To receive voice calls and hear ringtones, please enable audio autoplay for this room.</p>
-                    <button className="btn btn-success rounded-pill px-5 py-2 fw-bold w-100 shadow mt-2" onClick={onAccept}>Okay</button>
-                </div>
-            </div>
-        );
-
-        // --- Custom React Hook for WebRTC Logic ---
-        const useWebRTC = (socket, tgIdRef, setModal) => {
-            const [activeCall, setActiveCall] = useState(null);
-            const [localStream, setLocalStream] = useState(null);
-            const [callConnectionState, setCallConnectionState] = useState('Ready');
-            const [isMicMuted, setIsMicMuted] = useState(false);
-            const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
-
-            const peerConnectionRef = useRef(null);
-            const remoteAudioRef = useRef(null);
-            const localStreamRef = useRef(null);
-            const candidateQueue = useRef([]);
-            const candidateBatchRef = useRef([]);
-            const batchTimerRef = useRef(null);
-            
-            // LOCKS to prevent spamming
-            const requestMicRef = useRef(false);
-            const handledCallIdRef = useRef(null);
-
-            const requestMic = async () => {
-                // Prevent concurrent mic requests if one is already pending or fulfilled
-                if (localStreamRef.current) return localStreamRef.current;
-                if (requestMicRef.current) return null;
-                
-                requestMicRef.current = true;
-                console.log('[WebRTC] Requesting microphone access...');
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: { 
-                            echoCancellation: { ideal: true }, 
-                            noiseSuppression: { ideal: true }, 
-                            autoGainControl: { ideal: true } 
-                        } 
-                    });
-                    console.log('[WebRTC] Microphone access granted successfully.');
-                    requestMicRef.current = false;
-                    return stream;
-                } catch (e) {
-                    console.error('[WebRTC] Microphone access denied or failed:', e);
-                    requestMicRef.current = false;
-                    alert("Microphone permission required for calls. Please enable it in your browser/app settings.");
-                    return null; 
-                }
-            };
-
-            const initPeerConnection = useCallback((stream, targetId, callId) => {
-                console.log('[WebRTC] Initializing PeerConnection for call_id:', callId, 'target_id:', targetId);
-                const pc = new RTCPeerConnection({ 
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun.ipv6.google.com:19302' },
-                        { urls: 'stun:stun.cloudflare.com:3478' },
-                        // Separating TURN URLs into individual objects for strict mobile browser compatibility
-                        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-                    ],
-                    iceTransportPolicy: 'all',
-                    bundlePolicy: 'max-bundle',
-                    rtcpMuxPolicy: 'require',
-                    iceCandidatePoolSize: 2
-                });
-                
-                let hasRelayCandidate = false;
-
-                if (stream) {
-                    console.log('[WebRTC] Adding local tracks to PeerConnection.');
-                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
-                } else {
-                    console.warn('[WebRTC] No local stream provided to PeerConnection.');
-                }
-                
-                pc.onicecandidate = (e) => {
-                    if (e.candidate) {
-                        console.log(`[WebRTC] Local ICE Candidate gathered: ${e.candidate.candidate}`);
-                        
-                        if (e.candidate.candidate.includes('typ relay')) {
-                            hasRelayCandidate = true;
-                        }
-
-                        // Serialize candidate safely! Socket.io sometimes strips WebRTC object properties.
-                        const candidateObj = e.candidate.toJSON ? e.candidate.toJSON() : {
-                            candidate: e.candidate.candidate,
-                            sdpMid: e.candidate.sdpMid,
-                            sdpMLineIndex: e.candidate.sdpMLineIndex
-                        };
-                        candidateBatchRef.current.push(candidateObj);
-
-                        if (!batchTimerRef.current) {
-                            batchTimerRef.current = setTimeout(() => {
-                                console.log(`[WebRTC] Sending batch of ${candidateBatchRef.current.length} ICE candidates.`);
-                                if (socket) {
-                                    socket.emit('webrtc_signal', { 
-                                        call_id: callId, 
-                                        target_id: targetId, 
-                                        signal: { type: 'candidates', candidates: candidateBatchRef.current } 
-                                    });
-                                }
-                                candidateBatchRef.current = [];
-                                batchTimerRef.current = null;
-                            }, 500);
-                        }
-                    } else {
-                        console.log('[WebRTC] ICE Candidate gathering complete (null candidate).');
-                        
-                        if (!hasRelayCandidate) {
-                            console.warn('\n[WebRTC CRITICAL WARNING]: ICE gathering finished but NO TURN relay candidates were gathered!');
-                            console.warn('-> This means the free public TURN server (openrelay.metered.ca) is currently down, or blocking/rate-limiting your IP.');
-                            console.warn('-> Without a relay candidate, IPv4 and IPv6 users CANNOT connect. The call will get stuck in "checking".\n');
-                        }
-
-                        if (candidateBatchRef.current.length > 0) {
-                            if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
-                            console.log(`[WebRTC] Sending final batch of ${candidateBatchRef.current.length} ICE candidates.`);
-                            if (socket) {
-                                socket.emit('webrtc_signal', { 
-                                    call_id: callId, 
-                                    target_id: targetId, 
-                                    signal: { type: 'candidates', candidates: candidateBatchRef.current } 
-                                });
-                            }
-                            candidateBatchRef.current = [];
-                            batchTimerRef.current = null;
-                        }
-                    }
-                };
-
-                pc.ontrack = (e) => {
-                    console.log(`[WebRTC] Received remote track of kind: ${e.track.kind}`);
-                    if (remoteAudioRef.current) {
-                        const inboundStream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
-                        remoteAudioRef.current.srcObject = inboundStream;
-                        remoteAudioRef.current.play().then(() => {
-                            console.log('[WebRTC] Remote audio playback started successfully.');
-                        }).catch(err => {
-                            console.error("[WebRTC] Audio playback error:", err);
-                        });
-                    } else {
-                        console.error('[WebRTC] Remote audio ref not found!');
-                    }
-                };
-
-                pc.oniceconnectionstatechange = () => {
-                    console.log(`[WebRTC] ICE Connection State changed to: ${pc.iceConnectionState}`);
-                    setCallConnectionState(pc.iceConnectionState);
-                    if (pc.iceConnectionState === 'failed') {
-                        console.error('[WebRTC] ICE Connection failed! Check firewall or TURN server configurations.');
-                        if (!hasRelayCandidate) {
-                            setModal({ type: 'error', title: 'TURN Relay Blocked', content: 'Connection failed. The free public TURN server blocked your IPs. You must get your own free TURN server from metered.ca' });
-                        } else {
-                            setModal({ type: 'error', title: 'Call Failed', content: 'Network blocked routing. Ensure firewall permits TURN/WebRTC.' });
-                        }
-                        if (socket) socket.emit('end_call', { call_id: callId });
-                    } else if (pc.iceConnectionState === 'closed' || pc.iceConnectionState === 'disconnected') {
-                        console.log('[WebRTC] ICE Connection closed or disconnected.');
-                        if (socket) socket.emit('end_call', { call_id: callId });
-                    }
-                };
-
-                pc.onsignalingstatechange = () => {
-                    console.log(`[WebRTC] Signaling State changed to: ${pc.signalingState}`);
-                };
-
-                pc.onicegatheringstatechange = () => {
-                    console.log(`[WebRTC] ICE Gathering State changed to: ${pc.iceGatheringState}`);
-                };
-
-                peerConnectionRef.current = pc;
-                return pc;
-            }, [socket, setModal]);
-
-            const cleanupCall = useCallback(() => {
-                console.log('[WebRTC] Cleaning up call state and destroying PeerConnection.');
-                if (peerConnectionRef.current) peerConnectionRef.current.close();
-                peerConnectionRef.current = null;
-                handledCallIdRef.current = null;
-                candidateQueue.current = [];
-                candidateBatchRef.current = [];
-                setCallConnectionState('Ready');
-                if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
-                batchTimerRef.current = null;
-                
-                if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-                if (localStreamRef.current) {
-                    localStreamRef.current.getTracks().forEach(track => track.stop());
-                    setLocalStream(null);
-                    localStreamRef.current = null;
-                }
-                setActiveCall(null);
-                setIsMicMuted(false);
-                setIsSpeakerMuted(false);
-            }, []);
-
-            useEffect(() => {
-                if (!socket) return;
-
-                const handleReceiveSignal = async ({ call_id, sender_id, target_id, signal }) => {
-                    if (String(target_id) !== String(tgIdRef.current)) return;
-                    
-                    console.log(`[WebRTC Signal] Received ${signal.type} from ${sender_id}`);
-                    
-                    if (signal.type === 'offer') {
-                        if (peerConnectionRef.current) {
-                            console.warn('[WebRTC] Ignored duplicate offer, peer connection already exists.');
-                            return;
-                        }
-                        
-                        let stream = localStreamRef.current;
-                        if (!stream) {
-                             console.log('[WebRTC] No active stream found during offer reception, requesting mic...');
-                             stream = await requestMic();
-                             if (stream) { setLocalStream(stream); localStreamRef.current = stream; }
-                        }
-                        
-                        const pc = initPeerConnection(stream, sender_id, call_id);
-                        
-                        try {
-                            await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-                            console.log('[WebRTC] Remote description (offer) set successfully.');
-                            const answer = await pc.createAnswer();
-                            await pc.setLocalDescription(answer);
-                            console.log('[WebRTC] Local description (answer) set successfully, sending to peer...');
-                            socket.emit('webrtc_signal', { call_id, target_id: sender_id, signal: { type: 'answer', answer } });
-                            
-                            while (candidateQueue.current.length > 0) {
-                                try { 
-                                    await pc.addIceCandidate(candidateQueue.current.shift()); 
-                                    console.log('[WebRTC] Processed queued ICE candidate post-offer.');
-                                } catch(e) { console.error('[WebRTC] Failed to add queued ICE candidate:', e); }
-                            }
-                        } catch(err) {
-                            console.error('[WebRTC] Error handling incoming offer:', err);
-                        }
-                    } else if (signal.type === 'answer') {
-                        const pc = peerConnectionRef.current;
-                        if (!pc) {
-                            console.error('[WebRTC] Received answer but no PeerConnection exists!');
-                            return;
-                        }
-                        try {
-                            await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-                            console.log('[WebRTC] Remote description (answer) set successfully.');
-                            
-                            while (candidateQueue.current.length > 0) {
-                                try { 
-                                    await pc.addIceCandidate(candidateQueue.current.shift()); 
-                                    console.log('[WebRTC] Processed queued ICE candidate post-answer.');
-                                } catch (e) { console.error('[WebRTC] Failed to add queued ICE candidate:', e); }
-                            }
-                        } catch(err) {
-                            console.error('[WebRTC] Error handling incoming answer:', err);
-                        }
-                    } else if (signal.type === 'candidates') {
-                        console.log(`[WebRTC] Received ${signal.candidates.length} remote ICE candidates.`);
-                        const pc = peerConnectionRef.current;
-                        for (const c of signal.candidates) {
-                            if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                                try { 
-                                    await pc.addIceCandidate(new RTCIceCandidate(c)); 
-                                    console.log(`[WebRTC] Remote ICE candidate added successfully.`);
-                                } catch (e) { 
-                                    console.error('[WebRTC] Error adding remote candidate directly:', e); 
-                                }
-                            } else {
-                                console.log(`[WebRTC] Remote description not set yet, queuing candidate.`);
-                                candidateQueue.current.push(new RTCIceCandidate(c));
-                            }
-                        }
-                    }
-                };
-
-                const handleCallUpdate = async (call) => {
-                    setActiveCall(call);
-
-                    if (call.status === 'ACTIVE' && call.caller === tgIdRef.current && !peerConnectionRef.current) {
-                        if (handledCallIdRef.current === call.id) return;
-                        handledCallIdRef.current = call.id;
-
-                        console.log(`[WebRTC] Call became ACTIVE, initiating WebRTC offer to ${call.receiver}...`);
-                        let stream = localStreamRef.current;
-                        const targetId = call.receiver;
-                        const pc = initPeerConnection(stream, targetId, call.id);
-                        try {
-                            const offer = await pc.createOffer({ offerToReceiveAudio: true });
-                            await pc.setLocalDescription(offer);
-                            console.log('[WebRTC] Local description (offer) created and set, sending to peer...');
-                            socket.emit('webrtc_signal', { 
-                                call_id: call.id, 
-                                target_id: targetId, 
-                                signal: { type: 'offer', offer } 
-                            });
-                        } catch(e) {
-                            console.error('[WebRTC] Failed to create and send offer:', e);
-                        }
-                    }
-                };
-
-                socket.on('webrtc_signal_receive', handleReceiveSignal);
-                socket.on('call_update', handleCallUpdate);
-                socket.on('call_ended', cleanupCall);
-
-                return () => {
-                    socket.off('webrtc_signal_receive', handleReceiveSignal);
-                    socket.off('call_update', handleCallUpdate);
-                    socket.off('call_ended', cleanupCall);
-                };
-            }, [socket, tgIdRef, cleanupCall, initPeerConnection]);
-
-            useEffect(() => {
-                if (localStreamRef.current) {
-                    localStreamRef.current.getAudioTracks().forEach(track => {
-                        track.enabled = !isMicMuted;
-                    });
-                    console.log(`[WebRTC] Microphone ${isMicMuted ? 'muted' : 'unmuted'}`);
-                }
-            }, [isMicMuted, localStream]);
-
-            const initiateCall = async (targetId) => {
-                console.log(`[WebRTC] Initiating call to target: ${targetId}`);
-                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-                const stream = await requestMic();
-                if (stream) {
-                    setLocalStream(stream);
-                    localStreamRef.current = stream;
-                    if (socket) {
-                        console.log('[WebRTC] Emitting initiate_call event to server.');
-                        socket.emit('initiate_call', { receiver_id: targetId });
-                    }
-                }
-            };
-
-            const acceptCall = async (callObj) => {
-                console.log(`[WebRTC] Accepting incoming call:`, callObj);
-                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-                if (!callObj) return;
-                
-                const stream = await requestMic();
-                if (stream) {
-                    setLocalStream(stream);
-                    localStreamRef.current = stream;
-                    if (socket) {
-                        console.log('[WebRTC] Emitting accept_call event to server.');
-                        socket.emit('accept_call', { call_id: callObj.id });
-                    }
-                }
-            };
-
-            const endCall = (callId) => {
-                console.log(`[WebRTC] Emitting end_call for call_id:`, callId);
-                if (socket) socket.emit('end_call', { call_id: callId });
-            };
-
-            return {
-                activeCall,
-                localStream,
-                callConnectionState,
-                isMicMuted, setIsMicMuted,
-                isSpeakerMuted, setIsSpeakerMuted,
-                remoteAudioRef,
-                initiateCall,
-                acceptCall,
-                endCall,
-                cleanupCall
-            };
-        };
-
         // --- Main App Component ---
         const App = () => {
             const [loadingState, setLoadingState] = useState('Connecting to server...');
@@ -532,21 +149,11 @@
             const [currentBgmMode, setCurrentBgmMode] = useState(() => localStorage.getItem('currentBgmMode') || defaultBGM);
             const [activeTrack, setActiveTrack] = useState(defaultBGM);
 
-            const [policyAccepted, setPolicyAccepted] = useState(false);
-
             const tgIdRef = useRef(tgId);
             const audioUnlocked = useRef(false);
             const prevChatsCount = useRef(0);
             const prevGuessesCount = useRef(0);
             const lastKnownRoomRef = useRef(null);
-
-            // Utilizing the custom WebRTC Hook
-            const {
-                activeCall, localStream, callConnectionState,
-                isMicMuted, setIsMicMuted,
-                isSpeakerMuted, setIsSpeakerMuted,
-                remoteAudioRef, initiateCall, acceptCall, endCall, cleanupCall
-            } = useWebRTC(socket, tgIdRef, setModal);
 
             if (!tgId) {
                 return (
@@ -563,8 +170,6 @@
             useEffect(() => {
                 if (currentRoomId) {
                     lastKnownRoomRef.current = currentRoomId;
-                    setPolicyAccepted(false);
-                    audioUnlocked.current = false;
                 }
             }, [currentRoomId]);
 
@@ -579,7 +184,7 @@
             }, [currentRoomId, roomData]);
 
             useEffect(() => {
-                ['mgsSound', 'guessSound', 'callSound'].forEach(id => {
+                ['mgsSound', 'guessSound'].forEach(id => {
                     const s = document.getElementById(id);
                     if (s) s.volume = appVol;
                 });
@@ -589,11 +194,10 @@
             useEffect(() => {
                 const s = document.getElementById('bgmSound');
                 if (s) {
-                    const isInCall = activeCall && activeCall.status === 'ACTIVE';
-                    s.volume = isInCall ? (bgmVol * 0.4) : bgmVol;
+                    s.volume = bgmVol;
                 }
                 localStorage.setItem('bgmVol', bgmVol);
-            }, [bgmVol, activeCall]);
+            }, [bgmVol]);
 
             const playAudioSafe = (id) => {
                 if (!audioUnlocked.current) return;
@@ -653,7 +257,7 @@
             useEffect(() => {
                 const bgm = document.getElementById('bgmSound');
                 if (!bgm) return;
-                if (currentRoomId && policyAccepted) {
+                if (currentRoomId && audioUnlocked.current) {
                     const expectedSrc = window.location.origin + encodeURI('/thememusic/' + activeTrack);
                     if (bgm.src !== expectedSrc && bgm.getAttribute('src') !== encodeURI('/thememusic/' + activeTrack)) {
                         bgm.src = encodeURI('/thememusic/' + activeTrack);
@@ -662,75 +266,36 @@
                 } else {
                     bgm.pause();
                 }
-            }, [currentRoomId, policyAccepted, activeTrack]);
-
-            const acceptAudioPolicy = () => {
-                setPolicyAccepted(true);
-                audioUnlocked.current = true;
-
-                const confirmSound = document.getElementById('mgsSound');
-                if (confirmSound) {
-                    confirmSound.volume = appVol;
-                    confirmSound.currentTime = 0;
-                    confirmSound.play().catch(()=>{});
-                }
-
-                if (remoteAudioRef.current) remoteAudioRef.current.play().catch(()=>{});
-
-                ['guessSound', 'callSound', 'bgmSound'].forEach(id => {
-                    const el = document.getElementById(id);
-                    if(el) {
-                        el.volume = 0.01; 
-                        const p = el.play();
-                        if (p !== undefined) {
-                            p.then(() => {
-                                setTimeout(() => {
-                                    if(id !== 'bgmSound' && id !== 'callSound') {
-                                        el.pause();
-                                        el.currentTime = 0;
-                                    } else if (id === 'callSound' && !(activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId)) {
-                                        el.pause();
-                                        el.currentTime = 0;
-                                    }
-                                    el.volume = (id === 'bgmSound') ? (activeCall && activeCall.status === 'ACTIVE' ? bgmVol * 0.4 : bgmVol) : appVol;
-                                }, 50); 
-                            }).catch(()=>{});
-                        }
-                    }
-                });
-            };
+            }, [currentRoomId, audioUnlocked.current, activeTrack]);
 
             const handleGlobalInteraction = () => {
-                if (remoteAudioRef.current && remoteAudioRef.current.paused && activeCall) {
-                    remoteAudioRef.current.play().catch(e => console.log('Autoplay interaction resume', e));
-                }
-                const bgm = document.getElementById('bgmSound');
-                if (bgm && bgm.paused && policyAccepted && currentRoomId) {
-                    bgm.play().catch(()=>{});
+                if (!audioUnlocked.current) {
+                    audioUnlocked.current = true;
+                    ['mgsSound', 'guessSound', 'bgmSound'].forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) {
+                            el.volume = 0.01; 
+                            const p = el.play();
+                            if (p !== undefined) {
+                                p.then(() => {
+                                    setTimeout(() => {
+                                        if(id !== 'bgmSound') {
+                                            el.pause();
+                                            el.currentTime = 0;
+                                        }
+                                        el.volume = (id === 'bgmSound') ? bgmVol : appVol;
+                                    }, 50); 
+                                }).catch(()=>{});
+                            }
+                        }
+                    });
+                } else {
+                    const bgm = document.getElementById('bgmSound');
+                    if (bgm && bgm.paused && currentRoomId) {
+                        bgm.play().catch(()=>{});
+                    }
                 }
             };
-
-            useEffect(() => {
-                const s = document.getElementById('callSound');
-                let vibInterval;
-                
-                if (activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId) {
-                    if(s && policyAccepted) {
-                        s.currentTime = 0;
-                        s.play().catch(() => {});
-                    }
-                    triggerVibration('warning'); 
-                    vibInterval = setInterval(() => triggerVibration('warning'), 1500); 
-                } else {
-                    if(s) {
-                        s.pause();
-                        s.currentTime = 0;
-                    }
-                    if (vibInterval) clearInterval(vibInterval);
-                }
-                
-                return () => { if (vibInterval) clearInterval(vibInterval); };
-            }, [activeCall, tgId, policyAccepted]);
 
             useEffect(() => {
                 const newSocket = io({ 
@@ -910,7 +475,6 @@
 
             return (
                 <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100">
-                    <audio ref={remoteAudioRef} autoPlay playsInline muted={isSpeakerMuted} hidden></audio>
                     <div className="app-header">
                         <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                         <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
@@ -920,8 +484,6 @@
                             </button>
                         </div>
                     </div>
-
-                    {currentRoomId && !policyAccepted && <AudioPolicyModal onAccept={acceptAudioPolicy} />}
 
                     {!currentRoomId ? (
                         <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />
@@ -955,17 +517,9 @@
                                 <GameRoom 
                                     roomData={roomData} 
                                     tgId={tgId} 
-                                    onCall={(target_id) => setModal({ type: 'call_warn', title: 'Start Call?', target_id: target_id })}
                                     socket={socket}
                                     setProfileModal={setProfileModal}
-                                    activeCall={activeCall}
-                                    callConnectionState={callConnectionState}
-                                    isMicMuted={isMicMuted}
-                                    setIsMicMuted={setIsMicMuted}
-                                    isSpeakerMuted={isSpeakerMuted}
-                                    setIsSpeakerMuted={setIsSpeakerMuted}
                                     setModal={setModal}
-                                    endCall={endCall}
                                 />
                                 
                                 <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -999,7 +553,7 @@
                                                             <div className="accordion-body bg-white pb-1">
                                                                 <div className="mb-3 mt-1">
                                                                     <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                        <span>Notification & Calls</span>
+                                                                        <span>Notifications</span>
                                                                         <span className="text-primary">{Math.round(appVol * 100)}%</span>
                                                                     </label>
                                                                     <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
@@ -1007,12 +561,10 @@
                                                                         onChange={e => {
                                                                             const v = parseFloat(e.target.value);
                                                                             setAppVol(v);
-                                                                            const s = document.getElementById('callSound');
-                                                                            if (s) { s.volume = v; s.play().then(() => setTimeout(()=>s.pause(), 1000)).catch(()=>{}); }
                                                                         }} />
                                                                 </div>
                                                                 <div className="alert alert-light border small text-muted">
-                                                                    <i className="fas fa-info-circle text-primary"></i> Master volume for alerts, chats, and calls.
+                                                                    <i className="fas fa-info-circle text-primary"></i> Master volume for alerts and chats.
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -1076,7 +628,7 @@
                         </>
                     )}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socket} initiateCall={initiateCall} setCurrentRoomId={setCurrentRoomId} cleanupCall={cleanupCall} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} />
                     
                     {profileModal && (
                         <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
@@ -1093,31 +645,11 @@
                            )}
                         </div>
                     )}
-
-                    {activeCall && activeCall.status === 'RINGING' && activeCall.receiver === tgId && (
-                        <div className="wb-overlay" style={{ zIndex: 3000, position: 'fixed' }}>
-                            <div className="call-toast text-center w-75" onClick={e => e.stopPropagation()}>
-                                <div onClick={() => setProfileModal({ user_id: activeCall.caller, pic: roomData.profiles[activeCall.caller] })} className="cursor-pointer mb-3 d-inline-block position-relative">
-                                    {roomData.profiles[activeCall.caller] ? (
-                                        <img src={roomData.profiles[activeCall.caller]} className="rounded-circle shadow heartbeat" width="80" height="80" style={{objectFit: 'cover'}}/>
-                                    ) : (
-                                        <i className="fas fa-user-circle fs-1 text-secondary heartbeat" style={{fontSize: '80px'}}></i>
-                                    )}
-                                </div>
-                                <h4>Incoming Call</h4>
-                                <p className="text-muted">From {toHex(activeCall.caller)}</p>
-                                <div className="d-flex gap-4 mt-3 justify-content-center">
-                                    <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => endCall(activeCall.id)}><i className="fas fa-phone-slash"></i></button>
-                                    <button className="btn btn-success rounded-circle shadow d-flex align-items-center justify-content-center heartbeat" style={{width: '60px', height: '60px', fontSize: '24px'}} onClick={() => acceptCall(activeCall)}><i className="fas fa-phone"></i></button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             );
         };
 
-        const ModalManager = ({ modal, setModal, socket, initiateCall, setCurrentRoomId, cleanupCall }) => {
+        const ModalManager = ({ modal, setModal, socket, setCurrentRoomId }) => {
             if (!modal) return null;
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
@@ -1268,26 +800,13 @@
                         </div>
                     </>
                 );
-            } else if (modal.type === 'call_warn') {
-                content = (
-                    <>
-                        <div className="alert alert-warning mb-3">
-                            <i className="fas fa-exclamation-circle"></i> Voice calls cost <b>1 Credit for every 3 minutes</b>.
-                        </div>
-                        <p className="text-muted text-center mb-4">Do you want to continue?</p>
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-success w-50 rounded-pill" onClick={() => { initiateCall(modal.target_id); close(); }}><i className="fas fa-phone"></i> Call Now</button>
-                        </div>
-                    </>
-                );
             } else if (modal.type === 'confirm_leave') {
                 content = (
                     <>
                         <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); cleanupCall(); close(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
+                            <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
                         </div>
                     </>
                 );
@@ -1608,9 +1127,8 @@
             );
         };
 
-        const GameRoom = ({ roomData, tgId, onCall, socket, setProfileModal, activeCall, callConnectionState, isMicMuted, setIsMicMuted, isSpeakerMuted, setIsSpeakerMuted, setModal, endCall }) => {
-            const { room, members, activeCalls } = roomData;
-            const myCall = activeCalls.find(c => c.caller === tgId || c.receiver === tgId);
+        const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
+            const { room, members } = roomData;
             
             // Generate sorted queue by joined_at for Drawing Queue
             const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
@@ -1641,40 +1159,10 @@
                         ) : null}
 
                         <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} />
-                        
-                        {(activeCall && activeCall.status === 'ACTIVE') ? (
-                            <div className="mt-3 w-100 p-3 bg-dark text-white rounded-4 shadow-sm d-flex flex-column align-items-center gap-3">
-                                    <div className="d-flex flex-column align-items-center justify-content-center w-100 px-2">
-                                        <div className="d-flex align-items-center gap-2">
-                                            <i className="fas fa-phone-volume heartbeat text-success"></i>
-                                            <span className="fw-bold fs-5">In Call: {toHex(activeCall.caller === tgId ? activeCall.receiver : activeCall.caller)}</span>
-                                        </div>
-                                        <div className="mt-1">
-                                            <span className={`badge ${callConnectionState === 'connected' ? 'bg-success' : 'bg-warning text-dark'}`}>
-                                                Status: {callConnectionState}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="d-flex align-items-center gap-4 justify-content-center w-100 pb-2">
-                                        <button className={`btn ${isMicMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsMicMuted(!isMicMuted)} title="Mute Mic">
-                                            <i className={`fas ${isMicMuted ? 'fa-microphone-slash' : 'fa-microphone'} fs-5`}></i>
-                                        </button>
-                                        <button className={`btn ${isSpeakerMuted ? 'btn-danger' : 'btn-light'} rounded-circle shadow d-flex align-items-center justify-content-center`} style={{width: '50px', height: '50px'}} onClick={() => setIsSpeakerMuted(!isSpeakerMuted)} title="Mute Speaker">
-                                            <i className={`fas ${isSpeakerMuted ? 'fa-volume-mute' : 'fa-volume-up'} fs-5`}></i>
-                                        </button>
-                                        <button className="btn btn-danger rounded-circle shadow d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px'}} onClick={() => endCall(activeCall.id)} title="End Call">
-                                            <i className="fas fa-phone-slash fs-5"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : null}
 
                             <div className="mt-4 w-100">
                                 <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
                                 {sortedMembers.map(m => {
-                                    const mCall = activeCalls.find(c => c.caller === m.user_id || c.receiver === m.user_id);
-                                    
                                     return (
                                         <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                             <div className="d-flex align-items-center">
@@ -1693,19 +1181,6 @@
                                             <div className="d-flex align-items-center gap-2">
                                                 {(room.is_private === 1 && room.creator_id === tgId && m.user_id !== tgId) ? (
                                                     <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
-                                                ) : null}
-
-                                                {(mCall && mCall.status === 'ACTIVE') ? <span className="badge bg-success"><i className="fas fa-phone-volume"></i> In Call</span> : null}
-                                                
-                                                {(mCall && mCall.status === 'RINGING' && mCall.caller === tgId && mCall.receiver === m.user_id) ? (
-                                                    <div className="d-flex align-items-center gap-2">
-                                                        <span className="badge bg-warning text-dark"><i className="fas fa-phone"></i> Ringing...</span>
-                                                        <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => endCall(mCall.id)}><i className="fas fa-times"></i></button>
-                                                    </div>
-                                                ) : null}
-
-                                                {(m.user_id !== tgId && !mCall && !myCall) ? (
-                                                    <button className="btn btn-sm btn-outline-primary rounded-circle" onClick={() => onCall(m.user_id)}><i className="fas fa-phone"></i></button>
                                                 ) : null}
                                             </div>
                                         </div>
@@ -2189,4 +1664,23 @@
                                 <div className="d-flex w-100">
                                     <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
                                         value={input} onChange={e=>setInput(e.target.value)} 
-                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
+                                        placeholder={placeholderText} 
+                                        disabled={isBlocked}
+                                    />
+                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-end-pill px-3`} onClick={handleGuessSubmit} disabled={isBlocked}>
+                                        {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
+                                    </button>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
