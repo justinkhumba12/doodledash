@@ -1,4 +1,4 @@
-const { useState } = React;
+const { useState, useEffect } = React;
 
 const ProfileView = ({ user }) => (
     <div className="container mt-5 text-center">
@@ -10,31 +10,51 @@ const ProfileView = ({ user }) => (
 const TasksView = ({ user, socket, setModal }) => {
     const [adState, setAdState] = useState({ show: false });
 
+    // Preload Interstitial Ad when component mounts to reduce latency
+    useEffect(() => {
+        if (typeof window.show_10812134 === 'function' && user?.tg_id) {
+            window.show_10812134({ type: 'preload', ymid: user.tg_id.toString() }).catch(() => {
+                // Ignore preload errors silently
+            });
+        }
+    }, [user]);
+
     const triggerAdTask = (adNum, prefix) => {
         setAdState({ show: true });
-        if (typeof window.show_10604686 !== 'function') {
-            // Fallback to simulate ad if AdBlocker blocks script
+        
+        // Fallback if AdBlocker blocks script
+        if (typeof window.show_10812134 !== 'function') {
             setTimeout(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
             }, 2500);
             return;
         }
+
+        // ymid allows Monetag's postback to match the reward to the specific Telegram user ID
+        const adConfig = { ymid: user.tg_id.toString() };
+
         if (adNum === 1) {
-            window.show_10604686().then(() => {
+            // AD 1: REWARDED POPUP
+            window.show_10812134({ type: 'pop', ...adConfig }).then(() => {
+                // User attempted to watch the popup
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
             }).catch(e => {
+                // Handle blocked or failed popups
                 setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'Failed to show ad. Try again later.' });
+                setModal({ type: 'error', title: 'Ad Error', content: 'Popup ad failed to open or was blocked. Try again later.' });
             });
         } else {
-            window.show_10604686('pop').then(() => {
+            // AD 2: REWARDED INTERSTITIAL
+            window.show_10812134(adConfig).then(() => {
+                // User successfully watched the interstitial
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
             }).catch(e => {
+                // Handle skipped or failed interstitial ad
                 setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now. Try again later.' });
+                setModal({ type: 'error', title: 'Ad Error', content: 'Ad failed to load or was skipped. Try again later.' });
             });
         }
     };
@@ -84,7 +104,7 @@ const TasksView = ({ user, socket, setModal }) => {
             <div className="card border-0 shadow-sm rounded-4 mb-3">
                 <div className="card-body d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 className="fw-bold mb-1"><i className="fas fa-tv text-warning me-2"></i> Watch Ad 1</h6>
+                        <h6 className="fw-bold mb-1"><i className="fas fa-tv text-warning me-2"></i> Watch Ad 1 (Popup)</h6>
                         <p className="small text-muted mb-0">Watch ads to earn extra credits.</p>
                     </div>
                     {renderTaskAdBtn(1)}
@@ -93,7 +113,7 @@ const TasksView = ({ user, socket, setModal }) => {
             <div className="card border-0 shadow-sm rounded-4 mb-3">
                 <div className="card-body d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 className="fw-bold mb-1"><i className="fas fa-play-circle text-danger me-2"></i> Watch Ad 2</h6>
+                        <h6 className="fw-bold mb-1"><i className="fas fa-play-circle text-danger me-2"></i> Watch Ad 2 (Interstitial)</h6>
                         <p className="small text-muted mb-0">Additional ad views for more credits.</p>
                     </div>
                     {renderTaskAdBtn(2)}
@@ -126,6 +146,13 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     
     const [touchStartPos, setTouchStartPos] = useState(null);
 
+    // Preload Interstitial Ad when component mounts to reduce latency
+    useEffect(() => {
+        if (typeof window.show_10812134 === 'function' && user?.tg_id) {
+            window.show_10812134({ type: 'preload', ymid: user.tg_id.toString() }).catch(() => {});
+        }
+    }, [user]);
+
     const handleTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
     const handleTouchEnd = (e) => {
         if (!touchStartPos) return;
@@ -149,7 +176,9 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
 
     const triggerAd = (adNum, prefix) => {
         setAdState({ show: true });
-        if (typeof window.show_10604686 !== 'function') {
+        
+        // Fallback if AdBlocker blocks script
+        if (typeof window.show_10812134 !== 'function') {
             setTimeout(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
@@ -157,21 +186,25 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
             return;
         }
 
+        const adConfig = { ymid: user.tg_id.toString() };
+
         if (adNum === 1) {
-            window.show_10604686().then(() => {
+            // AD 1: REWARDED POPUP
+            window.show_10812134({ type: 'pop', ...adConfig }).then(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
             }).catch(e => {
                 setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'Failed to show ad. Try again later.' });
+                setModal({ type: 'error', title: 'Ad Error', content: 'Popup ad failed to open or was blocked. Try again later.' });
             });
         } else {
-            window.show_10604686('pop').then(() => {
+            // AD 2: REWARDED INTERSTITIAL
+            window.show_10812134(adConfig).then(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
             }).catch(e => {
                 setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now. Try again later.' });
+                setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now or skipped. Try again later.' });
             });
         }
     };
