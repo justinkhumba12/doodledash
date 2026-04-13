@@ -59,16 +59,6 @@
         .msg-box { background: #f1f5f9; padding: 10px 14px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; word-wrap: break-word; }
         .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
         .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
-        
-        /* Guess Style Overrides */
-        .guess-input-hint-style {
-            letter-spacing: 0.4em;
-            text-align: center;
-            font-family: 'Courier New', Courier, monospace;
-            font-weight: 700;
-            font-size: 1.1rem;
-            text-transform: uppercase;
-        }
 
         .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
         
@@ -103,10 +93,9 @@
         
         const tg = window.Telegram.WebApp;
         tg.expand();
-        const urlParams = new URLSearchParams(window.location.search);
 
         const initData = tg.initData;
-        const tgId = tg.initDataUnsafe?.user?.id?.toString() || urlParams.get('user_id');
+        const tgId = tg.initDataUnsafe?.user?.id?.toString();
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
         const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
@@ -135,6 +124,7 @@
         // --- Main App Component ---
         const App = () => {
             const [loadingState, setLoadingState] = useState('Connecting to server...');
+            const [isDisconnected, setIsDisconnected] = useState(false);
             const [user, setUser] = useState(null);
             const [rooms, setRooms] = useState([]);
             const [currentRoomId, setCurrentRoomId] = useState(null);
@@ -166,10 +156,13 @@
             const prevGuessesCount = useRef(0);
             const lastKnownRoomRef = useRef(null);
 
-            if (!initData && !tgId) {
+            const [idleTimer, setIdleTimer] = useState(10);
+
+            // Require Telegram initialization data context
+            if (!initData) {
                 return (
-                    <div className="container mt-5 text-center">
-                        <div className="alert alert-danger shadow-lg py-5 rounded-4">
+                    <div className="container mt-5 text-center px-4">
+                        <div className="alert alert-danger shadow-lg py-5 rounded-4 border-0">
                             <h1><i className="fas fa-lock mb-3"></i></h1>
                             <h3 className="fw-bold">Access Denied</h3>
                             <p>You can only access DoodleDash directly through the official Telegram Bot.</p>
@@ -181,8 +174,28 @@
             useEffect(() => {
                 if (currentRoomId) {
                     lastKnownRoomRef.current = currentRoomId;
+                } else {
+                    setRoomData(null);
                 }
             }, [currentRoomId]);
+
+            useEffect(() => {
+                let intv;
+                if (modal?.type === 'idle_warning') {
+                    intv = setInterval(() => {
+                        setIdleTimer(prev => {
+                            if (prev <= 1) {
+                                clearInterval(intv);
+                                return 0;
+                            }
+                            return prev - 1;
+                        });
+                    }, 1000);
+                } else {
+                    setIdleTimer(10);
+                }
+                return () => clearInterval(intv);
+            }, [modal]);
 
             useEffect(() => {
                 if (currentRoomId && roomData) {
@@ -252,7 +265,7 @@
                     }
                     prevGuessesCount.current = roomData.guesses.length;
                 }
-            }, [roomData, activeTab, panelOpen, tgId]);
+            }, [roomData, activeTab, panelOpen]);
 
             useEffect(() => {
                 if (currentRoomId) {
@@ -277,7 +290,7 @@
                 } else {
                     bgm.pause();
                 }
-            }, [currentRoomId, audioUnlocked.current, activeTrack]);
+            }, [currentRoomId, activeTrack]);
 
             const handleGlobalInteraction = () => {
                 if (!audioUnlocked.current) {
@@ -318,6 +331,7 @@
 
                 newSocket.on('connect', () => {
                     setLoadingState('Authenticating with server...');
+                    setIsDisconnected(false);
                     newSocket.emit('auth', { initData: initData, profile_pic: profilePic });
                     
                     if (lastKnownRoomRef.current) {
@@ -330,6 +344,14 @@
                 newSocket.on('connect_error', (err) => {
                     setLoadingState('Server connection failed. Retrying...');
                     console.error('Socket error:', err);
+                });
+
+                newSocket.on('disconnect', () => {
+                    setIsDisconnected(true);
+                });
+
+                newSocket.on('disconnect_idle', () => {
+                    setIsDisconnected(true);
                 });
 
                 newSocket.on('auth_error', (msg) => {
@@ -381,7 +403,11 @@
                     setCurrentRoomId(null);
                 });
 
-                newSocket.on('idle_warning', () => setModal({ type: 'idle_warning', title: 'Are you still there?' }));
+                newSocket.on('idle_warning', (data) => {
+                    setIdleTimer(data.timeLeft || 10);
+                    setModal({ type: 'idle_warning', title: 'Are you still there?' });
+                });
+
                 newSocket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
                 newSocket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
                 newSocket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
@@ -417,15 +443,19 @@
                 setSocket(newSocket);
                 
                 const resetIdle = () => {
-                    newSocket.emit('active_event');
-                    setModal(prev => prev?.type === 'idle_warning' ? null : prev);
+                    if (newSocket && newSocket.connected) {
+                        newSocket.emit('active_event');
+                        setModal(prev => prev?.type === 'idle_warning' ? null : prev);
+                    }
                 };
                 window.addEventListener('mousemove', resetIdle);
                 window.addEventListener('touchstart', resetIdle);
+                window.addEventListener('keydown', resetIdle);
 
                 return () => {
                     window.removeEventListener('mousemove', resetIdle);
                     window.removeEventListener('touchstart', resetIdle);
+                    window.removeEventListener('keydown', resetIdle);
                     newSocket.disconnect();
                 }
             }, []); 
@@ -452,6 +482,19 @@
                 }
                 setTouchStartPos(null);
             };
+
+            if (isDisconnected) {
+                return (
+                    <div className="container mt-5 text-center px-4">
+                        <div className="alert bg-white border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
+                            <i className="fas fa-plug fs-1 text-danger mb-3"></i>
+                            <h4 className="fw-bold">Connection Lost</h4>
+                            <p className="text-muted small mt-2">You have been disconnected from the server.</p>
+                            <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" onClick={() => window.location.reload()}><i className="fas fa-redo me-2"></i> Reconnect</button>
+                        </div>
+                    </div>
+                );
+            }
 
             if (!user || !socket) {
                 return (
@@ -639,7 +682,7 @@
                         </>
                     )}
 
-                    <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} />
+                    <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} />
                     
                     {profileModal && (
                         <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
@@ -660,7 +703,7 @@
             );
         };
 
-        const ModalManager = ({ modal, setModal, socket, setCurrentRoomId }) => {
+        const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) => {
             if (!modal) return null;
             const [pwd, setPwd] = useState('');
             const [isPriv, setIsPriv] = useState(false);
@@ -671,7 +714,20 @@
             const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); setAutoJoin(false); };
 
             let content = null;
-            if (modal.type === 'success' || modal.type === 'error') {
+            if (modal.type === 'idle_warning') {
+                content = (
+                    <div className="text-center py-4">
+                        <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
+                        <h4 className="fw-bold text-dark">Are you still there?</h4>
+                        <p className="text-muted small mb-2">You will be removed from the room in</p>
+                        <h1 className="text-danger fw-bold display-4 mb-4">{idleTimer}s</h1>
+                        <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
+                            socket.emit('active_event');
+                            close();
+                        }}>Yes, I'm here</button>
+                    </div>
+                );
+            } else if (modal.type === 'success' || modal.type === 'error') {
                 content = (
                     <>
                         <div className="mb-4 text-muted">{modal.content}</div>
@@ -884,7 +940,7 @@
                     <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
                         <div className="d-flex justify-content-between align-items-center mb-3">
                             <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
-                            <button className="btn-close" onClick={close}></button>
+                            {modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
                         </div>
                         {content}
                     </div>
@@ -957,13 +1013,6 @@
                 let btnText = `Watch ad (${claims}/${maxClaims})`;
                 let disabled = false;
                 
-                let bonusText = '';
-                if (isAvailable) {
-                    if (adNum === 1 && claims === 2) bonusText = ' (🎁 +2 Creds)';
-                    else if (adNum === 2 && (claims === 3 || claims === 4)) bonusText = ' (🎁 +2 Creds)';
-                    else bonusText = ' (+1 Cred)';
-                }
-
                 if (!isAvailable) {
                     disabled = true;
                     if (claims >= maxClaims) { 
@@ -977,7 +1026,7 @@
 
                 return (
                     <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
-                        {btnText}{bonusText}
+                        {btnText}
                     </button>
                 );
             };
@@ -1182,13 +1231,13 @@
                                                 <div className="d-flex flex-column">
                                                     <span className="fw-bold">{toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
                                                     <div className="d-flex align-items-center gap-1">
-                                                        {m.is_ready ? <span className="badge bg-success shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-check"></i> Ready</span> : null}
                                                         {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
                                                     </div>
                                                 </div>
                                             </div>
                                             
                                             <div className="d-flex align-items-center gap-2">
+                                                {m.is_ready ? <i className="fas fa-check-circle text-success fs-5 shadow-sm" title="Ready"></i> : null}
                                                 {(room.is_private === 1 && room.creator_id === tgId && m.user_id !== tgId) ? (
                                                     <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
                                                 ) : null}
@@ -1244,6 +1293,20 @@
                 inkUsedRef.current = localInkRef.current['black'] || 0;
                 updateInkUI();
             }, [inkUsedObj, room.status]);
+
+            // Sync ink strictly with undo, redo and clear_all events
+            useEffect(() => {
+                if (!socket) return;
+                const handleUpdateInk = ({ color, used }) => {
+                    if (color === 'black') {
+                        inkUsedRef.current = used;
+                        localInkRef.current['black'] = used;
+                        updateInkUI();
+                    }
+                };
+                socket.on('update_ink', handleUpdateInk);
+                return () => socket.off('update_ink', handleUpdateInk);
+            }, [socket]);
 
             useEffect(() => {
                 if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
@@ -1635,12 +1698,6 @@
                 }
             };
 
-            let placeholderText = '';
-            if (isBlocked) placeholderText = 'Max 6 guesses reached.';
-            else if (isFree) placeholderText = `Free Guess (${4 - myGuessesCount} left)...`;
-            else if (needsPayment) placeholderText = `Unlock 2 Extra Guesses (1 Credit)...`;
-            else placeholderText = `Final Extra Guess (Free)...`;
-
             useEffect(() => {
                 messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
             }, [guesses]);
@@ -1663,7 +1720,7 @@
                     </div>
                     
                     {roomData.room.status === 'DRAWING' || roomData.room.status === 'PRE_DRAW' ? (
-                        <div className="chat-input-wrapper d-flex flex-column mt-auto">
+                        <div className="chat-input-wrapper d-flex flex-column mt-auto pb-3">
                             <button 
                                 className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
                                 onClick={() => {
@@ -1676,21 +1733,41 @@
                             </button>
 
                             {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
-                                <div className="d-flex w-100">
-                                    <input type="text" 
-                                        className="form-control rounded-start-pill border-0 bg-light guess-input-hint-style" 
-                                        value={input} 
-                                        onChange={handleInputChange} 
-                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
-                                        placeholder={placeholderText}
-                                        maxLength={wordLength}
-                                        disabled={isBlocked}
-                                    />
-                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-end-pill px-3`} onClick={handleGuessSubmit} disabled={isBlocked || input.length !== wordLength}>
+                                <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
+                                    <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
+                                        
+                                        {/* Box-by-Box Overlay */}
+                                        <div className="d-flex gap-1 h-100 position-absolute pointer-events-none" style={{zIndex: 1, pointerEvents: 'none'}}>
+                                            {Array.from({length: wordLength}).map((_, i) => (
+                                                <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                    {input[i] || ''}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        
+                                        {/* Hidden Input that captures key presses seamlessly */}
+                                        <input type="text"
+                                            className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
+                                            style={{opacity: 0, zIndex: 10, cursor: 'text'}}
+                                            value={input}
+                                            onChange={handleInputChange}
+                                            onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
+                                            maxLength={wordLength}
+                                            disabled={isBlocked}
+                                            autoComplete="off"
+                                            autoCorrect="off"
+                                            spellCheck="false"
+                                        />
+                                    </div>
+                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || input.length !== wordLength}>
                                         {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
                                     </button>
                                 </div>
                             ) : null}
+                            
+                            {!isDrawer && !hasGivenUp && isBlocked && (
+                                <div className="text-danger fw-bold text-center small mt-1">Max 6 guesses reached.</div>
+                            )}
                         </div>
                     ) : null}
                 </div>
