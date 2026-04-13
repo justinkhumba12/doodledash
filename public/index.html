@@ -60,6 +60,16 @@
         .msg-box.sys { background: #fef08a; border-left: 4px solid #eab308; }
         .guess-correct { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
         
+        /* Guess Style Overrides */
+        .guess-input-hint-style {
+            letter-spacing: 0.4em;
+            text-align: center;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: 700;
+            font-size: 1.1rem;
+            text-transform: uppercase;
+        }
+
         .call-toast { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
         
         @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
@@ -86,7 +96,7 @@
 
     <script type="text/babel">
         const INK_CONFIG = {
-            black: { free: 2500, extra: 2000, cost: 0.5 }
+            black: { free: 2500, extra: 2500, cost: 0.5 }
         };
 
         const { useState, useEffect, useRef, useCallback } = React;
@@ -95,7 +105,8 @@
         tg.expand();
         const urlParams = new URLSearchParams(window.location.search);
 
-        const tgId = urlParams.get('user_id');
+        const initData = tg.initData;
+        const tgId = tg.initDataUnsafe?.user?.id?.toString() || urlParams.get('user_id');
         const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
 
         const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
@@ -155,7 +166,7 @@
             const prevGuessesCount = useRef(0);
             const lastKnownRoomRef = useRef(null);
 
-            if (!tgId) {
+            if (!initData && !tgId) {
                 return (
                     <div className="container mt-5 text-center">
                         <div className="alert alert-danger shadow-lg py-5 rounded-4">
@@ -307,7 +318,7 @@
 
                 newSocket.on('connect', () => {
                     setLoadingState('Authenticating with server...');
-                    newSocket.emit('auth', { tg_id: tgId, profile_pic: profilePic });
+                    newSocket.emit('auth', { initData: initData, profile_pic: profilePic });
                     
                     if (lastKnownRoomRef.current) {
                         setTimeout(() => {
@@ -856,11 +867,11 @@
                 content = (
                     <>
                         <p className="text-muted text-center mb-4">
-                            Refill your ink supply to keep drawing? (Limit: 1 per round)
+                            Refill your ink supply to keep drawing? (Limit: Max 5000 Ink Output/Round)
                         </p>
                         <div className="d-flex gap-2">
                             <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink', { color: 'black' }); close(); }}>
+                            <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>
                                 Buy ({modal.cost} Cred)
                             </button>
                         </div>
@@ -1130,7 +1141,6 @@
         const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
             const { room, members } = roomData;
             
-            // Generate sorted queue by joined_at for Drawing Queue
             const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
             return (
@@ -1198,14 +1208,12 @@
             const [localTimeLeft, setLocalTimeLeft] = useState(0);
             const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
             
-            // Refs prevent unnecessary React re-renders
             const drawingRef = useRef(false);
             const currentLineRef = useRef([]);
             const lastPosRef = useRef({x: 0, y: 0});
             const inkUsedRef = useRef(0);
             const localInkRef = useRef({});
             
-            // Replaces the heavy re-rendering array from roomData
             const initialDrawingsRef = useRef([]);
             
             const drawQueueRef = useRef([]);
@@ -1237,7 +1245,6 @@
                 updateInkUI();
             }, [inkUsedObj, room.status]);
 
-            // Timer for Auto Ready
             useEffect(() => {
                 if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
                     const offset = Date.now() - new Date(roomData.server_time).getTime();
@@ -1253,7 +1260,6 @@
                 }
             }, [room.status, room.break_end_time, roomData.server_time]);
 
-            // Timer for PreDraw Choice
             useEffect(() => {
                 if (room.status === 'PRE_DRAW' && room.round_end_time) {
                     const offset = Date.now() - new Date(roomData.server_time).getTime();
@@ -1293,9 +1299,9 @@
                     text.innerText = `${Math.floor(inkLeft)} / ${currentMaxInk}`;
                 }
                 
-                const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
+                const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
                 if (buyBtn) {
-                    buyBtn.style.display = (inkLeft <= 0 && !hasBoughtInk) ? 'inline-block' : 'none';
+                    buyBtn.style.display = (inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
                 }
             };
 
@@ -1320,13 +1326,11 @@
                 });
             }, []);
 
-            // Initial component mount redraw and request sync
             useEffect(() => { 
                 redraw(); 
                 if (socket) socket.emit('request_initial_drawings');
             }, [redraw, socket]);
 
-            // Sync Initial Drawings safely and natively
             useEffect(() => {
                 if (!socket) return;
                 const handleInitialDrawings = (drawings) => {
@@ -1337,7 +1341,6 @@
                 return () => socket.off('sync_initial_drawings', handleInitialDrawings);
             }, [socket, redraw]);
 
-            // Appends efficiently to local ref history and strokes canvas directly natively
             useEffect(() => {
                 if (!socket) return;
                 const handleLiveDraw = (data) => {
@@ -1357,7 +1360,6 @@
                         ctx.stroke();
                     }
                     
-                    // Maintain state natively without stringification
                     initialDrawingsRef.current.push({ lines, color });
                 };
                 socket.on('live_draw', handleLiveDraw);
@@ -1391,11 +1393,11 @@
                 const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
                 if (dist < 1) return; 
                 
-                const hasBoughtInk = (inkExtraObj['black'] || 0) > 0;
+                const hasMaxInk = (inkExtraObj['black'] || 0) >= 2500;
                 
                 if (inkUsedRef.current + dist > currentMaxInk) {
                     stopDraw(e); 
-                    if (!hasBoughtInk) {
+                    if (!hasMaxInk) {
                         setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
                     }
                     return;
@@ -1413,7 +1415,6 @@
                 ctx.strokeStyle = '#000000';
                 ctx.stroke();
 
-                // Append purely numeric coordinates inline avoiding object allocation
                 currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
                 lastPosRef.current = newPos;
             };
@@ -1481,7 +1482,7 @@
                                 <h4 className="text-primary fw-bold">Your turn to draw!</h4>
                                 <h5 className="text-danger fw-bold">{preDrawTimeLeft}s</h5>
                                 <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
-                                <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value)} />
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} />
                                 <button className="btn btn-primary w-75 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
                             </div>
                         )}
@@ -1586,7 +1587,7 @@
                         <div ref={messagesEndRef} />
                     </div>
                     <div className="chat-input-wrapper d-flex mt-auto">
-                        <input type="text" className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
+                        <input type="text" maxLength={200} className="form-control rounded-start-pill border-0 bg-light" value={input} onChange={e=>setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && (socket.emit('chat', {message: input}), setInput(''))} placeholder="Type message..." />
                         <button className="btn btn-primary rounded-end-pill px-3" onClick={() => { socket.emit('chat', {message: input}); setInput(''); }}><i className="fas fa-paper-plane"></i></button>
                     </div>
                 </div>
@@ -1609,14 +1610,28 @@
             const totalGuessers = Math.max(0, roomData.members.length - 1);
             const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
 
+            const wordLength = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word.length : 10;
+
             const handleGuessSubmit = () => {
                 if (!input.trim() || isBlocked) return;
+                if (input.length !== wordLength) {
+                    setModal({ type: 'error', title: 'Invalid Guess', content: `Guess must be exactly ${wordLength} letters.`});
+                    return;
+                }
+                
                 if (needsPayment) {
                     setModal({ type: 'confirm_guess_credit', guess: input, title: 'Unlock 2 Extra Guesses?' });
                     setInput('');
                 } else {
                     if (socket) socket.emit('guess', {guess: input});
                     setInput('');
+                }
+            };
+
+            const handleInputChange = (e) => {
+                const val = e.target.value.toUpperCase();
+                if (val.length <= wordLength) {
+                    setInput(val);
                 }
             };
 
@@ -1662,13 +1677,16 @@
 
                             {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
                                 <div className="d-flex w-100">
-                                    <input type="text" className="form-control rounded-start-pill border-0 bg-light" 
-                                        value={input} onChange={e=>setInput(e.target.value)} 
+                                    <input type="text" 
+                                        className="form-control rounded-start-pill border-0 bg-light guess-input-hint-style" 
+                                        value={input} 
+                                        onChange={handleInputChange} 
                                         onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()} 
-                                        placeholder={placeholderText} 
+                                        placeholder={placeholderText}
+                                        maxLength={wordLength}
                                         disabled={isBlocked}
                                     />
-                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-end-pill px-3`} onClick={handleGuessSubmit} disabled={isBlocked}>
+                                    <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-end-pill px-3`} onClick={handleGuessSubmit} disabled={isBlocked || input.length !== wordLength}>
                                         {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
                                     </button>
                                 </div>
