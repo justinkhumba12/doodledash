@@ -8,9 +8,8 @@ window.tg = window.Telegram.WebApp;
 window.tg.expand();
 
 // Platform Hard Check to enforce Mobile Usage and block circumvention
-const platform = window.tg.platform;
-const blockedPlatforms = ['tdesktop', 'web', 'weba', 'webk', 'macos'];
-window.isBlockedPlatform = blockedPlatforms.includes(platform) || !window.tg.initData;
+// Update: Allowed all origins and platforms per requirements.
+window.isBlockedPlatform = false;
 
 window.initData = window.tg.initData; 
 window.tgId = window.tg.initDataUnsafe?.user?.id?.toString();
@@ -66,6 +65,7 @@ const App = () => {
     const [modal, setModal] = useState(null);
     const [profileModal, setProfileModal] = useState(null);
     const [openAcc, setOpenAcc] = useState('volumes');
+    const [soundPolicyAccepted, setSoundPolicyAccepted] = useState(false);
     
     const [socket, setSocket] = useState(null);
     
@@ -80,24 +80,7 @@ const App = () => {
     const prevGuessesCount = useRef(0);
     const lastKnownRoomRef = useRef(null);
 
-    const [idleTimer, setIdleTimer] = useState(10);
-
-    // Hard block unsupported platforms and environments immediately
-    if (window.isBlockedPlatform) {
-        return (
-            <div className="container mt-5 text-center px-4">
-                <div className="alert bg-white border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
-                    <i className="fas fa-mobile-alt fs-1 text-danger mb-3"></i>
-                    <h4 className="fw-bold">{!window.initData ? "Access Denied" : "Mobile Only"}</h4>
-                    <p className="text-muted small mt-2">
-                        {!window.initData ? 
-                            "Please open this app directly inside Telegram." : 
-                            "DoodleDash is strictly available on Telegram Mobile apps (Android / iOS). Please open it on your phone."}
-                    </p>
-                </div>
-            </div>
-        );
-    }
+    const [idleTimer, setIdleTimer] = useState(30);
 
     useEffect(() => {
         let isMounted = true;
@@ -127,10 +110,13 @@ const App = () => {
     useEffect(() => {
         if (currentRoomId) {
             lastKnownRoomRef.current = currentRoomId;
+            if (!soundPolicyAccepted && !modal) {
+                setModal({ type: 'sound_policy' });
+            }
         } else {
             setRoomData(null);
         }
-    }, [currentRoomId]);
+    }, [currentRoomId, soundPolicyAccepted, modal]);
 
     useEffect(() => {
         let intv;
@@ -145,7 +131,7 @@ const App = () => {
                 });
             }, 1000);
         } else {
-            setIdleTimer(10);
+            setIdleTimer(30);
         }
         return () => clearInterval(intv);
     }, [modal]);
@@ -169,7 +155,7 @@ const App = () => {
     }, [appVol]);
 
     const playAudioSafe = (id) => {
-        if (!audioUnlocked.current) return;
+        if (!audioUnlocked.current && !soundPolicyAccepted) return;
         const el = document.getElementById(id);
         if (el) {
             el.currentTime = 0;
@@ -320,7 +306,7 @@ const App = () => {
         });
 
         newSocket.on('idle_warning', (data) => {
-            setIdleTimer(data.timeLeft || 10);
+            setIdleTimer(data.timeLeft || 30);
             setModal({ type: 'idle_warning', title: 'Are you still there?' });
         });
 
@@ -587,7 +573,7 @@ const App = () => {
                 )}
             </div>
 
-            <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} />
+            <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} />
             
             {profileModal && (
                 <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
