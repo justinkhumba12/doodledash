@@ -6,8 +6,27 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) 
     const [isPriv, setIsPriv] = useState(false);
     const [maxMembers, setMaxMembers] = useState(4);
     const [expireHours, setExpireHours] = useState(2);
+    
+    // New Ad loading state for Hints
+    const [adLoading, setAdLoading] = useState(false);
 
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
+
+    const triggerHintAd = (index) => {
+        setAdLoading(true);
+        if (typeof window.show_10812134 !== 'function') {
+            socket.emit('buy_hint_ad', { index });
+            setAdLoading(false);
+            return;
+        }
+        window.show_10812134({ ymid: window.tgId || 'unknown' }).then(() => {
+            socket.emit('buy_hint_ad', { index });
+            setAdLoading(false);
+        }).catch(e => {
+            setAdLoading(false);
+            setTimeout(() => setModal({ type: 'error', title: 'Ad Error', content: 'Ad failed to load or skipped.' }), 100);
+        });
+    };
 
     let content = null;
     if (modal.type === 'idle_warning') {
@@ -185,11 +204,12 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) 
     } else if (modal.type === 'confirm_buy_hint') {
         content = (
             <>
-                <p className="text-muted">Reveal this hidden character for <b>1 Credit</b>? (Limit 1 per round)</p>
-                <div className="alert alert-warning text-center"><i className="fas fa-coins"></i> Costs 1 Credit</div>
-                <div className="d-flex gap-2 mt-4">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
+                <p className="text-muted">Reveal this hidden character for <b>1 Credit</b> or Watch an Ad for free! (Limit 1 per round)</p>
+                <div className="alert alert-warning text-center py-2 mb-3"><i className="fas fa-lightbulb"></i> Hint Options</div>
+                <div className="d-flex flex-column gap-2 mt-2">
+                    <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
+                    <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}><i className="fas fa-play-circle"></i> Watch Ad (Free)</button>
+                    <button className="btn btn-secondary w-100 rounded-pill fw-bold" onClick={close}>Cancel</button>
                 </div>
             </>
         );
@@ -230,15 +250,25 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) 
     }
 
     return (
-        <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
-            <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
-                <div className="d-flex justify-content-between align-items-center mb-3">
-                    <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
-                    {modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
+        <>
+            <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
+                <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
+                        {modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
+                    </div>
+                    {content}
                 </div>
-                {content}
             </div>
-        </div>
+            
+            {adLoading && (
+                <div className="wb-overlay" style={{ zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed', top:0, left:0, right:0, bottom:0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <h2 className="text-white mb-4 fw-bold text-center">Loading Advertisement</h2>
+                    <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                    <p className="text-muted mt-2 small text-center">Please wait, your reward is loading.</p>
+                </div>
+            )}
+        </>
     );
 };
 
