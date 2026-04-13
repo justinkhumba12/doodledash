@@ -65,12 +65,13 @@ if (cluster.isPrimary) {
             console.log('[Primary] Connecting to MySQL for initial setup...');
             db = await mysql.createConnection(MYSQL_URL);
             
-            // Added 'calls' table to drop array as requested
-            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages', 'calls'];
+            // Removed 'calls' table from drop array as requested
+            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages'];
             for (let table of tablesToDrop) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
+            // Removed tg_username
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
@@ -80,15 +81,14 @@ if (cluster.isPrimary) {
                     last_ad_claim_time DATETIME,
                     ad2_claims_today INT DEFAULT 0,
                     last_ad2_claim_time DATETIME,
-                    last_active DATETIME,
-                    tg_username VARCHAR(100)
+                    last_active DATETIME
                 )
             `);
 
             const migrations = [
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_username VARCHAR(100)",
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
-                "ALTER TABLE users DROP COLUMN IF EXISTS profile_pic"
+                "ALTER TABLE users DROP COLUMN IF EXISTS profile_pic",
+                "ALTER TABLE users DROP COLUMN IF EXISTS tg_username"
             ];
             for (let query of migrations) {
                 try { await db.query(query); } catch (e) { /* Ignore */ }
@@ -213,21 +213,14 @@ if (cluster.isPrimary) {
     app.get('/postback', async (req, res) => {
         const { ymid, event_type, reward_event_type, estimated_price, zone } = req.query;
 
-        // Verify the event is a completed reward video/popup (reward_event_type === 'valued')
         if (reward_event_type === 'valued' && ymid) {
             try {
                 console.log(`[Monetag Postback] User ${ymid} successfully completed ad for Zone: ${zone}. Revenue: ${estimated_price}`);
-                // Note: The UI currently triggers the 'claim_reward' socket event internally immediately after the Ad finishes
-                // playing to apply rate limiting/daily caps and provide immediate user feedback.
-                // If you want to use strictly S2S rewarding without rate limits from the database later, you can credit the user here:
-                // await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [ymid]);
             } catch (err) {
                 console.error('[Monetag Postback DB Error]', err);
             }
         }
         
-        // Always send HTTP 200 OK back to Monetag so they know it processed successfully 
-        // If not, Monetag will continuously retry sending the postback.
         res.sendStatus(200); 
     });
 
@@ -270,7 +263,6 @@ if (cluster.isPrimary) {
 
     // ---------------------------------------------------------
     // REST API - AUTHENTICATE
-    // Takes implicit parameter-less initialization data 
     // ---------------------------------------------------------
     app.post('/api/authenticate', async (req, res) => {
         const { initData, profile_pic } = req.body;
@@ -285,19 +277,16 @@ if (cluster.isPrimary) {
         }
 
         try {
-            // Decodes the Telegram initData string cleanly
             const urlParams = new URLSearchParams(initData);
             const userObjStr = urlParams.get('user');
             
             if (!userObjStr) return res.status(400).json({ error: 'No user data in payload.' });
             
-            // Gets Telegram ID directly from payload, avoiding manual URL parameters entirely
             const userObj = JSON.parse(userObjStr);
             const tgId = userObj.id.toString();
-            const username = userObj.username || null;
 
-            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)`, [tgId, username]);
-            await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?`, [username, tgId]);
+            await db.query(`INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())`, [tgId]);
+            await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tgId]);
             
             if (profile_pic) {
                 await redis.hset('user_profiles', tgId, profile_pic);
@@ -327,8 +316,6 @@ if (cluster.isPrimary) {
         const host = req.get('host');
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         const fallbackUrl = `${protocol}://${host}/`;
-        
-        // Use clean base URL. Telegram provides user context automatically in the chat.
         const webAppUrl = process.env.WEBAPP_URL || fallbackUrl; 
 
         const tgApiCall = (method, data) => {
@@ -377,11 +364,10 @@ if (cluster.isPrimary) {
         if (update?.message?.text && update.message.text.startsWith('/start')) {
             const chatId = update.message.chat.id;
             const tgId = update.message.from.id;
-            const username = update.message.from.username;
             
             try {
-                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active, tg_username) VALUES (?, 5, UTC_TIMESTAMP(), ?)', [tgId.toString(), username || null]);
-                await db.query('UPDATE users SET last_active = UTC_TIMESTAMP(), tg_username = ? WHERE tg_id = ?', [username || null, tgId.toString()]);
+                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
+                await db.query('UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?', [tgId.toString()]);
             } catch (e) {
                 console.error('Webhook DB Error:', e);
             }
@@ -399,7 +385,6 @@ if (cluster.isPrimary) {
                 return;
             }
 
-            // Clean URL passed below. Telegram fills `initData`
             const urlWithParams = `${webAppUrl}`;
             sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
                 inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
@@ -435,9 +420,9 @@ if (cluster.isPrimary) {
             SELECT *,
             (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
             (last_ad_claim_time IS NULL OR DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad_claims_today < 3 AND TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()) >= 60)) as ad1_available,
-            (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 45)) as ad2_available,
+            (last_ad2_claim_time IS NULL OR DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') OR (ad2_claims_today < 5 AND TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()) >= 10)) as ad2_available,
             GREATEST(0, 60 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 60)) as ad1_wait_mins,
-            GREATEST(0, 45 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 45)) as ad2_wait_mins,
+            GREATEST(0, 10 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 10)) as ad2_wait_mins,
             (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
             (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
             FROM users WHERE tg_id = ?
@@ -657,7 +642,6 @@ if (cluster.isPrimary) {
                 let currentUser;
                 
                 if (initData) {
-                    // Only allow mock auth in non-production environments
                     const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
                     if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
                         return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
@@ -666,7 +650,7 @@ if (cluster.isPrimary) {
                     const userObjStr = urlParams.get('user');
                     if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
                     const userObj = JSON.parse(userObjStr);
-                    currentUser = userObj.id.toString(); // Grabs User ID seamlessly from the implicit data wrapper
+                    currentUser = userObj.id.toString(); 
                 } else {
                     return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
                 }
@@ -745,7 +729,7 @@ if (cluster.isPrimary) {
                 } 
                 else if (type === 'ad' || type === 'ad2') {
                     const prefix = type === 'ad' ? 'ad' : 'ad2';
-                    const cooldown = prefix === 'ad' ? 60 : 45;
+                    const cooldown = prefix === 'ad' ? 60 : 10;
                     const maxClaims = prefix === 'ad' ? 3 : 5; 
                     
                     const [u] = await db.query(`SELECT
@@ -1139,7 +1123,7 @@ if (cluster.isPrimary) {
                 if (!member) return;
 
                 let purchased = JSON.parse(member.purchased_hints || '[]');
-                if (purchased.length >= 1) return socket.emit('create_error', 'You can only buy 1 hint per round.');
+                if (purchased.length >= 1) return socket.emit('create_error', 'You can only reveal 1 hint per round.');
 
                 if (!purchased.includes(index)) {
                     const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
@@ -1163,6 +1147,36 @@ if (cluster.isPrimary) {
                     await syncRoom(currentRoom);
                 }
             } catch (err) { console.error('Buy Hint Error:', err); }
+        });
+
+        // Hint via Ad: NO Credit deductions and NO Rate limiting
+        socket.on('buy_hint_ad', async ({ index }) => {
+            try {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                if (!currentUser || !currentRoom) return;
+
+                const room = await getRoom(currentRoom);
+                if (!room) return;
+                const member = room.members.find(m => m.user_id === currentUser);
+                if (!member) return;
+
+                let purchased = JSON.parse(member.purchased_hints || '[]');
+                if (purchased.length >= 1) return socket.emit('create_error', 'You can only reveal 1 hint per round.');
+
+                if (!purchased.includes(index)) {
+                    purchased.push(index);
+                    member.purchased_hints = JSON.stringify(purchased);
+                    await saveRoom(room);
+                    
+                    const cId = await redis.incr('global_chat_id');
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint by watching an ad!`, created_at: new Date() };
+                    await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                    await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
+                    
+                    await syncRoom(currentRoom);
+                }
+            } catch (err) { console.error('Buy Hint Ad Error:', err); }
         });
 
         socket.on('set_word', async ({ word }) => {
@@ -1431,7 +1445,6 @@ if (cluster.isPrimary) {
         socket.on('disconnect', async () => {
             const currentUser = socket.data.currentUser;
             if (currentUser) {
-                // Only mark as disconnected if they have no other open tabs/sockets
                 const activeSockets = await io.in(`user_${currentUser}`).fetchSockets();
                 if (activeSockets.length === 0) {
                     await redis.hset('user_disconnects', currentUser, Date.now());
