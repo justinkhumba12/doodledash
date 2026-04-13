@@ -93,9 +93,20 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        const initData = tg.initData;
-        const tgId = tg.initDataUnsafe?.user?.id?.toString();
-        const profilePic = tg.initDataUnsafe?.user?.photo_url || '';
+        let initData = tg.initData;
+        let tgId = tg.initDataUnsafe?.user?.id?.toString();
+        let profilePic = tg.initDataUnsafe?.user?.photo_url || '';
+
+        // Web Fallback (If accessed without Telegram App)
+        if (!initData) {
+            tgId = localStorage.getItem('doodledash_web_id');
+            if (!tgId) {
+                tgId = Math.floor(Math.random() * 1000000000).toString();
+                localStorage.setItem('doodledash_web_id', tgId);
+            }
+            const mockUser = { id: parseInt(tgId), username: 'WebUser_' + tgId.slice(-4) };
+            initData = 'mock_web_auth=true&user=' + encodeURIComponent(JSON.stringify(mockUser));
+        }
 
         const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
@@ -152,19 +163,6 @@
             const lastKnownRoomRef = useRef(null);
 
             const [idleTimer, setIdleTimer] = useState(10);
-
-            // Require Telegram initialization data context
-            if (!initData) {
-                return (
-                    <div className="container mt-5 text-center px-4">
-                        <div className="alert alert-danger shadow-lg py-5 rounded-4 border-0">
-                            <h1><i className="fas fa-lock mb-3"></i></h1>
-                            <h3 className="fw-bold">Access Denied</h3>
-                            <p>You can only access DoodleDash directly through the official Telegram Bot.</p>
-                        </div>
-                    </div>
-                );
-            }
 
             useEffect(() => {
                 let isMounted = true;
@@ -509,7 +507,15 @@
             }
 
             const handleLoadBalance = () => {
-                tg.openTelegramLink('https://t.me/doodledashbot?start=load_balance');
+                if (tg && tg.openTelegramLink) {
+                    try {
+                        tg.openTelegramLink('https://t.me/doodledashbot?start=load_balance');
+                    } catch (e) {
+                        window.open('https://t.me/doodledashbot?start=load_balance', '_blank');
+                    }
+                } else {
+                    window.open('https://t.me/doodledashbot?start=load_balance', '_blank');
+                }
             };
 
             return (
