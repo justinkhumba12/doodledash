@@ -1,6 +1,6 @@
 const { useState } = React;
 
-const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) => {
+const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted }) => {
     if (!modal) return null;
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
@@ -29,13 +29,29 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) 
     };
 
     let content = null;
-    if (modal.type === 'idle_warning') {
+    if (modal.type === 'sound_policy') {
+        content = (
+            <div className="text-center py-3">
+                <i className="fas fa-volume-up fs-1 text-primary mb-3"></i>
+                <h5 className="fw-bold text-dark">Enable Sound?</h5>
+                <p className="text-muted small mb-4">Accept sound policy to trigger enable auto play sound for messages and guesses.</p>
+                <button className="btn btn-primary w-100 rounded-pill py-2 fw-bold" onClick={() => {
+                    const mgsSound = document.getElementById('mgsSound');
+                    if (mgsSound) {
+                        mgsSound.volume = 0.5;
+                        mgsSound.play().catch(()=>{});
+                    }
+                    if (setSoundPolicyAccepted) setSoundPolicyAccepted(true);
+                    close();
+                }}>Accept</button>
+            </div>
+        );
+    } else if (modal.type === 'idle_warning') {
         content = (
             <div className="text-center py-4">
                 <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
                 <h4 className="fw-bold text-dark">Are you still there?</h4>
-                <p className="text-muted small mb-2">You will be removed from the room in</p>
-                <h1 className="text-danger fw-bold display-4 mb-4">{idleTimer}s</h1>
+                <h1 className="text-danger fw-bold display-4 my-3">{idleTimer}s</h1>
                 <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
                     socket.emit('active_event');
                     close();
@@ -255,7 +271,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer }) 
                 <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
                     <div className="d-flex justify-content-between align-items-center mb-3">
                         <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
-                        {modal.type !== 'idle_warning' && <button className="btn-close" onClick={close}></button>}
+                        {modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && <button className="btn-close" onClick={close}></button>}
                     </div>
                     {content}
                 </div>
