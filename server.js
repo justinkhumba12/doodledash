@@ -487,7 +487,20 @@ if (cluster.isPrimary) {
         if (!room) return;
 
         if (room.members.length === 0) {
-            await deleteRoomData(roomId);
+            if (!room.is_private) {
+                await deleteRoomData(roomId);
+            } else {
+                room.status = 'WAITING';
+                room.current_drawer_id = null;
+                room.word_to_draw = null;
+                room.break_end_time = null;
+                room.round_end_time = null;
+                room.end_reason = null;
+                room.members.forEach(m => m.has_given_up = 0);
+                await releaseRoomMemory(roomId); 
+                await redis.del(`room:${roomId}:guesses`);
+                await saveRoom(room);
+            }
         } else if (room.members.length < 2) {
             room.status = 'WAITING';
             room.current_drawer_id = null;
@@ -730,6 +743,13 @@ if (cluster.isPrimary) {
         socket.on('active_event', () => {
             socket.data.lastActiveEvent = Date.now();
             socket.data.idleWarned = false;
+        });
+
+        socket.on('send_reaction', ({ emoji }) => {
+            const currentRoom = socket.data.currentRoom;
+            if (currentRoom) {
+                io.to(`room_${currentRoom}`).emit('new_reaction', { emoji });
+            }
         });
 
         socket.on('claim_reward', async ({ type }) => {
@@ -1608,10 +1628,10 @@ if (cluster.isPrimary) {
                         s.join('lobby'); 
                         s.data.currentRoom = null;
                         s.data.idleWarned = false;
-                    } else if (idleTime > 50000 && !s.data.idleWarned) {
+                    } else if (idleTime > 30000 && !s.data.idleWarned) {
                         s.data.idleWarned = true;
                         s.emit('idle_warning', { timeLeft: Math.ceil((60000 - idleTime) / 1000) });
-                    } else if (idleTime <= 50000) {
+                    } else if (idleTime <= 30000) {
                         s.data.idleWarned = false;
                     }
                 } else {
