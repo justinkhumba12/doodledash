@@ -148,7 +148,6 @@ if (cluster.isPrimary) {
                 '/',
                 '/audio/mgs_notification.mp3',
                 '/audio/guess_notification.mp3',
-                '/audio/call.mp3',
                 '/thememusic/themesongdefault.mp3',
                 '/thememusic/Pencils%20Down.mp3',
                 '/thememusic/Pencils%20Down%202.mp3',
@@ -416,15 +415,6 @@ if (cluster.isPrimary) {
             idsArr.forEach((id, i) => profiles[id] = results[i] || null);
         }
 
-        const allCalls = await redis.hgetall('active_calls');
-        const activeCallsList = [];
-        for (const key in allCalls) {
-            const c = JSON.parse(allCalls[key]);
-            if (c.room_id == roomId) {
-                activeCallsList.push({ id: c.id, caller: c.caller, receiver: c.receiver, status: c.status, room_id: c.room_id });
-            }
-        }
-
         const roomSockets = await io.in(`room_${roomId}`).fetchSockets();
         if (roomSockets) {
             for (const s of roomSockets) {
@@ -468,22 +458,9 @@ if (cluster.isPrimary) {
                     chats, 
                     guesses: sanitizedGuesses,
                     profiles,
-                    activeCalls: activeCallsList,
                     masked_word: masked_word,
                     server_time: new Date().toISOString()
                 });
-            }
-        }
-    };
-
-    const terminateCallsForUser = async (userId) => {
-        const allCalls = await redis.hgetall('active_calls');
-        for (const [callId, callStr] of Object.entries(allCalls)) {
-            const call = JSON.parse(callStr);
-            if (call.caller === userId || call.receiver === userId) {
-                await redis.hdel('active_calls', callId);
-                io.to(`room_${call.room_id}`).emit('call_ended', callId);
-                await syncRoom(call.room_id);
             }
         }
     };
@@ -531,7 +508,6 @@ if (cluster.isPrimary) {
 
             const oldRoom = socket.data.currentRoom;
             if (oldRoom) {
-                await terminateCallsForUser(userId); 
                 socket.leave(`room_${oldRoom}`);
                 const oRoom = await getRoom(oldRoom);
                 if (oRoom) {
@@ -783,7 +759,6 @@ if (cluster.isPrimary) {
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
 
-            await terminateCallsForUser(currentUser); 
             const room = await getRoom(currentRoom);
             if (room) {
                 if (room.current_drawer_id === currentUser && (room.status === 'PRE_DRAW' || room.status === 'DRAWING')) {
@@ -1318,83 +1293,6 @@ if (cluster.isPrimary) {
             } catch (err) { console.error('Buy Ink Error:', err); }
         });
 
-        socket.on('initiate_call', async ({ receiver_id }) => {
-            const currentUser = socket.data.currentUser;
-            const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom) return;
-            
-            const allCalls = await redis.hgetall('active_calls');
-            const isInCall = Object.values(allCalls).some(str => {
-                const c = JSON.parse(str);
-                return c.caller === currentUser || c.receiver === currentUser ||
-                       c.caller === receiver_id || c.receiver === receiver_id;
-            });
-            
-            if (isInCall) return socket.emit('create_error', 'Cannot initiate call: User is already busy.');
-
-            const callId = `call_${Date.now()}_${Math.random()}`;
-            const callObj = { id: callId, caller: currentUser, receiver: String(receiver_id), status: 'RINGING', room_id: currentRoom };
-            
-            await redis.hset('active_calls', callId, JSON.stringify(callObj));
-            io.to(`room_${currentRoom}`).emit('call_update', callObj);
-            await syncRoom(currentRoom);
-        });
-
-        socket.on('accept_call', async ({ call_id }) => {
-            try {
-                const currentUser = socket.data.currentUser;
-                const currentRoom = socket.data.currentRoom;
-                const callStr = await redis.hget('active_calls', call_id);
-                if (callStr) {
-                    const call = JSON.parse(callStr);
-                    if (String(call.receiver) === currentUser) {
-                        const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
-                        if (currentCredits < 1) {
-                            await redis.hdel('active_calls', call_id);
-                            io.to(`room_${call.room_id}`).emit('call_ended', call_id);
-                            await syncRoom(call.room_id);
-                            return;
-                        }
-
-                        await redis.hset('user_credits', call.caller, currentCredits - 1);
-                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]);
-
-                        call.status = 'ACTIVE';
-                        call.startTime = Date.now();
-                        call.nextChargeTime = Date.now() + 180000; 
-                        await redis.hset('active_calls', call_id, JSON.stringify(call));
-                        
-                        io.to(`room_${call.room_id}`).emit('call_update', call);
-                        
-                        const uState1 = await getUserState(call.caller);
-                        if(uState1) io.to(`user_${call.caller}`).emit('user_update', uState1);
-
-                        await syncRoom(currentRoom);
-                    }
-                }
-            } catch (err) { console.error('Accept call error:', err); }
-        });
-
-        socket.on('end_call', async ({ call_id }) => {
-            const currentRoom = socket.data.currentRoom;
-            const callStr = await redis.hget('active_calls', call_id);
-            if (callStr) {
-                const call = JSON.parse(callStr);
-                await redis.hdel('active_calls', call_id);
-                io.to(`room_${currentRoom || call.room_id}`).emit('call_ended', call_id);
-                await syncRoom(currentRoom || call.room_id);
-            }
-        });
-
-        socket.on('webrtc_signal', ({ call_id, target_id, signal }) => {
-            socket.to(`user_${String(target_id)}`).emit('webrtc_signal_receive', { 
-                call_id, 
-                sender_id: socket.data.currentUser, 
-                target_id: String(target_id), 
-                signal 
-            });
-        });
-
         socket.on('disconnect', async () => {
             const currentUser = socket.data.currentUser;
             if (currentUser) {
@@ -1420,7 +1318,6 @@ if (cluster.isPrimary) {
             const disconnects = await redis.hgetall('user_disconnects');
             for (const [userId, disconnectTimeStr] of Object.entries(disconnects)) {
                 if (now - parseInt(disconnectTimeStr) >= 30000) {
-                    await terminateCallsForUser(userId);
                     
                     const activeRooms = await redis.smembers('active_rooms');
                     for (const roomId of activeRooms) {
@@ -1446,28 +1343,6 @@ if (cluster.isPrimary) {
                     }
                     await redis.hdel('user_disconnects', userId);
                     await broadcastRooms();
-                }
-            }
-            
-            const allCalls = await redis.hgetall('active_calls');
-            for (const [callId, callStr] of Object.entries(allCalls)) {
-                const call = JSON.parse(callStr);
-                if (call.status === 'ACTIVE' && now >= call.nextChargeTime) {
-                    const currentCredits = parseFloat(await redis.hget('user_credits', call.caller)) || 0;
-                    if (currentCredits < 1) {
-                        await redis.hdel('active_calls', callId);
-                        io.to(`room_${call.room_id}`).emit('call_ended', callId);
-                        await syncRoom(call.room_id);
-                    } else {
-                        await redis.hset('user_credits', call.caller, currentCredits - 1);
-                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [call.caller]);
-                        
-                        call.nextChargeTime = now + 180000;
-                        await redis.hset('active_calls', callId, JSON.stringify(call));
-
-                        const uState = await getUserState(call.caller);
-                        if (uState) io.to(`user_${call.caller}`).emit('user_update', uState);
-                    }
                 }
             }
             
