@@ -7,12 +7,89 @@ const ProfileView = ({ user }) => (
     </div>
 );
 
-const TasksView = () => (
-    <div className="container mt-4 pb-5 text-center">
-        <i className="fas fa-tasks text-muted mt-5" style={{ fontSize: '6rem' }}></i>
-        <h4 className="text-muted mt-3 fw-bold">Coming Soon</h4>
-    </div>
-);
+const TasksView = ({ user, socket }) => {
+    // Dynamic invite counts fetched securely from the DB
+    const inviteCount = user?.invite_count || 0;
+    const goal = 3;
+    const isCompleted = inviteCount >= goal;
+    const hasClaimed = user?.invite_claimed;
+
+    const handleInvite = () => {
+        // Invite link carrying the inviter's unique ID
+        const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
+        if (window.tg && window.tg.openTelegramLink) {
+            try {
+                window.tg.openTelegramLink(botLink);
+            } catch (e) {
+                window.open(botLink, '_blank');
+            }
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
+
+    const handleClaim = () => {
+        if (socket && isCompleted && !hasClaimed) {
+            socket.emit('claim_reward', { type: 'invite_3' });
+        }
+    };
+
+    return (
+        <div className="container mt-4 pb-5">
+            <h3 className="fw-bold mb-4 text-center">Your Tasks</h3>
+
+            <div className="card bg-white rounded-4 border shadow-sm overflow-hidden mb-3">
+                <div className="card-body p-4">
+                    <div className="d-flex align-items-center justify-content-between mb-3">
+                        <div className="d-flex align-items-center gap-3">
+                            <div className="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px', backgroundColor: '#e0e7ff'}}>
+                                <i className="fas fa-user-friends fs-4"></i>
+                            </div>
+                            <div>
+                                <h5 className="fw-bold mb-1">Invite Friends</h5>
+                                <p className="text-muted small mb-0">Invite 3 new users to get 3 Credits.</p>
+                            </div>
+                        </div>
+                        <div className="text-end">
+                            <span className="badge bg-warning text-dark fs-6 rounded-pill shadow-sm"><i className="fas fa-coins"></i> 3</span>
+                        </div>
+                    </div>
+
+                    <div className="mb-3">
+                        <div className="d-flex justify-content-between small fw-bold mb-1">
+                            <span className="text-secondary">Progress</span>
+                            <span className={isCompleted ? 'text-success' : 'text-primary'}>{Math.min(inviteCount, goal)} / {goal}</span>
+                        </div>
+                        <div className="progress rounded-pill bg-light border" style={{height: '10px'}}>
+                            <div className={`progress-bar rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${(Math.min(inviteCount, goal) / goal) * 100}%`}}></div>
+                        </div>
+                    </div>
+
+                    <div className="d-flex gap-2 mt-4">
+                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm" onClick={handleInvite}>
+                            <i className="fas fa-paper-plane me-2"></i> Invite
+                        </button>
+                        <button
+                            className={`btn ${isCompleted && !hasClaimed ? 'btn-success shadow-sm' : 'btn-light text-muted border'} rounded-pill fw-bold px-4`}
+                            disabled={!isCompleted || hasClaimed}
+                            onClick={handleClaim}
+                        >
+                            {hasClaimed ? 'Claimed' : 'Claim'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div className="card bg-light border-dashed rounded-4 mb-3" style={{ borderStyle: 'dashed', borderColor: '#cbd5e1' }}>
+                <div className="card-body p-4 text-center text-muted">
+                    <i className="fas fa-lock fs-2 mb-2 text-secondary"></i>
+                    <h6 className="fw-bold">More Tasks Coming Soon</h6>
+                    <p className="small mb-0">Stay tuned for more ways to earn credits!</p>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const LeaderboardView = () => (
     <div className="container mt-4 text-center">
