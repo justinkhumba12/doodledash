@@ -322,9 +322,9 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
 
     return (
         <div className="w-100 d-flex flex-column align-items-center">
-            {isDrawingPhase && (
+            {/* The Ink Level only renders for the drawer to declutter the UI */}
+            {isDrawingPhase && isDrawer && (
                 <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
-
                     <div className="d-flex justify-content-between small fw-bold mb-1">
                         <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
                         <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
@@ -333,15 +333,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                         <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
                              style={{width: '100%', transition: 'width 0.1s'}}></div>
                     </div>
-                    {isDrawer && (
-                        <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                            <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
-                            }}>
-                                <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
-                            </button>
-                        </div>
-                    )}
+                    <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                        <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                        }}>
+                            <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -440,23 +438,35 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                 </div>
             )}
             
+            {/* Emojis Section: Modernized UI */}
             {isDrawingPhase && (
-                <div className="d-flex gap-2 justify-content-center mt-3 w-100 flex-wrap px-2">
-                    {emojis.map(emoji => {
-                        const count = Object.values(userReactions).filter(e => e === emoji).length;
-                        const myReaction = userReactions[tgId] === emoji;
-                        return (
-                            <button key={emoji} 
-                                className={`btn ${myReaction ? 'btn-primary text-white border-primary' : 'btn-light text-secondary border'} shadow-sm rounded-pill px-3 py-1 d-flex align-items-center gap-1`}
-                                onClick={() => sendReaction(emoji)} 
-                                title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
-                                disabled={isDrawer}
-                                style={{ opacity: isDrawer && count === 0 ? 0.6 : 1 }}>
-                                <span className="fs-5 lh-1">{emoji}</span>
-                                {count > 0 && <sup className="fw-bold" style={{fontSize: '0.85rem', marginLeft: '2px'}}>{count}</sup>}
-                            </button>
-                        );
-                    })}
+                <div className="d-flex justify-content-center mt-3 w-100 px-3">
+                    <div className="bg-white rounded-pill shadow-sm border p-2 d-flex gap-3 justify-content-around" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+                        {emojis.map(emoji => {
+                            const count = Object.values(userReactions).filter(e => e === emoji).length;
+                            const myReaction = userReactions[tgId] === emoji;
+                            return (
+                                <button key={emoji} 
+                                    className={`btn rounded-circle d-flex align-items-center justify-content-center position-relative flex-shrink-0 ${myReaction ? 'bg-primary border-primary text-white shadow' : 'bg-light border-0'}`}
+                                    onClick={() => sendReaction(emoji)} 
+                                    title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
+                                    disabled={isDrawer}
+                                    style={{ 
+                                        width: '48px', height: '48px',
+                                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                        transform: myReaction ? 'scale(1.15)' : 'scale(1)',
+                                        opacity: isDrawer && count === 0 ? 0.4 : 1,
+                                    }}>
+                                    <span className="fs-3 lh-1" style={{ transform: myReaction ? 'translateY(-1px)' : 'none' }}>{emoji}</span>
+                                    {count > 0 && (
+                                        <span className="position-absolute translate-middle badge rounded-pill bg-danger shadow-sm border border-2 border-white" style={{ top: '5px', left: '85%', fontSize: '0.75rem' }}>
+                                            {count}
+                                        </span>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
             )}
         </div>
