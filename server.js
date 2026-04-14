@@ -64,7 +64,7 @@ if (cluster.isPrimary) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
-            // Removed tg_username
+            // Updated User Schema to support Invite Tracking System
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
@@ -74,6 +74,8 @@ if (cluster.isPrimary) {
                     last_ad_claim_time DATETIME,
                     ad2_claims_today INT DEFAULT 0,
                     last_ad2_claim_time DATETIME,
+                    invite_count INT DEFAULT 0,
+                    invite_claimed BOOLEAN DEFAULT FALSE,
                     last_active DATETIME
                 )
             `);
@@ -81,7 +83,9 @@ if (cluster.isPrimary) {
             const migrations = [
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
                 "ALTER TABLE users DROP COLUMN IF EXISTS profile_pic",
-                "ALTER TABLE users DROP COLUMN IF EXISTS tg_username"
+                "ALTER TABLE users DROP COLUMN IF EXISTS tg_username",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_count INT DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_claimed BOOLEAN DEFAULT FALSE"
             ];
             for (let query of migrations) {
                 try { await db.query(query); } catch (e) { /* Ignore */ }
@@ -377,16 +381,30 @@ if (cluster.isPrimary) {
 
         if (update?.message?.text && update.message.text.startsWith('/start')) {
             const chatId = update.message.chat.id;
-            const tgId = update.message.from.id;
+            const tgId = update.message.from.id.toString();
+            const text = update.message.text;
             
             try {
-                await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId.toString()]);
-                await db.query('UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?', [tgId.toString()]);
+                const [insertRes] = await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId]);
+                await db.query('UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?', [tgId]);
+                
+                // Track Invitations through /start invite_{inviter_id}
+                if (text.startsWith('/start invite_')) {
+                    const inviterId = text.split('_')[1];
+                    // If insertRes.affectedRows > 0, it means it's a completely new user who clicked the invite link
+                    if (inviterId && inviterId !== tgId && insertRes.affectedRows > 0) {
+                        await db.query('UPDATE users SET invite_count = invite_count + 1 WHERE tg_id = ?', [inviterId]);
+                        sendMsg(inviterId, `🎉 A new user joined via your link! Check your Tasks to claim rewards.`);
+                        
+                        const userState = await getUserState(inviterId);
+                        if (userState) io.to(`user_${inviterId}`).emit('user_update', userState);
+                    }
+                }
             } catch (e) {
                 console.error('Webhook DB Error:', e);
             }
 
-            if (update.message.text === '/start load_balance') {
+            if (text === '/start load_balance') {
                 sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1 Credit = 1 Telegram Star*", {
                     inline_keyboard: [
                         [{ text: '1 Credit (1 ⭐️)', callback_data: 'buy_1' }, { text: '10 Credits (10 ⭐️)', callback_data: 'buy_10' }],
@@ -792,6 +810,21 @@ if (cluster.isPrimary) {
                             success = true; msg = `Reward claimed! +${rewardAmount} Credit${rewardAmount > 1 ? 's' : ''}`;
                         } else {
                             msg = `Ad reward not available yet. Max ${maxClaims} per day, ${cooldown} mins apart.`;
+                        }
+                    }
+                } else if (type === 'invite_3') {
+                    const [u] = await db.query(`SELECT invite_count, invite_claimed FROM users WHERE tg_id = ?`, [currentUser]);
+                    if (u.length > 0) {
+                        const user = u[0];
+                        if (user.invite_count >= 3 && !user.invite_claimed) {
+                            rewardAmount = 3;
+                            await db.query(`UPDATE users SET credits = credits + ?, invite_claimed = TRUE WHERE tg_id = ?`, [rewardAmount, currentUser]);
+                            success = true;
+                            msg = 'Task completed! +3 Credits claimed.';
+                        } else if (user.invite_claimed) {
+                            msg = 'You have already claimed this reward.';
+                        } else {
+                            msg = `Not enough invites yet. Progress: ${user.invite_count}/3`;
                         }
                     }
                 }
