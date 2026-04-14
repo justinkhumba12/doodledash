@@ -462,7 +462,7 @@ const App = () => {
                 {!currentRoomId ? (
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
-                        {mainPageTab === 'tasks' && <TasksView />}
+                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} />}
                         {mainPageTab === 'leaderboard' && <LeaderboardView />}
                         {mainPageTab === 'profile' && <ProfileView user={user} />}
                         
