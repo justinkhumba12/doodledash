@@ -47,10 +47,11 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </div>
         );
     } else if (modal.type === 'idle_warning') {
+        // Redesigned UI content removing the duplicate question text
         content = (
-            <div className="text-center py-4">
+            <div className="text-center py-3">
                 <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
-                <h4 className="fw-bold text-dark">Are you still there?</h4>
+                <p className="text-muted small">You've been idle for a while.</p>
                 <h1 className="text-danger fw-bold display-4 my-3">{idleTimer}s</h1>
                 <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
                     socket.emit('active_event');
