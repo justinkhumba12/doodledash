@@ -38,7 +38,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
 
     // Reactions State
     const [userReactions, setUserReactions] = useState({});
-    const emojis = ['😂', '😍', '😛', '💦', '🍑', '🍆'];
+    const emojis = ['😂', '😍', '😋', '💦', '🍑', '🍆'];
 
     const updateInkUI = useCallback(() => {
         if (!isDrawingPhase) return;
