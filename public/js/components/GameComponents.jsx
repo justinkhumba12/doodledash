@@ -37,8 +37,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
 
     // Reactions State
-    const [reactionCounts, setReactionCounts] = useState({ '❤️': 0, '😂': 0, '😮': 0, '😢': 0, '🔥': 0, '👏': 0 });
-    const emojis = ['❤️', '😂', '😮', '😢', '🔥', '👏'];
+    const [userReactions, setUserReactions] = useState({});
+    const emojis = ['😂', '😍', '😛', '💦', '🍑', '🍆'];
 
     const updateInkUI = useCallback(() => {
         if (!isDrawingPhase) return;
@@ -103,21 +103,43 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     // Reactions cleanup and handler
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
-            setReactionCounts({ '❤️': 0, '😂': 0, '😮': 0, '😢': 0, '🔥': 0, '👏': 0 });
+            setUserReactions({});
         }
     }, [room.status, room.turn_index]);
 
     useEffect(() => {
         if (!socket) return;
-        const handleReaction = ({ emoji }) => {
-            setReactionCounts(prev => ({ ...prev, [emoji]: (prev[emoji] || 0) + 1 }));
+        const handleReaction = ({ user_id, emoji, action }) => {
+            setUserReactions(prev => {
+                const next = { ...prev };
+                if (action === 'remove') {
+                    delete next[user_id];
+                } else {
+                    next[user_id] = emoji;
+                }
+                return next;
+            });
         };
         socket.on('new_reaction', handleReaction);
         return () => socket.off('new_reaction', handleReaction);
     }, [socket]);
 
     const sendReaction = (emoji) => {
-        if (socket) socket.emit('send_reaction', { emoji });
+        if (isDrawer) return; // Drawee cannot react
+        if (socket) {
+            const action = userReactions[tgId] === emoji ? 'remove' : 'add';
+            socket.emit('send_reaction', { emoji, action });
+            // Optimistic update
+            setUserReactions(prev => {
+                const next = { ...prev };
+                if (action === 'remove') {
+                    delete next[tgId];
+                } else {
+                    next[tgId] = emoji;
+                }
+                return next;
+            });
+        }
     };
 
     useEffect(() => {
@@ -420,13 +442,21 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             
             {isDrawingPhase && (
                 <div className="d-flex gap-2 justify-content-center mt-3 w-100 flex-wrap px-2">
-                    {emojis.map(emoji => (
-                        <button key={emoji} className="btn btn-light shadow-sm rounded-pill px-3 py-1 fw-bold text-secondary border d-flex align-items-center gap-1"
-                            onClick={() => sendReaction(emoji)} title="React">
-                            <span className="fs-5 lh-1">{emoji}</span>
-                            {reactionCounts[emoji] > 0 && <span className="small">{reactionCounts[emoji]}</span>}
-                        </button>
-                    ))}
+                    {emojis.map(emoji => {
+                        const count = Object.values(userReactions).filter(e => e === emoji).length;
+                        const myReaction = userReactions[tgId] === emoji;
+                        return (
+                            <button key={emoji} 
+                                className={`btn ${myReaction ? 'btn-primary text-white border-primary' : 'btn-light text-secondary border'} shadow-sm rounded-pill px-3 py-1 d-flex align-items-center gap-1`}
+                                onClick={() => sendReaction(emoji)} 
+                                title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
+                                disabled={isDrawer}
+                                style={{ opacity: isDrawer && count === 0 ? 0.6 : 1 }}>
+                                <span className="fs-5 lh-1">{emoji}</span>
+                                {count > 0 && <sup className="fw-bold" style={{fontSize: '0.85rem', marginLeft: '2px'}}>{count}</sup>}
+                            </button>
+                        );
+                    })}
                 </div>
             )}
         </div>
