@@ -19,18 +19,9 @@ const NUM_WORKERS = process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cp
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
-// Allowed Origins Control
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['https://t.me', 'https://web.telegram.org'];
-if (process.env.WEBAPP_URL) ALLOWED_ORIGINS.push(process.env.WEBAPP_URL);
-
+// Allowed Origins Control - Features Temporarily Removed as Requested (Allows All)
 const corsOptions = {
-    origin: function (origin, callback) {
-        if (!origin || ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
+    origin: "*",
     methods: ["GET", "POST"]
 };
 
@@ -745,10 +736,11 @@ if (cluster.isPrimary) {
             socket.data.idleWarned = false;
         });
 
-        socket.on('send_reaction', ({ emoji }) => {
+        socket.on('send_reaction', ({ emoji, action }) => {
             const currentRoom = socket.data.currentRoom;
-            if (currentRoom) {
-                io.to(`room_${currentRoom}`).emit('new_reaction', { emoji });
+            const currentUser = socket.data.currentUser;
+            if (currentRoom && currentUser) {
+                io.to(`room_${currentRoom}`).emit('new_reaction', { user_id: currentUser, emoji, action });
             }
         });
 
