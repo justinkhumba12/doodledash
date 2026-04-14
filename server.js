@@ -153,7 +153,9 @@ if (cluster.isPrimary) {
     // HTTP Header Security
     app.use(helmet({
         contentSecurityPolicy: false,
-        crossOriginEmbedderPolicy: false
+        crossOriginEmbedderPolicy: false,
+        // Disable frameguard to allow the web app to be embedded inside Telegram Web / Desktop iframes
+        frameguard: false 
     }));
 
     app.use(cors(corsOptions));
