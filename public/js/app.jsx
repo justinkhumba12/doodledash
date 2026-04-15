@@ -545,7 +545,7 @@ const App = () => {
                                     </div>
                                     
                                     {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={window.tgId} />}
+                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={window.tgId} user={user} />}
                                     {activeTab === 'sounds' && (
                                         <div className="panel-body">
                                             <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
