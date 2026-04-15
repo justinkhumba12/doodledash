@@ -41,7 +41,7 @@ const TasksView = ({ user, socket }) => {
                 <div className="card-body p-4">
                     <div className="d-flex align-items-center justify-content-between mb-3">
                         <div className="d-flex align-items-center gap-3">
-                            <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm" style={{width: '55px', height: '55px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
+                            <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '55px', height: '55px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
                                 <i className="fas fa-user-friends fs-4"></i>
                             </div>
                             <div>
