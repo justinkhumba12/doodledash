@@ -100,7 +100,6 @@ if (cluster.isPrimary) {
             console.log('[Primary] MySQL setup complete.');
         } catch (err) {
             console.error('[Primary] MySQL Init Error:', err);
-            process.exit(1);
         } finally {
             if (db) await db.end();
         }
@@ -116,7 +115,6 @@ if (cluster.isPrimary) {
             console.log('[Primary] Redis room setup complete.');
         } catch (err) {
             console.error('[Primary] Redis Init Error:', err);
-            process.exit(1);
         } finally {
             if (redis) await redis.quit();
         }
@@ -393,8 +391,9 @@ if (cluster.isPrimary) {
 
                 if (!hasAccepted) {
                     let inviterId = 'none';
-                    if (text.startsWith('/start invite_')) {
-                        inviterId = text.split('_')[1];
+                    const parts = text.split(' ');
+                    if (parts.length > 1 && parts[1].startsWith('invite_')) {
+                        inviterId = parts[1].replace('invite_', '');
                     }
                     sendMsg(chatId, "📜 *Welcome to DoodleDash!*\n\nPlease read and accept our Privacy Policy to start playing, earning rewards, and inviting friends.", {
                         inline_keyboard: [[{ text: "✅ I've read and accept", callback_data: `accept_policy_${inviterId}` }]]
@@ -1731,5 +1730,48 @@ if (cluster.isPrimary) {
         }
     }, 10000); 
 
-    server.listen(PORT, () => console.log(`[Worker ${process.pid}] Server running on port ${PORT}`));
+    const initWorkerDB = async () => {
+        try {
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS users (
+                    tg_id VARCHAR(50) PRIMARY KEY,
+                    credits DECIMAL(10,2) DEFAULT 0,
+                    last_daily_claim DATE,
+                    ad_claims_today INT DEFAULT 0,
+                    last_ad_claim_time DATETIME,
+                    ad2_claims_today INT DEFAULT 0,
+                    last_ad2_claim_time DATETIME,
+                    accepted_policy BOOLEAN DEFAULT FALSE,
+                    last_invite_claim_week VARCHAR(10),
+                    last_active DATETIME
+                )
+            `);
+            
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS referrals (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    inviter_id VARCHAR(50),
+                    invited_id VARCHAR(50) UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+
+            const migrations = [
+                "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN accepted_policy BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)"
+            ];
+            
+            for (let q of migrations) {
+                try { await db.query(q); } catch(e) { /* Ignore existing columns */ }
+            }
+            console.log(`[Worker ${process.pid}] DB Initialization verified.`);
+        } catch(e) {
+            console.error(`[Worker ${process.pid}] DB Init Error:`, e);
+        }
+    };
+
+    initWorkerDB().then(() => {
+        server.listen(PORT, () => console.log(`[Worker ${process.pid}] Server running on port ${PORT}`));
+    });
 }
