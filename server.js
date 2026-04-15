@@ -91,11 +91,11 @@ if (cluster.isPrimary) {
 
             const migrations = [
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_policy BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invite_claim_week VARCHAR(10)"
+                "ALTER TABLE users ADD COLUMN accepted_policy BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)"
             ];
             for (let query of migrations) {
-                try { await db.query(query); } catch (e) { /* Ignore */ }
+                try { await db.query(query); } catch (e) { /* Ignore duplicate column errors */ }
             }
             console.log('[Primary] MySQL setup complete.');
         } catch (err) {
