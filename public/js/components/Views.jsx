@@ -8,14 +8,13 @@ const ProfileView = ({ user }) => (
 );
 
 const TasksView = ({ user, socket }) => {
-    // Dynamic invite counts fetched securely from the DB
-    const inviteCount = user?.invite_count || 0;
+    // Dynamic invite counts fetched from Redis cache (weekly)
+    const inviteCount = user?.weekly_invites || 0;
     const goal = 3;
     const isCompleted = inviteCount >= goal;
-    const hasClaimed = user?.invite_claimed;
+    const hasClaimed = user?.invite_claimed_this_week;
 
     const handleInvite = () => {
-        // Invite link carrying the inviter's unique ID
         const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
         if (window.tg && window.tg.openTelegramLink) {
             try {
@@ -38,39 +37,41 @@ const TasksView = ({ user, socket }) => {
         <div className="container mt-4 pb-5">
             <h3 className="fw-bold mb-4 text-center">Your Tasks</h3>
 
-            <div className="card bg-white rounded-4 border shadow-sm overflow-hidden mb-3">
+            <div className="card bg-white rounded-4 border shadow-sm overflow-hidden mb-3" style={{ transition: '0.3s' }}>
                 <div className="card-body p-4">
                     <div className="d-flex align-items-center justify-content-between mb-3">
                         <div className="d-flex align-items-center gap-3">
-                            <div className="bg-primary-subtle text-primary rounded-circle d-flex align-items-center justify-content-center" style={{width: '50px', height: '50px', backgroundColor: '#e0e7ff'}}>
+                            <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm" style={{width: '55px', height: '55px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
                                 <i className="fas fa-user-friends fs-4"></i>
                             </div>
                             <div>
-                                <h5 className="fw-bold mb-1">Invite Friends</h5>
-                                <p className="text-muted small mb-0">Invite 3 new users to get 3 Credits.</p>
+                                <h5 className="fw-bold mb-1">Weekly Invite Challenge</h5>
+                                <p className="text-muted small mb-0">Invite 3 friends this week for 5 Credits!</p>
                             </div>
                         </div>
                         <div className="text-end">
-                            <span className="badge bg-warning text-dark fs-6 rounded-pill shadow-sm"><i className="fas fa-coins"></i> 3</span>
+                            <span className="badge bg-warning text-dark fs-6 rounded-pill shadow-sm py-2 px-3">
+                                <i className="fas fa-coins me-1"></i> 5
+                            </span>
                         </div>
                     </div>
 
-                    <div className="mb-3">
-                        <div className="d-flex justify-content-between small fw-bold mb-1">
-                            <span className="text-secondary">Progress</span>
-                            <span className={isCompleted ? 'text-success' : 'text-primary'}>{Math.min(inviteCount, goal)} / {goal}</span>
+                    <div className="mb-3 mt-4">
+                        <div className="d-flex justify-content-between small fw-bold mb-2 px-1">
+                            <span className="text-secondary">Weekly Progress</span>
+                            <span className={isCompleted ? 'text-success' : 'text-primary'}>{inviteCount} / {goal}</span>
                         </div>
-                        <div className="progress rounded-pill bg-light border" style={{height: '10px'}}>
-                            <div className={`progress-bar rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${(Math.min(inviteCount, goal) / goal) * 100}%`}}></div>
+                        <div className="progress rounded-pill bg-light border shadow-sm" style={{height: '14px'}}>
+                            <div className={`progress-bar progress-bar-striped progress-bar-animated rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${Math.min((inviteCount / goal) * 100, 100)}%`}}></div>
                         </div>
                     </div>
 
-                    <div className="d-flex gap-2 mt-4">
-                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm" onClick={handleInvite}>
-                            <i className="fas fa-paper-plane me-2"></i> Invite
+                    <div className="d-flex gap-2 mt-4 pt-2 border-top">
+                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2" onClick={handleInvite}>
+                            <i className="fas fa-paper-plane me-2"></i> Invite Link
                         </button>
                         <button
-                            className={`btn ${isCompleted && !hasClaimed ? 'btn-success shadow-sm' : 'btn-light text-muted border'} rounded-pill fw-bold px-4`}
+                            className={`btn ${isCompleted && !hasClaimed ? 'btn-success shadow-sm' : 'btn-light text-muted border'} rounded-pill fw-bold px-4 py-2`}
                             disabled={!isCompleted || hasClaimed}
                             onClick={handleClaim}
                         >
@@ -82,7 +83,7 @@ const TasksView = ({ user, socket }) => {
 
             <div className="card bg-light border-dashed rounded-4 mb-3" style={{ borderStyle: 'dashed', borderColor: '#cbd5e1' }}>
                 <div className="card-body p-4 text-center text-muted">
-                    <i className="fas fa-lock fs-2 mb-2 text-secondary"></i>
+                    <i className="fas fa-lock fs-2 mb-2 text-secondary opacity-50"></i>
                     <h6 className="fw-bold">More Tasks Coming Soon</h6>
                     <p className="small mb-0">Stay tuned for more ways to earn credits!</p>
                 </div>
@@ -91,12 +92,72 @@ const TasksView = ({ user, socket }) => {
     );
 };
 
-const LeaderboardView = () => (
-    <div className="container mt-4 text-center">
-        <i className="fas fa-trophy text-light mt-5" style={{ fontSize: '6rem' }}></i>
-        <h4 className="text-muted mt-3 fw-bold">Coming Soon</h4>
-    </div>
-);
+const LeaderboardView = ({ socket }) => {
+    const [leaders, setLeaders] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (socket) {
+            socket.emit('get_leaderboard');
+            const handleLeaderboardData = (data) => {
+                setLeaders(data);
+                setLoading(false);
+            };
+            socket.on('leaderboard_data', handleLeaderboardData);
+            return () => socket.off('leaderboard_data', handleLeaderboardData);
+        }
+    }, [socket]);
+
+    return (
+        <div className="container mt-4 pb-5">
+            <div className="text-center mb-4">
+                <i className="fas fa-trophy text-warning mb-2" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}></i>
+                <h3 className="fw-bold m-0">Weekly Top Inviters</h3>
+                <p className="small text-muted">See who invited the most friends this week!</p>
+            </div>
+
+            {loading ? (
+                <div className="text-center mt-5">
+                    <i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i>
+                    <p className="text-muted mt-2">Loading leaderboard...</p>
+                </div>
+            ) : leaders.length > 0 ? (
+                <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
+                    {leaders.map((l, index) => {
+                        let rankStyle = "bg-primary";
+                        if (index === 0) rankStyle = "bg-warning text-dark";
+                        if (index === 1) rankStyle = "bg-secondary text-white";
+                        if (index === 2) rankStyle = "bg-danger text-white";
+
+                        return (
+                            <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                                <div className="d-flex align-items-center gap-3">
+                                    <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm ${rankStyle}`} style={{width: '45px', height: '45px', fontSize: '1.2rem'}}>
+                                        #{index + 1}
+                                    </div>
+                                    <div className="d-flex flex-column">
+                                        <span className="fw-bold text-dark fs-5">{window.toHex(l.tg_id)}</span>
+                                        {index === 0 && <span className="small text-warning fw-bold"><i className="fas fa-crown"></i> Current Leader</span>}
+                                    </div>
+                                </div>
+                                <div className="badge bg-white text-dark border border-light px-3 py-2 rounded-pill shadow-sm" style={{ fontSize: '1rem' }}>
+                                    <i className="fas fa-user-plus text-success me-2"></i> 
+                                    {l.invites}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : (
+                <div className="text-center mt-5 text-muted">
+                    <i className="fas fa-users-slash mb-3 text-secondary opacity-50" style={{ fontSize: '4rem' }}></i>
+                    <h5 className="fw-bold">No invites yet this week!</h5>
+                    <p className="small">Head to the Tasks tab and be the first to invite your friends.</p>
+                </div>
+            )}
+        </div>
+    );
+};
 
 const LobbyView = ({ user, rooms, setModal, socket }) => {
     const [searchId, setSearchId] = useState('');
@@ -106,7 +167,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     
     const [touchStartPos, setTouchStartPos] = useState(null);
 
-    // Preload Interstitial Ad when component mounts to reduce latency
     useEffect(() => {
         if (typeof window.show_10812134 === 'function' && user?.tg_id) {
             window.show_10812134({ type: 'preload', ymid: user.tg_id.toString() }).catch(() => {});
@@ -137,7 +197,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     const triggerAd = (adNum, prefix) => {
         setAdState({ show: true });
         
-        // Fallback if AdBlocker blocks script
         if (typeof window.show_10812134 !== 'function') {
             setTimeout(() => {
                 socket.emit('claim_reward', { type: prefix });
@@ -149,7 +208,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
         const adConfig = { ymid: user.tg_id.toString() };
 
         if (adNum === 1) {
-            // AD 1: REWARDED POPUP
             window.show_10812134({ type: 'pop', ...adConfig }).then(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
@@ -158,7 +216,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
                 setModal({ type: 'error', title: 'Ad Error', content: 'Popup ad failed to open or was blocked. Try again later.' });
             });
         } else {
-            // AD 2: REWARDED INTERSTITIAL
             window.show_10812134(adConfig).then(() => {
                 socket.emit('claim_reward', { type: prefix });
                 setAdState({ show: false });
@@ -353,7 +410,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     );
 };
 
-// Expose to window for the main app
 window.ProfileView = ProfileView;
 window.TasksView = TasksView;
 window.LeaderboardView = LeaderboardView;
