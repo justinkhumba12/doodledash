@@ -486,6 +486,8 @@ const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
         if (window.tg && window.tg.openTelegramLink) {
             try {
                 window.tg.openTelegramLink(botLink);
+                // Automatically close the mini-app so the user can interact directly with the bot
+                setTimeout(() => window.tg.close(), 300);
             } catch (e) {
                 window.open(botLink, '_blank');
             }
