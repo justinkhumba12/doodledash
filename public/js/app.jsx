@@ -95,7 +95,22 @@ const App = () => {
             if (data.success) {
                 setIsAuthComplete(true);
             } else {
-                setLoadingState('Authentication failed: ' + (data.error || 'Unauthorized'));
+                if (data.error === 'not_registered') {
+                    setLoadingState('Please start the bot first! Closing...');
+                    if (window.tg) {
+                        try {
+                            window.tg.openTelegramLink('https://t.me/doodledashbot');
+                        } catch(e) {}
+                        setTimeout(() => window.tg.close(), 1500);
+                    }
+                } else if (data.error === 'banned') {
+                    setLoadingState('You are banned. Check the bot for details. Closing...');
+                    if (window.tg) {
+                        setTimeout(() => window.tg.close(), 3000);
+                    }
+                } else {
+                    setLoadingState('Authentication failed: ' + (data.error || 'Unauthorized'));
+                }
             }
         })
         .catch(err => {
