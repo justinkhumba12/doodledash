@@ -19,7 +19,7 @@ const NUM_WORKERS = process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cp
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
-// Allowed Origins Control - Features Temporarily Removed as Requested (Allows All)
+// Allowed Origins Control
 const corsOptions = {
     origin: "*",
     methods: ["GET", "POST"]
@@ -58,13 +58,12 @@ if (cluster.isPrimary) {
             console.log('[Primary] Connecting to MySQL for initial setup...');
             db = await mysql.createConnection(MYSQL_URL);
             
-            // Removed 'calls' table from drop array as requested
             const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages'];
             for (let table of tablesToDrop) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
-            // Updated User Schema to support Invite Tracking System
+            // Core Users Table
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
@@ -74,18 +73,26 @@ if (cluster.isPrimary) {
                     last_ad_claim_time DATETIME,
                     ad2_claims_today INT DEFAULT 0,
                     last_ad2_claim_time DATETIME,
-                    invite_count INT DEFAULT 0,
-                    invite_claimed BOOLEAN DEFAULT FALSE,
+                    accepted_policy BOOLEAN DEFAULT FALSE,
+                    last_invite_claim_week VARCHAR(10),
                     last_active DATETIME
+                )
+            `);
+
+            // New Referrals Table for better performance tracking
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS referrals (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    inviter_id VARCHAR(50),
+                    invited_id VARCHAR(50) UNIQUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             `);
 
             const migrations = [
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
-                "ALTER TABLE users DROP COLUMN IF EXISTS profile_pic",
-                "ALTER TABLE users DROP COLUMN IF EXISTS tg_username",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_count INT DEFAULT 0",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_claimed BOOLEAN DEFAULT FALSE"
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_policy BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_invite_claim_week VARCHAR(10)"
             ];
             for (let query of migrations) {
                 try { await db.query(query); } catch (e) { /* Ignore */ }
@@ -133,7 +140,6 @@ if (cluster.isPrimary) {
     const app = express();
     const server = http.createServer(app);
     
-    // Hide Server Metadata
     app.disable('x-powered-by');
 
     const redis = new Redis(REDIS_URL);
@@ -154,11 +160,9 @@ if (cluster.isPrimary) {
         connectionLimit: 5 
     });
 
-    // HTTP Header Security
     app.use(helmet({
         contentSecurityPolicy: false,
         crossOriginEmbedderPolicy: false,
-        // Disable frameguard to allow the web app to be embedded inside Telegram Web / Desktop iframes
         frameguard: false 
     }));
 
@@ -166,7 +170,15 @@ if (cluster.isPrimary) {
     app.use(express.json());
     app.use(express.static(path.join(__dirname, 'public')));
 
-    // CACHE BUSTED SERVICE WORKER: Forces HTML to always download from the network first
+    // Get current ISO year-week format (e.g., "2024-W12")
+    function getWeekKey() {
+        const d = new Date();
+        d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+        const weekNo = Math.ceil(( ( (d - yearStart) / 86400000) + 1)/7);
+        return `${d.getUTCFullYear()}-W${weekNo}`;
+    }
+
     app.get('/sw.js', (req, res) => {
         res.setHeader('Content-Type', 'application/javascript');
         res.send(`
@@ -201,26 +213,16 @@ if (cluster.isPrimary) {
 
             self.addEventListener('fetch', event => {
                 if (event.request.mode === 'navigate' || event.request.url.includes('index.html')) {
-                    // Network-First for HTML to prevent sticking on old versions
-                    event.respondWith(
-                        fetch(event.request).catch(() => caches.match(event.request))
-                    );
+                    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
                 } else {
-                    // Cache-First for static assets
-                    event.respondWith(
-                        caches.match(event.request).then(response => response || fetch(event.request))
-                    );
+                    event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
                 }
             });
         `);
     });
 
-    // ---------------------------------------------------------
-    // MONETAG SERVER-TO-SERVER (S2S) POSTBACK ENDPOINT
-    // ---------------------------------------------------------
     app.get('/postback', async (req, res) => {
         const { ymid, event_type, reward_event_type, estimated_price, zone } = req.query;
-
         if (reward_event_type === 'valued' && ymid) {
             try {
                 console.log(`[Monetag Postback] User ${ymid} successfully completed ad for Zone: ${zone}. Revenue: ${estimated_price}`);
@@ -228,10 +230,8 @@ if (cluster.isPrimary) {
                 console.error('[Monetag Postback DB Error]', err);
             }
         }
-        
         res.sendStatus(200); 
     });
-
 
     const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
@@ -239,9 +239,6 @@ if (cluster.isPrimary) {
         black: { free: 2500, extra: 2500, cost: 0.5 }
     };
 
-    // ---------------------------------------------------------
-    // REDIS HELPERS
-    // ---------------------------------------------------------
     async function getRoom(roomId) {
         const data = await redis.get(`room:${roomId}`);
         if (!data) return null;
@@ -269,14 +266,9 @@ if (cluster.isPrimary) {
         await redis.srem('active_rooms', roomId);
     }
 
-    // ---------------------------------------------------------
-    // REST API - AUTHENTICATE
-    // ---------------------------------------------------------
-    
-    // API Rate Limiting for Auth
     const authLimiter = rateLimit({
-        windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 100, // Limit each IP to 100 requests per windowMs
+        windowMs: 15 * 60 * 1000, 
+        max: 100, 
         message: { error: 'Too many authentication requests from this IP, please try again after 15 minutes.' },
         standardHeaders: true, 
         legacyHeaders: false,
@@ -286,10 +278,8 @@ if (cluster.isPrimary) {
         const { initData, profile_pic } = req.body;
         if (!initData) return res.status(400).json({ error: 'Missing initData' });
 
-        // Only allow mock auth in non-production environments
         const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
         
-        // Secure token check guarantees safety against manual request spoofing
         if (!isMock && BOT_TOKEN && !validateInitData(initData, BOT_TOKEN)) {
             return res.status(403).json({ error: 'Invalid authentication payload.' });
         }
@@ -385,46 +375,80 @@ if (cluster.isPrimary) {
             const text = update.message.text;
             
             try {
-                const [insertRes] = await db.query('INSERT IGNORE INTO users (tg_id, credits, last_active) VALUES (?, 5, UTC_TIMESTAMP())', [tgId]);
-                await db.query('UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?', [tgId]);
-                
-                // Track Invitations through /start invite_{inviter_id}
-                if (text.startsWith('/start invite_')) {
-                    const inviterId = text.split('_')[1];
-                    // If insertRes.affectedRows > 0, it means it's a completely new user who clicked the invite link
-                    if (inviterId && inviterId !== tgId && insertRes.affectedRows > 0) {
-                        await db.query('UPDATE users SET invite_count = invite_count + 1 WHERE tg_id = ?', [inviterId]);
-                        sendMsg(inviterId, `🎉 A new user joined via your link! Check your Tasks to claim rewards.`);
-                        
-                        const userState = await getUserState(inviterId);
-                        if (userState) io.to(`user_${inviterId}`).emit('user_update', userState);
-                    }
+                const [userRows] = await db.query('SELECT accepted_policy FROM users WHERE tg_id = ?', [tgId]);
+                const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
+
+                if (text === '/start load_balance') {
+                    sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1 Credit = 1 Telegram Star*", {
+                        inline_keyboard: [
+                            [{ text: '1 Credit (1 ⭐️)', callback_data: 'buy_1' }, { text: '10 Credits (10 ⭐️)', callback_data: 'buy_10' }],
+                            [{ text: '20 Credits (20 ⭐️)', callback_data: 'buy_20' }, { text: '50 Credits (50 ⭐️)', callback_data: 'buy_50' }],
+                            [{ text: '100 Credits (100 ⭐️)', callback_data: 'buy_100' }],
+                            [{ text: '500 Credits (500 ⭐️)', callback_data: 'buy_500' }],
+                            [{ text: '1000 Credits (1000 ⭐️)', callback_data: 'buy_1000' }]
+                        ]
+                    });
+                    return;
                 }
+
+                if (!hasAccepted) {
+                    let inviterId = 'none';
+                    if (text.startsWith('/start invite_')) {
+                        inviterId = text.split('_')[1];
+                    }
+                    sendMsg(chatId, "📜 *Welcome to DoodleDash!*\n\nPlease read and accept our Privacy Policy to start playing, earning rewards, and inviting friends.", {
+                        inline_keyboard: [[{ text: "✅ I've read and accept", callback_data: `accept_policy_${inviterId}` }]]
+                    });
+                    return;
+                }
+
+                // Normal app start
+                const urlWithParams = `${webAppUrl}`;
+                sendMsg(chatId, 'Welcome back to DoodleDash! Click below to play.', {
+                    inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
+                });
+
             } catch (e) {
                 console.error('Webhook DB Error:', e);
             }
-
-            if (text === '/start load_balance') {
-                sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1 Credit = 1 Telegram Star*", {
-                    inline_keyboard: [
-                        [{ text: '1 Credit (1 ⭐️)', callback_data: 'buy_1' }, { text: '10 Credits (10 ⭐️)', callback_data: 'buy_10' }],
-                        [{ text: '20 Credits (20 ⭐️)', callback_data: 'buy_20' }, { text: '50 Credits (50 ⭐️)', callback_data: 'buy_50' }],
-                        [{ text: '100 Credits (100 ⭐️)', callback_data: 'buy_100' }],
-                        [{ text: '500 Credits (500 ⭐️)', callback_data: 'buy_500' }],
-                        [{ text: '1000 Credits (1000 ⭐️)', callback_data: 'buy_1000' }]
-                    ]
-                });
-                return;
-            }
-
-            const urlWithParams = `${webAppUrl}`;
-            sendMsg(chatId, 'Welcome to DoodleDash! Click below to play.', {
-                inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
-            });
         } else if (update?.callback_query) {
             const query = update.callback_query;
             const chatId = query.message.chat.id;
-            const tgId = query.from.id;
+            const tgId = query.from.id.toString();
+
+            // Handle Privacy Policy Acceptance & Referrals
+            if (query.data.startsWith('accept_policy_')) {
+                const inviterId = query.data.replace('accept_policy_', '');
+
+                try {
+                    await db.query('INSERT INTO users (tg_id, credits, accepted_policy, last_active) VALUES (?, 5, TRUE, UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE accepted_policy = TRUE, last_active = UTC_TIMESTAMP()', [tgId]);
+
+                    if (inviterId && inviterId !== 'none' && inviterId !== tgId) {
+                        const [res] = await db.query('INSERT IGNORE INTO referrals (inviter_id, invited_id) VALUES (?, ?)', [inviterId, tgId]);
+                        if (res.affectedRows > 0) {
+                            // Valid new invite - Add to Cache Leaderboard
+                            const weekKey = getWeekKey();
+                            await redis.zincrby(`leaderboard:invites:${weekKey}`, 1, inviterId);
+                            
+                            sendMsg(inviterId, "🎉 A new user joined via your link! Check your Tasks to track your weekly progress and claim credits.");
+                            
+                            const userState = await getUserState(inviterId);
+                            if (userState) io.to(`user_${inviterId}`).emit('user_update', userState);
+                        }
+                    }
+
+                    tgApiCall('editMessageText', {
+                        chat_id: chatId,
+                        message_id: query.message.message_id,
+                        text: "✅ Privacy Policy Accepted!\n\nWelcome to DoodleDash. Click below to play.",
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: `${webAppUrl}` } }]]
+                        }
+                    });
+                    tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
+                } catch(e) { console.error('Policy Accept Error:', e); }
+                return;
+            }
 
             if (query.data.startsWith('buy_')) {
                 const amount = parseInt(query.data.split('_')[1]);
@@ -448,6 +472,9 @@ if (cluster.isPrimary) {
     });
 
     async function getUserState(tg_id) {
+        const weekKey = getWeekKey();
+        const weeklyInvites = parseInt(await redis.zscore(`leaderboard:invites:${weekKey}`, tg_id)) || 0;
+
         const [rows] = await db.query(`
             SELECT *,
             (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
@@ -456,13 +483,17 @@ if (cluster.isPrimary) {
             GREATEST(0, 60 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad_claim_time, UTC_TIMESTAMP()), 60)) as ad1_wait_mins,
             GREATEST(0, 10 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 10)) as ad2_wait_mins,
             (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
-            (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today
+            (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today,
+            (last_invite_claim_week = ?) as invite_claimed_this_week
             FROM users WHERE tg_id = ?
-        `, [tg_id]);
+        `, [weekKey, tg_id]);
 
         if (rows.length === 0) return null;
         let u = rows[0];
         
+        // Attach cached weekly invites
+        u.weekly_invites = weeklyInvites;
+
         await redis.hset('user_credits', tg_id, u.credits);
         
         if (!u.ad1_is_today) u.ad_claims_today = 0;
@@ -742,6 +773,20 @@ if (cluster.isPrimary) {
             }
         });
         
+        socket.on('get_leaderboard', async () => {
+            try {
+                const weekKey = getWeekKey();
+                const top5 = await redis.zrevrange(`leaderboard:invites:${weekKey}`, 0, 4, 'WITHSCORES');
+                const leaderboard = [];
+                for (let i = 0; i < top5.length; i += 2) {
+                    leaderboard.push({ tg_id: top5[i], invites: parseInt(top5[i+1]) });
+                }
+                socket.emit('leaderboard_data', leaderboard);
+            } catch (err) {
+                console.error('Leaderboard error:', err);
+            }
+        });
+
         socket.on('request_initial_drawings', async () => {
             const currentRoom = socket.data.currentRoom;
             if (currentRoom) {
@@ -813,18 +858,23 @@ if (cluster.isPrimary) {
                         }
                     }
                 } else if (type === 'invite_3') {
-                    const [u] = await db.query(`SELECT invite_count, invite_claimed FROM users WHERE tg_id = ?`, [currentUser]);
+                    const weekKey = getWeekKey();
+                    const weeklyInvites = parseInt(await redis.zscore(`leaderboard:invites:${weekKey}`, currentUser)) || 0;
+                    const [u] = await db.query(`SELECT last_invite_claim_week FROM users WHERE tg_id = ?`, [currentUser]);
+
                     if (u.length > 0) {
                         const user = u[0];
-                        if (user.invite_count >= 3 && !user.invite_claimed) {
-                            rewardAmount = 3;
-                            await db.query(`UPDATE users SET credits = credits + ?, invite_claimed = TRUE WHERE tg_id = ?`, [rewardAmount, currentUser]);
+                        const claimedThisWeek = user.last_invite_claim_week === weekKey;
+
+                        if (weeklyInvites >= 3 && !claimedThisWeek) {
+                            rewardAmount = 5;
+                            await db.query(`UPDATE users SET credits = credits + ?, last_invite_claim_week = ? WHERE tg_id = ?`, [rewardAmount, weekKey, currentUser]);
                             success = true;
-                            msg = 'Task completed! +3 Credits claimed.';
-                        } else if (user.invite_claimed) {
-                            msg = 'You have already claimed this reward.';
+                            msg = 'Weekly task completed! +5 Credits claimed.';
+                        } else if (claimedThisWeek) {
+                            msg = 'You have already claimed this weekly reward. Keep inviting to top the leaderboard!';
                         } else {
-                            msg = `Not enough invites yet. Progress: ${user.invite_count}/3`;
+                            msg = `Not enough invites yet. Progress: ${weeklyInvites}/3`;
                         }
                     }
                 }
@@ -1217,7 +1267,6 @@ if (cluster.isPrimary) {
             } catch (err) { console.error('Buy Hint Error:', err); }
         });
 
-        // Hint via Ad: NO Credit deductions and NO Rate limiting
         socket.on('buy_hint_ad', async ({ index }) => {
             try {
                 const currentUser = socket.data.currentUser;
@@ -1340,7 +1389,6 @@ if (cluster.isPrimary) {
         });
 
         socket.on('draw', ({ lines }) => queuedAction(async () => {
-            // Payload validation
             if (!Array.isArray(lines) || lines.length > 2000) {
                 return socket.emit('create_error', 'Drawing payload rejected: invalid or exceeded maximum points limit.');
             }
