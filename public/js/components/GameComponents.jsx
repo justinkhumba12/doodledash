@@ -473,13 +473,26 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     );
 };
 
-const ChatBox = ({ chats, profiles, socket, tgId }) => {
+const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
     
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chats]);
+
+    const handleUnmute = () => {
+        const botLink = `https://t.me/doodledashbot?start=unmute`;
+        if (window.tg && window.tg.openTelegramLink) {
+            try {
+                window.tg.openTelegramLink(botLink);
+            } catch (e) {
+                window.open(botLink, '_blank');
+            }
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
 
     return (
         <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -501,42 +514,54 @@ const ChatBox = ({ chats, profiles, socket, tgId }) => {
             </div>
             
             <div className="chat-input-wrapper d-flex align-items-end mt-auto gap-2" style={{padding: '10px 15px', backgroundColor: 'white', borderTop: '1px solid #e2e8f0'}}>
-                <textarea
-                    className="form-control bg-light border-0"
-                    style={{ resize: 'none', minHeight: '40px', maxHeight: '80px', borderRadius: '20px', padding: '10px 15px', overflowY: 'auto' }}
-                    rows={1}
-                    value={input}
-                    maxLength={200}
-                    placeholder="Type message..."
-                    onChange={(e) => {
-                        setInput(e.target.value);
-                        e.target.style.height = 'auto';
-                        e.target.style.height = Math.min(e.target.scrollHeight, 80) + 'px';
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            if (input.trim()) {
-                                socket.emit('chat', {message: input.trim()});
-                                setInput('');
+                {user?.status === 'mute' ? (
+                    <button 
+                        className="btn btn-danger w-100 rounded-pill fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
+                        style={{ height: '45px' }}
+                        onClick={handleUnmute}
+                    >
+                        <i className="fas fa-volume-mute"></i> Unmute in Bot
+                    </button>
+                ) : (
+                    <>
+                        <textarea
+                            className="form-control bg-light border-0"
+                            style={{ resize: 'none', minHeight: '40px', maxHeight: '80px', borderRadius: '20px', padding: '10px 15px', overflowY: 'auto' }}
+                            rows={1}
+                            value={input}
+                            maxLength={200}
+                            placeholder="Type message..."
+                            onChange={(e) => {
+                                setInput(e.target.value);
                                 e.target.style.height = 'auto';
-                            }
-                        }
-                    }}
-                />
-                <button
-                    className="btn btn-primary rounded-circle flex-shrink-0 shadow-sm"
-                    style={{width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
-                    onClick={() => {
-                        if (input.trim()) {
-                            socket.emit('chat', {message: input.trim()});
-                            setInput('');
-                            const ta = document.querySelector('.chat-input-wrapper textarea');
-                            if (ta) ta.style.height = 'auto';
-                        }
-                    }}>
-                    <i className="fas fa-paper-plane"></i>
-                </button>
+                                e.target.style.height = Math.min(e.target.scrollHeight, 80) + 'px';
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (input.trim()) {
+                                        socket.emit('chat', {message: input.trim()});
+                                        setInput('');
+                                        e.target.style.height = 'auto';
+                                    }
+                                }
+                            }}
+                        />
+                        <button
+                            className="btn btn-primary rounded-circle flex-shrink-0 shadow-sm"
+                            style={{width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
+                            onClick={() => {
+                                if (input.trim()) {
+                                    socket.emit('chat', {message: input.trim()});
+                                    setInput('');
+                                    const ta = document.querySelector('.chat-input-wrapper textarea');
+                                    if (ta) ta.style.height = 'auto';
+                                }
+                            }}>
+                            <i className="fas fa-paper-plane"></i>
+                        </button>
+                    </>
+                )}
             </div>
         </div>
     );
