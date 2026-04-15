@@ -38,7 +38,6 @@ window.triggerVibration = (style) => {
     }
 };
 
-
 // Extract hooks for App 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -463,7 +462,7 @@ const App = () => {
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} />}
-                        {mainPageTab === 'leaderboard' && <LeaderboardView />}
+                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} />}
                         {mainPageTab === 'profile' && <ProfileView user={user} />}
                         
                         <div className="bottom-nav">
@@ -474,7 +473,7 @@ const App = () => {
                                 <i className="fas fa-tasks"></i><span>Tasks</span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
-                                <i className="fas fa-bullhorn"></i><span>Notice</span>
+                                <i className="fas fa-trophy"></i><span>Leaderboard</span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'profile' ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                 <i className="fas fa-user"></i><span>Profile</span>
