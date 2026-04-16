@@ -52,7 +52,8 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
                 <ul className="small text-muted text-start mt-3 ps-3">
                     <li className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</li>
-                    <li className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! This list refreshes every 24 hours.</li>
+                    <li className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</li>
+                    <li className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! Refreshes immediately on new donations.</li>
                     <li><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</li>
                 </ul>
                 <button className="btn btn-secondary w-100 rounded-pill mt-3" onClick={close}>Got it</button>
@@ -244,10 +245,21 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'confirm_gender_change') {
         content = (
             <>
-                <p className="text-muted text-center mb-4">Are you sure you want to change your gender to <b>{modal.gender}</b>? This will cost <b>5 Credits</b>.</p>
+                <p className="text-dark text-center mb-3">
+                    Are you sure you want to set your gender to <b>{modal.gender}</b>?
+                </p>
+                {modal.isFirstTime ? (
+                    <div className="alert alert-info py-2 small mb-4">
+                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
+                    </div>
+                ) : (
+                    <div className="alert alert-warning py-2 small mb-4">
+                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
+                    </div>
+                )}
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm (5 Cred)</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm</button>
                 </div>
             </>
         );
