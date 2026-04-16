@@ -355,15 +355,19 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                 />
                 
                 {room.status === 'PRE_DRAW' && isDrawer && (
-                    <div className="wb-overlay">
-                        <h4 className="text-primary fw-bold">Your turn to draw!</h4>
-                        <h5 className="text-danger fw-bold">{preDrawTimeLeft}s</h5>
-                        <p className="text-muted small mb-0">Enter a word (3-10 characters)</p>
-                        <input type="text" maxLength={10} minLength={3} className="form-control text-center my-3 w-75 rounded-pill" placeholder="Enter a word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} />
-                        
-                        <div className="d-flex gap-2 w-75">
-                            <button className="btn btn-secondary w-50 rounded-pill shadow-sm" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-random"></i> Random</button>
-                            <button className="btn btn-primary w-50 rounded-pill shadow-sm" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}>Draw This!</button>
+                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center" style={{background: 'rgba(255,255,255,0.95)'}}>
+                        <h4 className="text-primary fw-bold mb-1">Your Turn!</h4>
+                        <h5 className="text-danger fw-bold mb-3"><i className="fas fa-stopwatch"></i> {preDrawTimeLeft}s</h5>
+                        <div className="w-75 p-3 bg-white rounded-4 shadow-sm border text-center">
+                            <label className="small fw-bold text-muted mb-2">Word to draw (3-10 chars)</label>
+                            <div className="input-group mb-3">
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center fw-bold text-dark fs-5" placeholder="Enter word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} style={{letterSpacing: '2px'}} />
+                                {wordInput && <button className="btn btn-outline-secondary" onClick={() => setWordInput('')}><i className="fas fa-times"></i></button>}
+                            </div>
+                            <div className="d-flex flex-column gap-2">
+                                <button className="btn btn-outline-primary rounded-pill shadow-sm fw-bold" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-dice me-1"></i> Random Word</button>
+                                <button className="btn btn-success rounded-pill shadow-sm fw-bold fs-5 py-2 mt-1" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}><i className="fas fa-paint-brush me-1"></i> Start Drawing!</button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -392,10 +396,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                                     <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
                                 ) : room.last_winner_id ? (
                                     <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm">
-                                        {roomData.profiles[room.last_winner_id] ? (
-                                            <img src={roomData.profiles[room.last_winner_id]} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}} alt="Winner"/>
+                                        {(room.last_winner_id === tgId && window.profilePic) ? (
+                                            <img src={window.profilePic} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}} alt="Winner"/>
                                         ) : (
-                                            <i className="fas fa-user-circle fs-1 text-secondary"></i>
+                                            <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
                                         )}
                                         <span className="fs-5"><b>{window.toHex(room.last_winner_id)}</b> guessed it!</span>
                                     </div>
@@ -441,10 +445,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             {/* Emojis Section: Modernized UI */}
             {isDrawingPhase && (
                 <div className="d-flex justify-content-center mt-3 w-100 px-3">
-                    <div className="bg-white rounded-pill shadow-sm border p-2 d-flex gap-3 justify-content-around" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+                    <div className="bg-white rounded-4 shadow-sm border p-2 d-flex flex-wrap gap-2 justify-content-center" style={{ maxWidth: '100%' }}>
                         {emojis.map(emoji => {
                             const count = Object.values(userReactions).filter(e => e === emoji).length;
                             const myReaction = userReactions[tgId] === emoji;
+                            // Only show actively reacted emojis to the drawer
+                            if (isDrawer && count === 0) return null;
+                            
                             return (
                                 <button key={emoji} 
                                     className={`btn rounded-circle d-flex align-items-center justify-content-center position-relative flex-shrink-0 ${myReaction ? 'bg-primary border-primary text-white shadow' : 'bg-light border-0'}`}
@@ -452,14 +459,14 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                                     title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
                                     disabled={isDrawer}
                                     style={{ 
-                                        width: '48px', height: '48px',
-                                        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                                        width: '38px', height: '38px',
+                                        transition: 'all 0.2s',
                                         transform: myReaction ? 'scale(1.15)' : 'scale(1)',
-                                        opacity: isDrawer && count === 0 ? 0.4 : 1,
+                                        opacity: 1
                                     }}>
-                                    <span className="fs-3 lh-1" style={{ transform: myReaction ? 'translateY(-1px)' : 'none' }}>{emoji}</span>
+                                    <span className="fs-5 lh-1" style={{ transform: myReaction ? 'translateY(-1px)' : 'none' }}>{emoji}</span>
                                     {count > 0 && (
-                                        <span className="position-absolute translate-middle badge rounded-pill bg-danger shadow-sm border border-2 border-white" style={{ top: '5px', left: '85%', fontSize: '0.75rem' }}>
+                                        <span className="position-absolute translate-middle badge rounded-pill bg-danger shadow-sm border border-2 border-white" style={{ top: '2px', left: '90%', fontSize: '0.65rem', padding: '0.2em 0.4em' }}>
                                             {count}
                                         </span>
                                     )}
@@ -473,7 +480,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     );
 };
 
-const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
+const ChatBox = ({ chats, socket, tgId, user }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
     
@@ -486,7 +493,6 @@ const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
         if (window.tg && window.tg.openTelegramLink) {
             try {
                 window.tg.openTelegramLink(botLink);
-                // Automatically close the mini-app so the user can interact directly with the bot
                 setTimeout(() => window.tg.close(), 300);
             } catch (e) {
                 window.open(botLink, '_blank');
@@ -502,7 +508,9 @@ const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
                 {chats.map(c => (
                     <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
                         {c.user_id !== 'System' && (
-                            profiles[c.user_id] ? <img src={profiles[c.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>
+                            (c.user_id === tgId && window.profilePic) ? 
+                                <img src={window.profilePic} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : 
+                                <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                         )}
                         <div className="d-flex flex-column w-100">
                             <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
@@ -569,7 +577,7 @@ const ChatBox = ({ chats, profiles, socket, tgId, user }) => {
     );
 };
 
-const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
+const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
     const [rawInput, setRawInput] = useState('');
     const isDrawer = roomData.room.current_drawer_id === tgId;
     const messagesEndRef = useRef(null);
@@ -644,7 +652,10 @@ const GuessBox = ({ guesses, profiles, tgId, roomData, socket, setModal }) => {
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                 {guesses.map(g => (
                     <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
-                        {profiles[g.user_id] ? <img src={profiles[g.user_id]} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1"></i>}
+                        {(g.user_id === tgId && window.profilePic) ? 
+                            <img src={window.profilePic} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : 
+                            <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                        }
                         <div className="d-flex flex-column w-100">
                             <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
                                 {window.toHex(g.user_id)}
@@ -776,8 +787,11 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                             return (
                                 <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
-                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id], gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
-                                            {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: m.user_id === tgId ? window.profilePic : null, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
+                                            {(m.user_id === tgId && window.profilePic) ? 
+                                                <img src={window.profilePic} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : 
+                                                <i className="fas fa-user-circle fs-2 text-secondary me-2 bg-white rounded-circle"></i>
+                                            }
                                         </div>
                                         <div className="d-flex flex-column">
                                             <span className="fw-bold">{window.toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
