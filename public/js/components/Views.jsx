@@ -23,29 +23,33 @@ const ProfileView = ({ user, socket, setModal }) => {
     return (
         <div className="container mt-4 pb-5">
             <div className="text-center mb-4">
-                <img src={window.profilePic || 'https://via.placeholder.com/120'} className="rounded-circle shadow-lg mb-3 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
+                {window.profilePic ? (
+                    <img src={window.profilePic} className="rounded-circle shadow-lg mb-3 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
+                ) : (
+                    <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '120px', color: 'var(--primary)'}}></i>
+                )}
                 <h3 className="fw-bold text-dark mb-1">{window.toHex(user.tg_id)}</h3>
                 {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
             </div>
 
             <div className="card bg-white rounded-4 border shadow-sm mb-4">
                 <div className="card-body p-3">
-                    <div className="d-flex justify-content-between align-items-center">
-                        <span className="fw-bold text-secondary"><i className="fas fa-venus-mars me-2"></i> Gender</span>
+                    <div className="d-flex flex-column gap-2">
+                        <span className="fw-bold text-secondary mb-1"><i className="fas fa-venus-mars me-2"></i> Gender Selection</span>
                         {editingGender ? (
-                            <div className="d-flex align-items-center gap-2">
-                                <select className="form-select form-select-sm rounded-pill" value={selectedGender} onChange={e => setSelectedGender(e.target.value)}>
-                                    <option value="Male">Male</option>
-                                    <option value="Female">Female</option>
-                                    <option value="Other">Other</option>
-                                </select>
-                                <button className="btn btn-success btn-sm rounded-pill px-3" onClick={handleSaveGender}><i className="fas fa-check"></i></button>
+                            <div className="d-flex flex-column align-items-center gap-2 w-100">
+                                <div className="btn-group w-100 shadow-sm" role="group">
+                                    {['Male', 'Female', 'Other'].map(g => (
+                                        <button key={g} type="button" className={`btn fw-bold btn-sm py-2 ${selectedGender === g ? 'btn-primary' : 'btn-outline-primary'}`} onClick={() => setSelectedGender(g)}>{g}</button>
+                                    ))}
+                                </div>
+                                <button className="btn btn-success w-100 rounded fw-bold py-2 shadow-sm mt-1" onClick={handleSaveGender}><i className="fas fa-check me-2"></i> Save Changes</button>
                             </div>
                         ) : (
-                            <div className="d-flex align-items-center gap-2">
-                                <span className="fw-bold">{user?.gender || 'Not Set'}</span>
-                                <button className="btn btn-light btn-sm rounded-circle shadow-sm" onClick={() => setEditingGender(true)} title={user?.gender ? "Edit (5 Credits)" : "Set Gender"}>
-                                    <i className="fas fa-edit text-primary"></i>
+                            <div className="d-flex align-items-center justify-content-between mt-1">
+                                <span className="fw-bold text-dark fs-5">{user?.gender || 'Not Set'}</span>
+                                <button className="btn btn-light btn-sm rounded-pill shadow-sm px-3 fw-bold border" onClick={() => setEditingGender(true)} title={user?.gender ? "Edit (5 Credits)" : "Set Gender"}>
+                                    <i className="fas fa-edit text-primary me-1"></i> Edit
                                 </button>
                             </div>
                         )}
@@ -204,11 +208,15 @@ const LeaderboardView = ({ socket, setModal }) => {
                                     #{index + 1}
                                 </div>
                                 <div className="flex-shrink-0 ms-1">
-                                    {l.profile_pic ? <img src={l.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
+                                    <i className="fas fa-user-circle fs-1 text-secondary"></i>
                                 </div>
                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
                                     <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
-                                    <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{l.username !== 'unset' ? `@${l.username}` : ''}</span>
+                                    {l.username && l.username !== 'unset' ? (
+                                        <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
+                                            @{l.username}
+                                        </a>
+                                    ) : null}
                                 </div>
                             </div>
                             <div className={`badge bg-light ${type === 'guessers' ? 'text-primary border-primary' : 'text-dark border-secondary'} border px-3 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
@@ -278,42 +286,53 @@ const LeaderboardView = ({ socket, setModal }) => {
                 )}
 
                 {activeTab === 'donators' && (
-                    donators.length > 0 ? (
-                        <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
-                            {donators.map((d, index) => {
-                                let rankStyle = "bg-primary";
-                                if (index === 0) rankStyle = "bg-warning text-dark";
-                                if (index === 1) rankStyle = "bg-secondary text-white";
-                                if (index === 2) rankStyle = "bg-danger text-white";
+                    <>
+                        <div className="text-center mb-3">
+                            <button className="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm w-100 border border-primary border-2" onClick={() => window.open('https://t.me/doodledashbot?start=donate', '_blank')}>
+                                <i className="fas fa-heart text-danger me-2"></i> Donate to get featured!
+                            </button>
+                        </div>
+                        {donators.length > 0 ? (
+                            <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
+                                {donators.map((d, index) => {
+                                    let rankStyle = "bg-primary";
+                                    if (index === 0) rankStyle = "bg-warning text-dark";
+                                    if (index === 1) rankStyle = "bg-secondary text-white";
+                                    if (index === 2) rankStyle = "bg-danger text-white";
 
-                                return (
-                                    <div key={d.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
-                                        <div className="d-flex align-items-center gap-2">
-                                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
-                                                #{index + 1}
+                                    return (
+                                        <div key={d.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                                            <div className="d-flex align-items-center gap-2">
+                                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                                    #{index + 1}
+                                                </div>
+                                                <div className="flex-shrink-0 ms-1">
+                                                    <i className="fas fa-user-circle fs-1 text-secondary"></i>
+                                                </div>
+                                                <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
+                                                    <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(d.tg_id)}</span>
+                                                    {d.username && d.username !== 'unset' ? (
+                                                        <a href={`https://t.me/${d.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
+                                                            @{d.username}
+                                                        </a>
+                                                    ) : null}
+                                                </div>
                                             </div>
-                                            <div className="flex-shrink-0 ms-1">
-                                                {d.profile_pic ? <img src={d.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
-                                            </div>
-                                            <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                                <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(d.tg_id)}</span>
-                                                <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{d.username !== 'unset' ? `@${d.username}` : ''}</span>
+                                            <div className="badge bg-light text-danger border border-danger px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
+                                                <i className="fas fa-star"></i> {d.total_donated}
                                             </div>
                                         </div>
-                                        <div className="badge bg-light text-danger border border-danger px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
-                                            <i className="fas fa-star"></i> {d.total_donated}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    ) : (
-                        <div className="text-center mt-5 text-muted">
-                            <i className="fas fa-heart-broken mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
-                            <h5>No donations yet.</h5>
-                            <p className="small">Be the first to support DoodleDash!</p>
-                        </div>
-                    )
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="text-center mt-5 text-muted">
+                                <i className="fas fa-heart-broken mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
+                                <h5>No donations yet.</h5>
+                                <p className="small">Be the first to support DoodleDash!</p>
+                            </div>
+                        )}
+                    </>
                 )}
                 </>
             )}
