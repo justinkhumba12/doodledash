@@ -91,9 +91,14 @@ module.exports = (app, io) => {
             }
 
             const tgId = userObj.id.toString();
+            const photoUrl = userObj.photo_url || null;
 
             if (userObj.username) {
                 await redis.hset('user_usernames', tgId, userObj.username);
+            }
+
+            if (photoUrl) {
+                await db.query(`UPDATE users SET avatar_url = ? WHERE tg_id = ?`, [photoUrl, tgId]);
             }
 
             const [rows] = await db.query(`SELECT status, DATE_FORMAT(ban_until, '%Y-%m-%d') as ban_until_str FROM users WHERE tg_id = ?`, [tgId]);
