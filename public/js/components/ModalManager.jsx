@@ -46,8 +46,19 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 }}>Accept</button>
             </div>
         );
+    } else if (modal.type === 'leaderboard_rules') {
+        content = (
+            <>
+                <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
+                <ul className="small text-muted text-start mt-3 ps-3">
+                    <li className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</li>
+                    <li className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! This list refreshes every 24 hours.</li>
+                    <li><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</li>
+                </ul>
+                <button className="btn btn-secondary w-100 rounded-pill mt-3" onClick={close}>Got it</button>
+            </>
+        );
     } else if (modal.type === 'idle_warning') {
-        // Redesigned UI content removing the duplicate question text
         content = (
             <div className="text-center py-3">
                 <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
@@ -227,6 +238,16 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
                     <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}><i className="fas fa-play-circle"></i> Watch Ad (Free)</button>
                     <button className="btn btn-secondary w-100 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_gender_change') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to change your gender to <b>{modal.gender}</b>? This will cost <b>5 Credits</b>.</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm (5 Cred)</button>
                 </div>
             </>
         );
