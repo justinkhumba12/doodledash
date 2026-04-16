@@ -19,6 +19,9 @@ const NUM_WORKERS = process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cp
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
+// Core Configuration (Dynamic Star Value)
+const CREDITS_PER_STAR = parseInt(process.env.CREDITS_PER_STAR) || 1;
+
 // Allowed Origins Control
 const corsOptions = {
     origin: "*",
@@ -78,7 +81,8 @@ if (cluster.isPrimary) {
                     last_active DATETIME,
                     status VARCHAR(20) DEFAULT 'active',
                     ban_until DATE DEFAULT NULL,
-                    mute_until DATE DEFAULT NULL
+                    mute_until DATE DEFAULT NULL,
+                    gender VARCHAR(10) DEFAULT NULL
                 )
             `);
 
@@ -92,16 +96,26 @@ if (cluster.isPrimary) {
                 )
             `);
 
+            // Donations Table
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS donations (
+                    tg_id VARCHAR(50) PRIMARY KEY,
+                    total_donated INT DEFAULT 0
+                )
+            `);
+
             const migrations = [
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN accepted_policy BOOLEAN DEFAULT FALSE",
                 "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)",
                 "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
                 "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
-                "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL"
+                "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
+                "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
+                "ALTER TABLE users DROP COLUMN username"
             ];
             for (let query of migrations) {
-                try { await db.query(query); } catch (e) { /* Ignore duplicate column errors */ }
+                try { await db.query(query); } catch (e) { /* Ignore existing columns / non-existing drops */ }
             }
             console.log('[Primary] MySQL setup complete.');
         } catch (err) {
@@ -319,10 +333,13 @@ if (cluster.isPrimary) {
             const userObj = JSON.parse(userObjStr);
             const tgId = userObj.id.toString();
 
+            if (userObj.username) {
+                await redis.hset('user_usernames', tgId, userObj.username);
+            }
+
             const [rows] = await db.query(`SELECT status, DATE_FORMAT(ban_until, '%Y-%m-%d') as ban_until_str FROM users WHERE tg_id = ?`, [tgId]);
             
             if (rows.length === 0) {
-                // Ensure the user registers via the bot first
                 return res.json({ success: false, error: 'not_registered' });
             }
             
@@ -335,7 +352,6 @@ if (cluster.isPrimary) {
                     });
                     return res.json({ success: false, error: 'banned' });
                 } else {
-                    // Ban automatically expired
                     await db.query(`UPDATE users SET status = 'active', ban_until = NULL WHERE tg_id = ?`, [tgId]);
                 }
             }
@@ -367,6 +383,14 @@ if (cluster.isPrimary) {
 
         if (!BOT_TOKEN) return;
 
+        // Cache username from telegram webhook interactions
+        if (update?.message?.from?.username) {
+            redis.hset('user_usernames', update.message.from.id.toString(), update.message.from.username);
+        }
+        if (update?.callback_query?.from?.username) {
+            redis.hset('user_usernames', update.callback_query.from.id.toString(), update.callback_query.from.username);
+        }
+
         const host = req.get('host');
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         const fallbackUrl = `${protocol}://${host}/`;
@@ -384,7 +408,7 @@ if (cluster.isPrimary) {
                 const type = payload.type || 'credits'; 
                 
                 if (type === 'credits') {
-                    const addedCredits = payload.amount;
+                    const addedCredits = payload.amount * CREDITS_PER_STAR;
                     const currentCredits = parseFloat(await redis.hget('user_credits', buyerId)) || 0;
                     await redis.hset('user_credits', buyerId, currentCredits + addedCredits);
                     
@@ -394,11 +418,45 @@ if (cluster.isPrimary) {
                     const userState = await getUserState(buyerId);
                     if (userState) io.to(`user_${buyerId}`).emit('user_update', userState);
                 } else if (type === 'unban') {
-                    await db.query(`UPDATE users SET status = 'active', ban_until = NULL WHERE tg_id = ?`, [buyerId]);
-                    sendMsg(buyerId, "✅ Your account has been successfully unbanned! You can now access the app.");
+                    const [rows] = await db.query(`SELECT status, DATE_FORMAT(ban_until, '%Y-%m-%d') as ban_until_str FROM users WHERE tg_id = ?`, [buyerId]);
+                    let alreadyActive = false;
+                    if (rows.length > 0) {
+                        const u = rows[0];
+                        if (u.status !== 'ban' || !u.ban_until_str) alreadyActive = true;
+                        else if (u.ban_until_str < new Date().toISOString().split('T')[0]) alreadyActive = true;
+                    } else { alreadyActive = true; }
+
+                    if (alreadyActive) {
+                        const refundCredits = 50 * CREDITS_PER_STAR;
+                        await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [refundCredits, buyerId]);
+                        await redis.hincrbyfloat('user_credits', buyerId, refundCredits);
+                        sendMsg(update.message.chat.id, `✅ You were already unbanned! Your payment of 50 stars has been converted to ${refundCredits} Credits.`);
+                    } else {
+                        await db.query(`UPDATE users SET status = 'active', ban_until = NULL WHERE tg_id = ?`, [buyerId]);
+                        sendMsg(buyerId, "✅ Your account has been successfully unbanned! You can now access the app.");
+                    }
                 } else if (type === 'unmute') {
-                    await db.query(`UPDATE users SET status = 'active', mute_until = NULL WHERE tg_id = ?`, [buyerId]);
-                    sendMsg(buyerId, "✅ You have been unmuted! You can now chat in rooms.");
+                    const [rows] = await db.query(`SELECT status, DATE_FORMAT(mute_until, '%Y-%m-%d') as mute_until_str FROM users WHERE tg_id = ?`, [buyerId]);
+                    let alreadyActive = false;
+                    if (rows.length > 0) {
+                        const u = rows[0];
+                        if (u.status !== 'mute' || !u.mute_until_str) alreadyActive = true;
+                        else if (u.mute_until_str < new Date().toISOString().split('T')[0]) alreadyActive = true;
+                    } else { alreadyActive = true; }
+
+                    if (alreadyActive) {
+                        const refundCredits = 25 * CREDITS_PER_STAR;
+                        await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [refundCredits, buyerId]);
+                        await redis.hincrbyfloat('user_credits', buyerId, refundCredits);
+                        sendMsg(update.message.chat.id, `✅ You were already unmuted! Your payment of 25 stars has been converted to ${refundCredits} Credits.`);
+                    } else {
+                        await db.query(`UPDATE users SET status = 'active', mute_until = NULL WHERE tg_id = ?`, [buyerId]);
+                        sendMsg(buyerId, "✅ You have been unmuted! You can now chat in rooms.");
+                    }
+                } else if (type === 'donate') {
+                    const donAmount = payload.amount;
+                    await db.query('INSERT INTO donations (tg_id, total_donated) VALUES (?, ?) ON DUPLICATE KEY UPDATE total_donated = total_donated + ?', [buyerId, donAmount, donAmount]);
+                    sendMsg(buyerId, `💖 Thank you for donating ${donAmount} Stars! Your support keeps DoodleDash alive.`);
                 }
             } catch(e) { console.error('Payment processing error:', e); }
             return;
@@ -431,13 +489,24 @@ if (cluster.isPrimary) {
                 const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
 
                 if (text === '/start load_balance') {
-                    sendMsg(chatId, "💎 Select a package to top up your credits:\n\n*Rate: 1 Credit = 1 Telegram Star*", {
+                    sendMsg(chatId, `💎 Select a package to top up your credits:\n\n*Rate: 1 Telegram Star = ${CREDITS_PER_STAR} Credit(s)*`, {
                         inline_keyboard: [
-                            [{ text: '1 Credit (1 ⭐️)', callback_data: 'buy_1' }, { text: '10 Credits (10 ⭐️)', callback_data: 'buy_10' }],
-                            [{ text: '20 Credits (20 ⭐️)', callback_data: 'buy_20' }, { text: '50 Credits (50 ⭐️)', callback_data: 'buy_50' }],
-                            [{ text: '100 Credits (100 ⭐️)', callback_data: 'buy_100' }],
-                            [{ text: '500 Credits (500 ⭐️)', callback_data: 'buy_500' }],
-                            [{ text: '1000 Credits (1000 ⭐️)', callback_data: 'buy_1000' }]
+                            [{ text: `${1 * CREDITS_PER_STAR} Credit(s) (1 ⭐️)`, callback_data: 'buy_1' }, { text: `${10 * CREDITS_PER_STAR} Credits (10 ⭐️)`, callback_data: 'buy_10' }],
+                            [{ text: `${20 * CREDITS_PER_STAR} Credits (20 ⭐️)`, callback_data: 'buy_20' }, { text: `${50 * CREDITS_PER_STAR} Credits (50 ⭐️)`, callback_data: 'buy_50' }],
+                            [{ text: `${100 * CREDITS_PER_STAR} Credits (100 ⭐️)`, callback_data: 'buy_100' }],
+                            [{ text: `${500 * CREDITS_PER_STAR} Credits (500 ⭐️)`, callback_data: 'buy_500' }],
+                            [{ text: `${1000 * CREDITS_PER_STAR} Credits (1000 ⭐️)`, callback_data: 'buy_1000' }]
+                        ]
+                    });
+                    return;
+                }
+                
+                if (text === '/start donate') {
+                    sendMsg(chatId, "💖 Support DoodleDash!\nSelect an amount to donate in Telegram Stars:", {
+                        inline_keyboard: [
+                            [{ text: 'Donate 1 ⭐️', callback_data: 'donate_1' }, { text: 'Donate 5 ⭐️', callback_data: 'donate_5' }],
+                            [{ text: 'Donate 10 ⭐️', callback_data: 'donate_10' }, { text: 'Donate 20 ⭐️', callback_data: 'donate_20' }],
+                            [{ text: 'Donate 50 ⭐️', callback_data: 'donate_50' }, { text: 'Donate 100 ⭐️', callback_data: 'donate_100' }]
                         ]
                     });
                     return;
@@ -468,6 +537,28 @@ if (cluster.isPrimary) {
             const query = update.callback_query;
             const chatId = query.message.chat.id;
             const tgId = query.from.id.toString();
+
+            if (query.data.startsWith('claim_weekly_')) {
+                const parts = query.data.split('_');
+                const week = parts[2];
+                const amount = parseInt(parts[3]);
+                
+                const lockKey = `claimed_weekly_${week}_${tgId}`;
+                const locked = await redis.set(lockKey, '1', 'EX', 86400 * 30, 'NX'); 
+                if (locked) {
+                    await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amount, tgId]);
+                    await redis.hincrbyfloat('user_credits', tgId, amount);
+                    
+                    tgApiCall('deleteMessage', { chat_id: chatId, message_id: query.message.message_id });
+                    sendMsg(chatId, `✅ You successfully claimed ${amount} credits for the weekly challenge!`);
+                    
+                    const userState = await getUserState(tgId);
+                    if (userState) io.to(`user_${tgId}`).emit('user_update', userState);
+                } else {
+                    tgApiCall('answerCallbackQuery', { callback_query_id: query.id, text: "Already claimed!", show_alert: true });
+                }
+                return;
+            }
 
             // Handle Privacy Policy Acceptance & Referrals
             if (query.data.startsWith('accept_policy_')) {
@@ -508,21 +599,34 @@ if (cluster.isPrimary) {
             }
 
             if (query.data.startsWith('buy_')) {
-                const amount = parseInt(query.data.split('_')[1]);
-                const stars = amount; 
+                const amount = parseInt(query.data.split('_')[1]); // stars
+                const credits = amount * CREDITS_PER_STAR;
                 
                 const payload = JSON.stringify({ tgId: tgId.toString(), type: 'credits', amount: amount });
                 
                 tgApiCall('sendInvoice', {
                     chat_id: chatId,
-                    title: `${amount} DoodleDash Credits`,
-                    description: `Top up your account with ${amount} credits.`,
+                    title: `${credits} DoodleDash Credits`,
+                    description: `Top up your account with ${credits} credits.`,
                     payload: payload,
                     provider_token: "", 
                     currency: "XTR",
-                    prices: [{ label: `${amount} Credits`, amount: stars }]
+                    prices: [{ label: `${credits} Credits`, amount: amount }]
                 });
                 
+                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
+            } else if (query.data.startsWith('donate_')) {
+                const amount = parseInt(query.data.split('_')[1]);
+                const payload = JSON.stringify({ tgId: tgId.toString(), type: 'donate', amount: amount });
+                tgApiCall('sendInvoice', {
+                    chat_id: chatId,
+                    title: `Donate to DoodleDash`,
+                    description: `Support DoodleDash with a donation of ${amount} Stars!`,
+                    payload: payload,
+                    provider_token: "",
+                    currency: "XTR",
+                    prices: [{ label: `Donation`, amount: amount }]
+                });
                 tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
             } else if (query.data === 'unban_action') {
                 const payload = JSON.stringify({ tgId: tgId.toString(), type: 'unban' });
@@ -808,6 +912,9 @@ if (cluster.isPrimary) {
                     if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
                     const userObj = JSON.parse(userObjStr);
                     currentUser = userObj.id.toString(); 
+                    if (userObj.username) {
+                        await redis.hset('user_usernames', currentUser, userObj.username);
+                    }
                 } else {
                     return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
                 }
@@ -860,12 +967,60 @@ if (cluster.isPrimary) {
                 const top5 = await redis.zrevrange(`leaderboard:invites:${weekKey}`, 0, 4, 'WITHSCORES');
                 const leaderboard = [];
                 for (let i = 0; i < top5.length; i += 2) {
-                    leaderboard.push({ tg_id: top5[i], invites: parseInt(top5[i+1]) });
+                    const id = top5[i];
+                    const invites = parseInt(top5[i+1]);
+                    const username = await redis.hget('user_usernames', id) || 'unset';
+                    const profile_pic = await redis.hget('user_profiles', id);
+                    leaderboard.push({ tg_id: id, invites, username, profile_pic });
                 }
                 socket.emit('leaderboard_data', leaderboard);
             } catch (err) {
                 console.error('Leaderboard error:', err);
             }
+        });
+
+        socket.on('get_donators_leaderboard', async () => {
+            try {
+                const cached = await redis.get('donators_leaderboard');
+                if (cached) {
+                    return socket.emit('donators_leaderboard_data', JSON.parse(cached));
+                }
+                
+                const [rows] = await db.query('SELECT tg_id, total_donated FROM donations ORDER BY total_donated DESC LIMIT 50');
+                const leaderboard = [];
+                for (const row of rows) {
+                    const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
+                    const profile_pic = await redis.hget('user_profiles', row.tg_id);
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, profile_pic });
+                }
+                await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); // 24 hours
+                socket.emit('donators_leaderboard_data', leaderboard);
+            } catch (err) { console.error('Donators leaderboard error:', err); }
+        });
+
+        socket.on('set_gender', async ({ gender }) => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser || !['Male', 'Female', 'Other'].includes(gender)) return;
+            try {
+                const [rows] = await db.query('SELECT gender, credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (rows.length === 0) return;
+                
+                let cost = 0;
+                if (rows[0].gender !== null) {
+                    cost = 5;
+                    if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change gender.');
+                }
+                
+                if (cost > 0) {
+                    await db.query('UPDATE users SET credits = credits - ?, gender = ? WHERE tg_id = ?', [cost, gender, currentUser]);
+                    await redis.hset('user_credits', currentUser, rows[0].credits - cost);
+                } else {
+                    await db.query('UPDATE users SET gender = ? WHERE tg_id = ?', [gender, currentUser]);
+                }
+                socket.emit('reward_success', `Gender updated to ${gender}.`);
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            } catch (err) { console.error('Set Gender Error:', err); }
         });
 
         socket.on('request_initial_drawings', async () => {
@@ -1670,7 +1825,7 @@ if (cluster.isPrimary) {
     });
 
     // ---------------------------------------------------------
-    // GAME ENGINE LOOP
+    // GAME ENGINE LOOP & WEEKLY REWARDS
     // ---------------------------------------------------------
     let isGameLoopRunning = false;
     setInterval(async () => {
@@ -1682,6 +1837,25 @@ if (cluster.isPrimary) {
 
         try {
             const now = Date.now();
+
+            // Check for weekly invite reward payout
+            const currentWeekKey = getWeekKey();
+            const storedWeekKey = await redis.get('current_week_key');
+            if (storedWeekKey && storedWeekKey !== currentWeekKey) {
+                const top5 = await redis.zrevrange(`leaderboard:invites:${storedWeekKey}`, 0, 4, 'WITHSCORES');
+                for (let i = 0; i < top5.length; i += 2) {
+                    const uId = top5[i];
+                    const invites = parseInt(top5[i+1]);
+                    if (invites > 0) {
+                        sendMsg(uId, `🏆 The weekly invite challenge ended!\nYou ranked in the top 5 with ${invites} invites.\n\nClaim your reward of ${invites} credits!`, {
+                            inline_keyboard: [[{ text: `🎁 Claim ${invites} Credits`, callback_data: `claim_weekly_${storedWeekKey}_${invites}` }]]
+                        });
+                    }
+                }
+                await redis.set('current_week_key', currentWeekKey);
+            } else if (!storedWeekKey) {
+                await redis.set('current_week_key', currentWeekKey);
+            }
 
             const disconnects = await redis.hgetall('user_disconnects');
             for (const [userId, disconnectTimeStr] of Object.entries(disconnects)) {
@@ -1842,7 +2016,8 @@ if (cluster.isPrimary) {
                     last_active DATETIME,
                     status VARCHAR(20) DEFAULT 'active',
                     ban_until DATE DEFAULT NULL,
-                    mute_until DATE DEFAULT NULL
+                    mute_until DATE DEFAULT NULL,
+                    gender VARCHAR(10) DEFAULT NULL
                 )
             `);
             
@@ -1854,6 +2029,13 @@ if (cluster.isPrimary) {
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             `);
+            
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS donations (
+                    tg_id VARCHAR(50) PRIMARY KEY,
+                    total_donated INT DEFAULT 0
+                )
+            `);
 
             const migrations = [
                 "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
@@ -1861,11 +2043,13 @@ if (cluster.isPrimary) {
                 "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)",
                 "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
                 "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
-                "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL"
+                "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
+                "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
+                "ALTER TABLE users DROP COLUMN username"
             ];
             
             for (let q of migrations) {
-                try { await db.query(q); } catch(e) { /* Ignore existing columns */ }
+                try { await db.query(q); } catch(e) { /* Ignore existing columns / drops */ }
             }
             console.log(`[Worker ${process.pid}] DB Initialization verified.`);
         } catch(e) {
