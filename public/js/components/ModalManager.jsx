@@ -50,13 +50,19 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         content = (
             <>
                 <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
-                <ul className="small text-muted text-start mt-3 ps-3">
-                    <li className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</li>
-                    <li className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</li>
-                    <li className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! Refreshes immediately on new donations.</li>
-                    <li><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</li>
-                </ul>
-                <button className="btn btn-secondary w-100 rounded-pill mt-3" onClick={close}>Got it</button>
+                <div className="small text-muted text-start mt-3 ps-1">
+                    {modal.activeTab === 'inviters' && (
+                        <p className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</p>
+                    )}
+                    {modal.activeTab === 'guessers' && (
+                        <p className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</p>
+                    )}
+                    {modal.activeTab === 'donators' && (
+                        <p className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! Refreshes immediately on new donations.</p>
+                    )}
+                    <p className="mb-0"><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</p>
+                </div>
+                <button className="btn btn-secondary w-100 rounded-pill mt-4" onClick={close}>Got it</button>
             </>
         );
     } else if (modal.type === 'idle_warning') {
