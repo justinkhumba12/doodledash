@@ -13,11 +13,12 @@ if (cluster.isPrimary) {
             console.log('[Primary] Connecting to MySQL for initial setup...');
             db = await mysql.createConnection(config.MYSQL_URL);
             
-            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages', 'calls'];
+            const tablesToDrop = ['users', 'calls'];
             for (let table of tablesToDrop) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
+            // The users table query is now fully merged with all attributes
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
@@ -33,7 +34,8 @@ if (cluster.isPrimary) {
                     status VARCHAR(20) DEFAULT 'active',
                     ban_until DATE DEFAULT NULL,
                     mute_until DATE DEFAULT NULL,
-                    gender VARCHAR(10) DEFAULT NULL
+                    gender VARCHAR(10) DEFAULT NULL,
+                    avatar_url VARCHAR(255) DEFAULT NULL
                 )
             `);
 
@@ -65,21 +67,6 @@ if (cluster.isPrimary) {
                 )
             `);
 
-            const migrations = [
-                "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
-                "ALTER TABLE users ADD COLUMN accepted_policy BOOLEAN DEFAULT FALSE",
-                "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)",
-                "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
-                "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
-                "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
-                "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
-                "ALTER TABLE users DROP COLUMN username",
-                "ALTER TABLE users DROP COLUMN tg_username",
-                "ALTER TABLE referrals CHANGE created_at updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
-            ];
-            for (let query of migrations) {
-                try { await db.query(query); } catch (e) { /* Ignore existing columns / non-existing drops */ }
-            }
             console.log('[Primary] MySQL setup complete.');
         } catch (err) {
             console.error('[Primary] MySQL Init Error:', err);
@@ -114,6 +101,5 @@ if (cluster.isPrimary) {
 
     setupPrimary();
 } else {
-    // If not the primary, bootstrap the worker process
     require('./worker');
 }
