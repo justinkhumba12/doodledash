@@ -74,7 +74,8 @@ const App = () => {
     const [unreadChat, setUnreadChat] = useState(false);
     const [unreadGuess, setUnreadGuess] = useState(false);
 
-    const [appVol, setAppVol] = useState(() => parseFloat(localStorage.getItem('appVol') ?? '1.0'));
+    // Modernized sound toggle replacing the slider
+    const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('soundEnabled') !== 'false');
 
     const tgIdRef = useRef(window.tgId);
     const audioUnlocked = useRef(false);
@@ -96,7 +97,7 @@ const App = () => {
         fetch('/api/authenticate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ initData: window.initData, profile_pic: window.profilePic })
+            body: JSON.stringify({ initData: window.initData })
         })
         .then(res => res.json())
         .then(data => {
@@ -172,13 +173,14 @@ const App = () => {
     useEffect(() => {
         ['mgsSound', 'guessSound'].forEach(id => {
             const s = document.getElementById(id);
-            if (s) s.volume = appVol;
+            if (s) s.volume = soundEnabled ? 1.0 : 0.0;
         });
-        localStorage.setItem('appVol', appVol);
-    }, [appVol]);
+        localStorage.setItem('soundEnabled', soundEnabled);
+    }, [soundEnabled]);
 
     const playAudioSafe = (id) => {
         if (!audioUnlocked.current && !soundPolicyAccepted) return;
+        if (!soundEnabled) return;
         const el = document.getElementById(id);
         if (el) {
             el.currentTime = 0;
@@ -234,7 +236,7 @@ const App = () => {
                             setTimeout(() => {
                                 el.pause();
                                 el.currentTime = 0;
-                                el.volume = appVol;
+                                el.volume = soundEnabled ? 1.0 : 0.0;
                             }, 50); 
                         }).catch(()=>{});
                     }
@@ -555,8 +557,8 @@ const App = () => {
                                         <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                     </div>
                                     
-                                    {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} profiles={roomData.profiles} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} profiles={roomData.profiles} socket={socket} tgId={window.tgId} user={user} />}
+                                    {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
+                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} />}
                                     {activeTab === 'sounds' && (
                                         <div className="panel-body">
                                             <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
@@ -565,25 +567,19 @@ const App = () => {
                                                 <div className="accordion-item border-0 mb-3 shadow-sm rounded-4 overflow-hidden">
                                                     <h2 className="accordion-header">
                                                         <button className="accordion-button fw-bold" type="button" onClick={() => setOpenAcc('volumes')} style={{backgroundColor: '#e0e7ff', color: 'var(--text-main)', boxShadow: 'none'}}>
-                                                            <i className="fas fa-volume-up text-primary me-2"></i> Master Volume
+                                                            <i className="fas fa-volume-up text-primary me-2"></i> Toggle Sound
                                                         </button>
                                                     </h2>
                                                     <div className="accordion-collapse collapse show">
-                                                        <div className="accordion-body bg-white pb-1">
-                                                            <div className="mb-3 mt-1">
-                                                                <label className="form-label fw-bold small text-muted d-flex justify-content-between mb-2">
-                                                                    <span>Notifications</span>
-                                                                    <span className="text-primary">{Math.round(appVol * 100)}%</span>
-                                                                </label>
-                                                                <input type="range" className="form-range" min="0" max="1" step="0.1" value={appVol} 
-                                                                    onTouchStart={e=>e.stopPropagation()} onTouchMove={e=>e.stopPropagation()}
-                                                                    onChange={e => {
-                                                                        const v = parseFloat(e.target.value);
-                                                                        setAppVol(v);
-                                                                    }} />
-                                                            </div>
-                                                            <div className="alert alert-light border small text-muted">
-                                                                <i className="fas fa-info-circle text-primary"></i> Master volume for alerts and chats.
+                                                        <div className="accordion-body bg-light pb-3">
+                                                            <div className="d-flex justify-content-between align-items-center mb-2 px-1">
+                                                                <div>
+                                                                    <label className="form-label fw-bold mb-0 text-dark">Notifications</label><br/>
+                                                                    <small className="text-muted" style={{fontSize:'0.75rem'}}>Sound alerts for chats and guesses</small>
+                                                                </div>
+                                                                <div className="form-check form-switch fs-4 mb-0">
+                                                                    <input className="form-check-input mt-0 cursor-pointer shadow-none" type="checkbox" checked={soundEnabled} onChange={e => setSoundEnabled(e.target.checked)} />
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -604,14 +600,18 @@ const App = () => {
                 <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
                    {!profileModal.full ? (
                        <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
-                           <img src={profileModal.pic || 'https://via.placeholder.com/100'} className="rounded-circle mb-3 shadow cursor-pointer border" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
+                           {profileModal.pic ? (
+                               <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
+                           ) : (
+                               <i className="fas fa-user-circle text-secondary mb-3" style={{fontSize: '100px'}}></i>
+                           )}
                            <h3 className="mb-1">{window.toHex(profileModal.user_id)}</h3>
                            <p className="text-muted small fw-bold mb-3">{profileModal.gender || 'Gender Not Set'}</p>
                            <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close Profile</button>
                        </div>
                    ) : (
                        <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
-                           <img src={profileModal.pic || 'https://via.placeholder.com/100'} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} alt="Profile Full"/>
+                           {profileModal.pic ? <img src={profileModal.pic} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} alt="Profile Full"/> : <i className="fas fa-user-circle text-secondary" style={{fontSize: '200px'}}></i>}
                        </div>
                    )}
                 </div>
