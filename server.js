@@ -61,7 +61,7 @@ if (cluster.isPrimary) {
             console.log('[Primary] Connecting to MySQL for initial setup...');
             db = await mysql.createConnection(MYSQL_URL);
             
-            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages'];
+            const tablesToDrop = ['rooms', 'room_members', 'drawings', 'chats', 'guesses', 'chat_messages', 'calls'];
             for (let table of tablesToDrop) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
@@ -86,13 +86,26 @@ if (cluster.isPrimary) {
                 )
             `);
 
-            // New Referrals Table for better performance tracking
+            // New Referrals Table with updated_at tracking
             await db.query(`
                 CREATE TABLE IF NOT EXISTS referrals (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     inviter_id VARCHAR(50),
                     invited_id VARCHAR(50) UNIQUE,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            `);
+
+            // Weekly Stats Table (Handles the tie-breaker cleanly based on updated_at)
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS user_weekly_stats (
+                    tg_id VARCHAR(50),
+                    week_key VARCHAR(10),
+                    invites INT DEFAULT 0,
+                    guesses INT DEFAULT 0,
+                    invites_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    guesses_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (tg_id, week_key)
                 )
             `);
 
@@ -112,7 +125,9 @@ if (cluster.isPrimary) {
                 "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
                 "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
                 "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
-                "ALTER TABLE users DROP COLUMN username"
+                "ALTER TABLE users DROP COLUMN username",
+                "ALTER TABLE users DROP COLUMN tg_username",
+                "ALTER TABLE referrals CHANGE created_at updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
             ];
             for (let query of migrations) {
                 try { await db.query(query); } catch (e) { /* Ignore existing columns / non-existing drops */ }
@@ -456,6 +471,7 @@ if (cluster.isPrimary) {
                 } else if (type === 'donate') {
                     const donAmount = payload.amount;
                     await db.query('INSERT INTO donations (tg_id, total_donated) VALUES (?, ?) ON DUPLICATE KEY UPDATE total_donated = total_donated + ?', [buyerId, donAmount, donAmount]);
+                    await redis.del('donators_leaderboard'); // Reset donators cache immediately
                     sendMsg(buyerId, `💖 Thank you for donating ${donAmount} Stars! Your support keeps DoodleDash alive.`);
                 }
             } catch(e) { console.error('Payment processing error:', e); }
@@ -574,9 +590,13 @@ if (cluster.isPrimary) {
                     if (inviterId && inviterId !== 'none' && inviterId !== tgId) {
                         const [res] = await db.query('INSERT IGNORE INTO referrals (inviter_id, invited_id) VALUES (?, ?)', [inviterId, tgId]);
                         if (res.affectedRows > 0) {
-                            // Valid new invite - Add to Cache Leaderboard
+                            // Valid new invite - Add to Database Leaderboard Stats
                             const weekKey = getWeekKey();
-                            await redis.zincrby(`leaderboard:invites:${weekKey}`, 1, inviterId);
+                            await db.query(`
+                                INSERT INTO user_weekly_stats (tg_id, week_key, invites, invites_updated_at)
+                                VALUES (?, ?, 1, UTC_TIMESTAMP())
+                                ON DUPLICATE KEY UPDATE invites = invites + 1, invites_updated_at = UTC_TIMESTAMP()
+                            `, [inviterId, weekKey]);
                             
                             sendMsg(inviterId, "🎉 A new user joined via your link! Check your Tasks to track your weekly progress and claim credits.");
                             
@@ -658,7 +678,9 @@ if (cluster.isPrimary) {
 
     async function getUserState(tg_id) {
         const weekKey = getWeekKey();
-        const weeklyInvites = parseInt(await redis.zscore(`leaderboard:invites:${weekKey}`, tg_id)) || 0;
+        
+        const [statsRows] = await db.query('SELECT invites FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?', [tg_id, weekKey]);
+        const weeklyInvites = statsRows.length > 0 ? statsRows[0].invites : 0;
 
         const [rows] = await db.query(`
             SELECT *,
@@ -676,7 +698,7 @@ if (cluster.isPrimary) {
         if (rows.length === 0) return null;
         let u = rows[0];
         
-        // Attach cached weekly invites
+        // Attach DB weekly invites
         u.weekly_invites = weeklyInvites;
 
         await redis.hset('user_credits', tg_id, u.credits);
@@ -964,16 +986,36 @@ if (cluster.isPrimary) {
         socket.on('get_leaderboard', async () => {
             try {
                 const weekKey = getWeekKey();
-                const top5 = await redis.zrevrange(`leaderboard:invites:${weekKey}`, 0, 4, 'WITHSCORES');
-                const leaderboard = [];
-                for (let i = 0; i < top5.length; i += 2) {
-                    const id = top5[i];
-                    const invites = parseInt(top5[i+1]);
-                    const username = await redis.hget('user_usernames', id) || 'unset';
-                    const profile_pic = await redis.hget('user_profiles', id);
-                    leaderboard.push({ tg_id: id, invites, username, profile_pic });
-                }
-                socket.emit('leaderboard_data', leaderboard);
+                
+                // Fetch top inviters
+                const [inviterRows] = await db.query(`
+                    SELECT tg_id, invites FROM user_weekly_stats 
+                    WHERE week_key = ? AND invites > 0 
+                    ORDER BY invites DESC, invites_updated_at ASC LIMIT 50
+                `, [weekKey]);
+                
+                // Fetch top guessers
+                const [guesserRows] = await db.query(`
+                    SELECT tg_id, guesses FROM user_weekly_stats 
+                    WHERE week_key = ? AND guesses > 0 
+                    ORDER BY guesses DESC, guesses_updated_at ASC LIMIT 50
+                `, [weekKey]);
+
+                const populateProfiles = async (rows, scoreField) => {
+                    const result = [];
+                    for (const row of rows) {
+                        const id = row.tg_id;
+                        const username = await redis.hget('user_usernames', id) || 'unset';
+                        const profile_pic = await redis.hget('user_profiles', id);
+                        result.push({ tg_id: id, [scoreField]: row[scoreField], username, profile_pic });
+                    }
+                    return result;
+                };
+
+                const inviters = await populateProfiles(inviterRows, 'invites');
+                const guessers = await populateProfiles(guesserRows, 'guesses');
+
+                socket.emit('leaderboard_data', { inviters, guessers });
             } catch (err) {
                 console.error('Leaderboard error:', err);
             }
@@ -1095,7 +1137,8 @@ if (cluster.isPrimary) {
                     }
                 } else if (type === 'invite_3') {
                     const weekKey = getWeekKey();
-                    const weeklyInvites = parseInt(await redis.zscore(`leaderboard:invites:${weekKey}`, currentUser)) || 0;
+                    const [statsRows] = await db.query('SELECT invites FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?', [currentUser, weekKey]);
+                    const weeklyInvites = statsRows.length > 0 ? statsRows[0].invites : 0;
                     const [u] = await db.query(`SELECT last_invite_claim_week FROM users WHERE tg_id = ?`, [currentUser]);
 
                     if (u.length > 0) {
@@ -1467,6 +1510,14 @@ if (cluster.isPrimary) {
                 io.to(`room_${currentRoom}`).emit('new_guess', newGuess);
 
                 if (isCorrect) {
+                    // Log the weekly guess point in DB correctly for the tiebreaker
+                    const weekKey = getWeekKey();
+                    await db.query(`
+                        INSERT INTO user_weekly_stats (tg_id, week_key, guesses, guesses_updated_at)
+                        VALUES (?, ?, 1, UTC_TIMESTAMP())
+                        ON DUPLICATE KEY UPDATE guesses = guesses + 1, guesses_updated_at = UTC_TIMESTAMP()
+                    `, [currentUser, weekKey]);
+
                     room.status = 'REVEAL';
                     room.end_reason = 'guessed';
                     room.break_end_time = new Date(Date.now() + 5000); 
@@ -1842,10 +1893,15 @@ if (cluster.isPrimary) {
             const currentWeekKey = getWeekKey();
             const storedWeekKey = await redis.get('current_week_key');
             if (storedWeekKey && storedWeekKey !== currentWeekKey) {
-                const top5 = await redis.zrevrange(`leaderboard:invites:${storedWeekKey}`, 0, 4, 'WITHSCORES');
-                for (let i = 0; i < top5.length; i += 2) {
-                    const uId = top5[i];
-                    const invites = parseInt(top5[i+1]);
+                const [top5Inviters] = await db.query(`
+                    SELECT tg_id, invites FROM user_weekly_stats 
+                    WHERE week_key = ? AND invites > 0 
+                    ORDER BY invites DESC, invites_updated_at ASC LIMIT 5
+                `, [storedWeekKey]);
+                
+                for (const u of top5Inviters) {
+                    const uId = u.tg_id;
+                    const invites = u.invites;
                     if (invites > 0) {
                         sendMsg(uId, `🏆 The weekly invite challenge ended!\nYou ranked in the top 5 with ${invites} invites.\n\nClaim your reward of ${invites} credits!`, {
                             inline_keyboard: [[{ text: `🎁 Claim ${invites} Credits`, callback_data: `claim_weekly_${storedWeekKey}_${invites}` }]]
@@ -2026,7 +2082,19 @@ if (cluster.isPrimary) {
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     inviter_id VARCHAR(50),
                     invited_id VARCHAR(50) UNIQUE,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            `);
+
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS user_weekly_stats (
+                    tg_id VARCHAR(50),
+                    week_key VARCHAR(10),
+                    invites INT DEFAULT 0,
+                    guesses INT DEFAULT 0,
+                    invites_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    guesses_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (tg_id, week_key)
                 )
             `);
             
@@ -2045,7 +2113,9 @@ if (cluster.isPrimary) {
                 "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
                 "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
                 "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
-                "ALTER TABLE users DROP COLUMN username"
+                "ALTER TABLE users DROP COLUMN username",
+                "ALTER TABLE users DROP COLUMN tg_username",
+                "ALTER TABLE referrals CHANGE created_at updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
             ];
             
             for (let q of migrations) {
