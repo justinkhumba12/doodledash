@@ -5,19 +5,16 @@ const ProfileView = ({ user, socket, setModal }) => {
     const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
 
     const handleSaveGender = () => {
-        if (user?.gender && user.gender !== selectedGender) {
-            setModal({ type: 'confirm_gender_change', gender: selectedGender, title: 'Change Gender' });
-        } else if (!user?.gender) {
-            socket.emit('set_gender', { gender: selectedGender });
-        }
+        setModal({ type: 'confirm_gender_change', gender: selectedGender, isFirstTime: !user?.gender });
         setEditingGender(false);
     };
 
     const handleDonateClick = () => {
         const botLink = `https://t.me/doodledashbot?start=donate`;
         if (window.tg && window.tg.openTelegramLink) {
-            try { window.tg.openTelegramLink(botLink); setTimeout(() => window.tg.close(), 300); }
+            try { window.tg.openTelegramLink(botLink); }
             catch (e) { window.open(botLink, '_blank'); }
+            setTimeout(() => window.tg.close(), 300);
         } else {
             window.open(botLink, '_blank');
         }
@@ -69,7 +66,7 @@ const ProfileView = ({ user, socket, setModal }) => {
 };
 
 const TasksView = ({ user, socket }) => {
-    // Dynamic invite counts fetched from Redis cache (weekly)
+    // Dynamic invite counts fetched from database
     const inviteCount = user?.weekly_invites || 0;
     const goal = 3;
     const isCompleted = inviteCount >= goal;
@@ -156,26 +153,31 @@ const TasksView = ({ user, socket }) => {
 const LeaderboardView = ({ socket, setModal }) => {
     const [activeTab, setActiveTab] = useState('inviters');
     const [inviters, setInviters] = useState([]);
+    const [guessers, setGuessers] = useState([]);
     const [donators, setDonators] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         if (socket) {
             setLoading(true);
-            if (activeTab === 'inviters') {
+            if (activeTab === 'inviters' || activeTab === 'guessers') {
                 socket.emit('get_leaderboard');
             } else {
                 socket.emit('get_donators_leaderboard');
             }
             
-            const handleInv = (data) => { setInviters(data); setLoading(false); };
+            const handleLeaderboard = (data) => { 
+                setInviters(data.inviters); 
+                setGuessers(data.guessers);
+                setLoading(false); 
+            };
             const handleDon = (data) => { setDonators(data); setLoading(false); };
             
-            socket.on('leaderboard_data', handleInv);
+            socket.on('leaderboard_data', handleLeaderboard);
             socket.on('donators_leaderboard_data', handleDon);
             
             return () => {
-                socket.off('leaderboard_data', handleInv);
+                socket.off('leaderboard_data', handleLeaderboard);
                 socket.off('donators_leaderboard_data', handleDon);
             }
         }
@@ -192,12 +194,15 @@ const LeaderboardView = ({ socket, setModal }) => {
                 <p className="small text-muted">See the top players and supporters!</p>
             </div>
 
-            <div className="lobby-tabs-wrapper mb-4">
+            <div className="lobby-tabs-wrapper mb-4 overflow-auto" style={{whiteSpace: 'nowrap'}}>
                 <div className={`lobby-tab ${activeTab === 'inviters' ? 'active' : ''}`} onClick={() => setActiveTab('inviters')}>
-                    <i className="fas fa-user-plus me-2"></i>Top Inviters
+                    <i className="fas fa-user-plus me-2"></i>Inviters
+                </div>
+                <div className={`lobby-tab ${activeTab === 'guessers' ? 'active' : ''}`} onClick={() => setActiveTab('guessers')}>
+                    <i className="fas fa-lightbulb me-2"></i>Guessers
                 </div>
                 <div className={`lobby-tab ${activeTab === 'donators' ? 'active' : ''}`} onClick={() => setActiveTab('donators')}>
-                    <i className="fas fa-heart me-2"></i>Top Donators
+                    <i className="fas fa-heart me-2"></i>Donators
                 </div>
             </div>
 
@@ -207,10 +212,11 @@ const LeaderboardView = ({ socket, setModal }) => {
                     <p className="text-muted mt-2">Loading...</p>
                 </div>
             ) : (
-                activeTab === 'inviters' ? (
-                    inviters.length > 0 ? (
+                <>
+                {(activeTab === 'inviters' || activeTab === 'guessers') && (
+                    (activeTab === 'inviters' ? inviters : guessers).length > 0 ? (
                         <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
-                            {inviters.map((l, index) => {
+                            {(activeTab === 'inviters' ? inviters : guessers).map((l, index) => {
                                 let rankStyle = "bg-primary";
                                 if (index === 0) rankStyle = "bg-warning text-dark";
                                 if (index === 1) rankStyle = "bg-secondary text-white";
@@ -230,8 +236,8 @@ const LeaderboardView = ({ socket, setModal }) => {
                                                 <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{l.username !== 'unset' ? `@${l.username}` : ''}</span>
                                             </div>
                                         </div>
-                                        <div className="badge bg-light text-dark border border-secondary px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
-                                            {l.invites}
+                                        <div className={`badge bg-light ${activeTab === 'guessers' ? 'text-primary border-primary' : 'text-dark border-secondary'} border px-3 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
+                                            {activeTab === 'guessers' ? <i className="fas fa-star text-warning"></i> : null} {l.score}
                                         </div>
                                     </div>
                                 );
@@ -239,11 +245,13 @@ const LeaderboardView = ({ socket, setModal }) => {
                         </div>
                     ) : (
                         <div className="text-center mt-5 text-muted">
-                            <i className="fas fa-users-slash mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
-                            <h5>No invites yet this week!</h5>
+                            <i className={`fas ${activeTab === 'inviters' ? 'fa-users-slash' : 'fa-brain'} mb-3 text-secondary opacity-50`} style={{ fontSize: '3rem' }}></i>
+                            <h5>No data yet this week!</h5>
                         </div>
                     )
-                ) : (
+                )}
+
+                {activeTab === 'donators' && (
                     donators.length > 0 ? (
                         <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
                             {donators.map((d, index) => {
@@ -280,7 +288,8 @@ const LeaderboardView = ({ socket, setModal }) => {
                             <p className="small">Be the first to support DoodleDash!</p>
                         </div>
                     )
-                )
+                )}
+                </>
             )}
         </div>
     );
@@ -293,6 +302,8 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     const [hideFull, setHideFull] = useState(false);
     
     const [touchStartPos, setTouchStartPos] = useState(null);
+
+    const hasGender = !!user?.gender;
 
     useEffect(() => {
         if (typeof window.show_10812134 === 'function' && user?.tg_id) {
@@ -437,7 +448,7 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
             <div className="d-flex justify-content-between align-items-center mb-3">
                 <h3 className="fw-bold m-0">Game Lobbies</h3>
                 {!isRoomLimitReached ? (
-                    <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}>
+                    <button className="btn btn-primary shadow-sm rounded-pill px-4" disabled={!hasGender} onClick={() => { if(hasGender) setModal({ type: 'create_room', title: 'Create Room' }) }}>
                         <i className="fas fa-plus"></i> Create
                     </button>
                 ) : (
@@ -467,9 +478,17 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
                 <div className="small text-muted fw-bold">{filteredRooms.length} Rooms</div>
             </div>
 
-            <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="swipe-container" style={{ minHeight: '300px' }}>
+            <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="position-relative swipe-container" style={{ minHeight: '300px' }}>
+                {!hasGender && (
+                    <div className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center pt-5" style={{zIndex: 10, background: 'rgba(248, 250, 252, 0.85)', backdropFilter: 'blur(3px)', borderRadius: '16px', border: '1px solid #e2e8f0'}}>
+                        <i className="fas fa-lock text-danger mb-3" style={{fontSize: '3rem'}}></i>
+                        <h5 className="fw-bold text-dark">Profile Locked</h5>
+                        <p className="text-muted small text-center px-4">Please set your gender in your Profile tab to enter game rooms.</p>
+                    </div>
+                )}
+
                 <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
-                    <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} />
+                    <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} disabled={!hasGender} />
                 </div>
 
                 <div className="row g-3">
@@ -500,7 +519,7 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
                                             <i className="fas fa-users text-secondary"></i> {r.member_count} / {r.max_members}
                                         </div>
                                         <button className={`btn btn-sm ${isFull ? 'btn-light text-muted' : (isFree ? 'btn-success' : 'btn-primary')} rounded-pill px-4 fw-bold shadow-sm`} 
-                                            disabled={isFull}
+                                            disabled={isFull || !hasGender}
                                             onClick={() => {
                                                 if (r.is_private && activeTab !== 'my_rooms') {
                                                     setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
