@@ -43,7 +43,14 @@ const ProfileView = ({ user, socket, setModal }) => {
                                         <button key={g} type="button" className={`btn fw-bold btn-sm py-2 ${selectedGender === g ? 'btn-primary' : 'btn-outline-primary'}`} onClick={() => setSelectedGender(g)}>{g}</button>
                                     ))}
                                 </div>
-                                <button className="btn btn-success w-100 rounded fw-bold py-2 shadow-sm mt-1" onClick={handleSaveGender}><i className="fas fa-check me-2"></i> Save Changes</button>
+                                <div className="d-flex gap-2 w-100 mt-2">
+                                    <button className="btn btn-outline-danger flex-shrink-0 rounded shadow-sm py-2 px-3" onClick={() => setEditingGender(false)} title="Cancel">
+                                        <i className="fas fa-times"></i>
+                                    </button>
+                                    <button className="btn btn-success flex-grow-1 rounded fw-bold py-2 shadow-sm" onClick={handleSaveGender}>
+                                        <i className="fas fa-check me-2"></i> Save Changes
+                                    </button>
+                                </div>
                             </div>
                         ) : (
                             <div className="d-flex align-items-center justify-content-between mt-1">
@@ -204,12 +211,18 @@ const LeaderboardView = ({ socket, setModal }) => {
                     return (
                         <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
                             <div className="d-flex align-items-center gap-2">
-                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem', zIndex: 1}}>
                                     #{index + 1}
                                 </div>
-                                <div className="flex-shrink-0 ms-1">
-                                    <i className="fas fa-user-circle fs-1 text-secondary"></i>
-                                </div>
+                                {l.avatar_url ? (
+                                    <div className="flex-shrink-0 ms-2">
+                                        <img src={l.avatar_url} className="rounded-circle shadow-sm border" width="40" height="40" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/>
+                                    </div>
+                                ) : (
+                                    <div className="flex-shrink-0 ms-2">
+                                        <i className="fas fa-user-circle fs-1 text-secondary" style={{fontSize: '40px'}}></i>
+                                    </div>
+                                )}
                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
                                     <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
                                     {l.username && l.username !== 'unset' ? (
@@ -303,12 +316,18 @@ const LeaderboardView = ({ socket, setModal }) => {
                                     return (
                                         <div key={d.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
                                             <div className="d-flex align-items-center gap-2">
-                                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem', zIndex: 1}}>
                                                     #{index + 1}
                                                 </div>
-                                                <div className="flex-shrink-0 ms-1">
-                                                    <i className="fas fa-user-circle fs-1 text-secondary"></i>
-                                                </div>
+                                                {d.avatar_url ? (
+                                                    <div className="flex-shrink-0 ms-2">
+                                                        <img src={d.avatar_url} className="rounded-circle shadow-sm border" width="40" height="40" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex-shrink-0 ms-2">
+                                                        <i className="fas fa-user-circle fs-1 text-secondary" style={{fontSize: '40px'}}></i>
+                                                    </div>
+                                                )}
                                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
                                                     <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(d.tg_id)}</span>
                                                     {d.username && d.username !== 'unset' ? (
