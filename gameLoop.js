@@ -15,7 +15,6 @@ module.exports = (io) => {
         try {
             const now = Date.now();
 
-            // Check for weekly invite reward payout & data deletion
             const currentWeekKey = getWeekKey();
             const storedWeekKey = await redis.get('current_week_key');
             if (storedWeekKey && storedWeekKey !== currentWeekKey) {
@@ -31,11 +30,9 @@ module.exports = (io) => {
                     ORDER BY guesses DESC, guesses_updated_at ASC LIMIT 5
                 `, [storedWeekKey]);
                 
-                // Cache previous week's winners for leaderboard UI display
-                await redis.set('previous_week_top_inviters', JSON.stringify(top5Inviters), 'EX', 7 * 86400); // Expiry 1 week
+                await redis.set('previous_week_top_inviters', JSON.stringify(top5Inviters), 'EX', 7 * 86400); 
                 await redis.set('previous_week_top_guessers', JSON.stringify(top5Guessers), 'EX', 7 * 86400);
 
-                // Auto-delete the expired week's data from the database
                 await db.query(`DELETE FROM user_weekly_stats WHERE week_key != ?`, [currentWeekKey]);
 
                 for (const u of top5Inviters) {
