@@ -173,6 +173,9 @@ if (cluster.isPrimary) {
     const app = express();
     const server = http.createServer(app);
     
+    // CRITICAL FIX: Trust proxies (like Railway, Heroku, Cloudflare, etc.)
+    // Without this, rate limiters will block everyone thinking they are on the same IP.
+    app.set('trust proxy', 1); 
     app.disable('x-powered-by');
 
     const redis = new Redis(REDIS_URL);
@@ -190,7 +193,8 @@ if (cluster.isPrimary) {
         uri: MYSQL_URL, 
         timezone: 'Z', 
         waitForConnections: true, 
-        connectionLimit: 5 
+        connectionLimit: 5,
+        connectTimeout: 10000 // Prevent infinite hanging if DB connects slowly
     });
 
     app.use(helmet({
@@ -237,7 +241,7 @@ if (cluster.isPrimary) {
     app.get('/sw.js', (req, res) => {
         res.setHeader('Content-Type', 'application/javascript');
         res.send(`
-            const CACHE_NAME = 'doodledash-cache-v4';
+            const CACHE_NAME = 'doodledash-cache-v5'; // Bumped version to ensure clean reload
             const urlsToCache = [
                 '/audio/mgs_notification.mp3',
                 '/audio/guess_notification.mp3',
@@ -345,7 +349,13 @@ if (cluster.isPrimary) {
             
             if (!userObjStr) return res.status(400).json({ error: 'No user data in payload.' });
             
-            const userObj = JSON.parse(userObjStr);
+            let userObj;
+            try {
+                userObj = JSON.parse(userObjStr);
+            } catch (e) {
+                return res.status(400).json({ error: 'Malformed user data format.' });
+            }
+
             const tgId = userObj.id.toString();
 
             if (userObj.username) {
