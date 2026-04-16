@@ -95,14 +95,22 @@ async function syncRoom(roomId, io) {
 
     const userIds = new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)]);
     const genders = {};
+    const photos = {};
     
     if (userIds.size > 0) {
         const idsArr = Array.from(userIds);
         try {
             const [genRows] = await db.query(`SELECT tg_id, gender FROM users WHERE tg_id IN (?)`, [idsArr]);
             genRows.forEach(r => genders[r.tg_id] = r.gender);
+
+            const fetchedPhotos = await redis.hmget('user_photos', ...idsArr);
+            idsArr.forEach((id, index) => {
+                if (fetchedPhotos[index]) {
+                    photos[id] = fetchedPhotos[index];
+                }
+            });
         } catch (e) {
-            console.error('Gender fetch error in syncRoom:', e);
+            console.error('Data fetch error in syncRoom:', e);
         }
     }
 
@@ -149,6 +157,7 @@ async function syncRoom(roomId, io) {
                 chats, 
                 guesses: sanitizedGuesses,
                 genders,
+                photos,
                 masked_word: masked_word,
                 server_time: new Date().toISOString()
             });
