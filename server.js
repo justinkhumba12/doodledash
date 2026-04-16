@@ -778,10 +778,19 @@ if (cluster.isPrimary) {
 
         const userIds = new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)]);
         const profiles = {};
+        const genders = {};
+        
         if (userIds.size > 0) {
             const idsArr = Array.from(userIds);
             const results = await redis.hmget('user_profiles', ...idsArr);
             idsArr.forEach((id, i) => profiles[id] = results[i] || null);
+            
+            try {
+                const [genRows] = await db.query(`SELECT tg_id, gender FROM users WHERE tg_id IN (?)`, [idsArr]);
+                genRows.forEach(r => genders[r.tg_id] = r.gender);
+            } catch (e) {
+                console.error('Gender fetch error in syncRoom:', e);
+            }
         }
 
         const roomSockets = await io.in(`room_${roomId}`).fetchSockets();
@@ -827,6 +836,7 @@ if (cluster.isPrimary) {
                     chats, 
                     guesses: sanitizedGuesses,
                     profiles,
+                    genders,
                     masked_word: masked_word,
                     server_time: new Date().toISOString()
                 });
@@ -1007,15 +1017,24 @@ if (cluster.isPrimary) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
                         const profile_pic = await redis.hget('user_profiles', id);
-                        result.push({ tg_id: id, [scoreField]: row[scoreField], username, profile_pic });
+                        result.push({ tg_id: id, score: row[scoreField], username, profile_pic });
                     }
                     return result;
                 };
 
                 const inviters = await populateProfiles(inviterRows, 'invites');
                 const guessers = await populateProfiles(guesserRows, 'guesses');
+                
+                // Fetch previous week's top 5 cached data
+                const prevInvitersRaw = await redis.get('previous_week_top_inviters');
+                const prevGuessersRaw = await redis.get('previous_week_top_guessers');
+                const prevInvitersData = prevInvitersRaw ? JSON.parse(prevInvitersRaw) : [];
+                const prevGuessersData = prevGuessersRaw ? JSON.parse(prevGuessersRaw) : [];
 
-                socket.emit('leaderboard_data', { inviters, guessers });
+                const prevInviters = await populateProfiles(prevInvitersData, 'invites');
+                const prevGuessers = await populateProfiles(prevGuessersData, 'guesses');
+
+                socket.emit('leaderboard_data', { inviters, guessers, prevInviters, prevGuessers });
             } catch (err) {
                 console.error('Leaderboard error:', err);
             }
@@ -1889,7 +1908,7 @@ if (cluster.isPrimary) {
         try {
             const now = Date.now();
 
-            // Check for weekly invite reward payout
+            // Check for weekly invite reward payout & data deletion
             const currentWeekKey = getWeekKey();
             const storedWeekKey = await redis.get('current_week_key');
             if (storedWeekKey && storedWeekKey !== currentWeekKey) {
@@ -1899,6 +1918,19 @@ if (cluster.isPrimary) {
                     ORDER BY invites DESC, invites_updated_at ASC LIMIT 5
                 `, [storedWeekKey]);
                 
+                const [top5Guessers] = await db.query(`
+                    SELECT tg_id, guesses FROM user_weekly_stats 
+                    WHERE week_key = ? AND guesses > 0 
+                    ORDER BY guesses DESC, guesses_updated_at ASC LIMIT 5
+                `, [storedWeekKey]);
+                
+                // Cache previous week's winners for leaderboard UI display
+                await redis.set('previous_week_top_inviters', JSON.stringify(top5Inviters), 'EX', 7 * 86400); // Expiry 1 week
+                await redis.set('previous_week_top_guessers', JSON.stringify(top5Guessers), 'EX', 7 * 86400);
+
+                // Auto-delete the expired week's data from the database
+                await db.query(`DELETE FROM user_weekly_stats WHERE week_key != ?`, [currentWeekKey]);
+
                 for (const u of top5Inviters) {
                     const uId = u.tg_id;
                     const invites = u.invites;
