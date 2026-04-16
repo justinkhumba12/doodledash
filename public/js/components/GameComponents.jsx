@@ -776,7 +776,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                             return (
                                 <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
-                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id]})} className="cursor-pointer">
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: roomData.profiles[m.user_id], gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
                                             {roomData.profiles[m.user_id] ? <img src={roomData.profiles[m.user_id]} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary me-2"></i>}
                                         </div>
                                         <div className="d-flex flex-column">
