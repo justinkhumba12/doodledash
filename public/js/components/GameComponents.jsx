@@ -396,8 +396,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                                     <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
                                 ) : room.last_winner_id ? (
                                     <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm">
-                                        {(room.last_winner_id === tgId && window.profilePic) ? (
-                                            <img src={window.profilePic} className="rounded-circle shadow" width="60" height="60" style={{objectFit: 'cover'}} alt="Winner"/>
+                                        {(roomData?.photos?.[room.last_winner_id]) ? (
+                                            <img src={roomData.photos[room.last_winner_id]} className="rounded-circle shadow border" width="60" height="60" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Winner"/>
                                         ) : (
                                             <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
                                         )}
@@ -480,7 +480,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     );
 };
 
-const ChatBox = ({ chats, socket, tgId, user }) => {
+const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
     
@@ -505,21 +505,24 @@ const ChatBox = ({ chats, socket, tgId, user }) => {
     return (
         <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
-                {chats.map(c => (
-                    <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
-                        {c.user_id !== 'System' && (
-                            (c.user_id === tgId && window.profilePic) ? 
-                                <img src={window.profilePic} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : 
-                                <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
-                        )}
-                        <div className="d-flex flex-column w-100">
-                            <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                {c.user_id === 'System' ? 'System' : window.toHex(c.user_id)}
-                            </small>
-                            <span style={{marginTop: '2px'}}>{c.message}</span>
+                {chats.map(c => {
+                    const photo = roomData?.photos?.[c.user_id];
+                    return (
+                        <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                            {c.user_id !== 'System' && (
+                                photo ? 
+                                    <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                    <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            )}
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {c.user_id === 'System' ? 'System' : window.toHex(c.user_id)}
+                                </small>
+                                <span style={{marginTop: '2px'}}>{c.message}</span>
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
                 <div ref={messagesEndRef} />
             </div>
             
@@ -650,20 +653,23 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
     return (
         <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
-                {guesses.map(g => (
-                    <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
-                        {(g.user_id === tgId && window.profilePic) ? 
-                            <img src={window.profilePic} className="rounded-circle flex-shrink-0" width="28" height="28" style={{objectFit: 'cover'}} alt="User"/> : 
-                            <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
-                        }
-                        <div className="d-flex flex-column w-100">
-                            <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                {window.toHex(g.user_id)}
-                            </small>
-                            <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                {guesses.map(g => {
+                    const photo = roomData?.photos?.[g.user_id];
+                    return (
+                        <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                            {photo ? 
+                                <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            }
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {window.toHex(g.user_id)}
+                                </small>
+                                <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
                 <div ref={messagesEndRef} />
             </div>
             
@@ -784,12 +790,13 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                     <div className="mt-4 w-100">
                         <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
                         {sortedMembers.map(m => {
+                            const photo = roomData?.photos?.[m.user_id];
                             return (
                                 <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
-                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: m.user_id === tgId ? window.profilePic : null, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
-                                            {(m.user_id === tgId && window.profilePic) ? 
-                                                <img src={window.profilePic} className="rounded-circle me-2" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : 
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: photo, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
+                                            {photo ? 
+                                                <img src={photo} className="rounded-circle me-2 border" width="35" height="35" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Player"/> : 
                                                 <i className="fas fa-user-circle fs-2 text-secondary me-2 bg-white rounded-circle"></i>
                                             }
                                         </div>
