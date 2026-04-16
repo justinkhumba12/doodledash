@@ -8,6 +8,7 @@ async function getRoom(roomId) {
     if (room.expire_at) room.expire_at = new Date(room.expire_at);
     if (room.break_end_time) room.break_end_time = new Date(room.break_end_time);
     if (room.round_end_time) room.round_end_time = new Date(room.round_end_time);
+    if (!room.banned_members) room.banned_members = [];
     return room;
 }
 
@@ -93,14 +94,10 @@ async function syncRoom(roomId, io) {
     const guesses = rawGuesses.map(g => JSON.parse(g));
 
     const userIds = new Set([...members.map(m => m.user_id), ...chats.map(c => c.user_id), ...guesses.map(g => g.user_id)]);
-    const profiles = {};
     const genders = {};
     
     if (userIds.size > 0) {
         const idsArr = Array.from(userIds);
-        const results = await redis.hmget('user_profiles', ...idsArr);
-        idsArr.forEach((id, i) => profiles[id] = results[i] || null);
-        
         try {
             const [genRows] = await db.query(`SELECT tg_id, gender FROM users WHERE tg_id IN (?)`, [idsArr]);
             genRows.forEach(r => genders[r.tg_id] = r.gender);
@@ -151,7 +148,6 @@ async function syncRoom(roomId, io) {
                 members,
                 chats, 
                 guesses: sanitizedGuesses,
-                profiles,
                 genders,
                 masked_word: masked_word,
                 server_time: new Date().toISOString()
