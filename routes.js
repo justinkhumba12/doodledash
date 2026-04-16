@@ -68,7 +68,7 @@ module.exports = (app, io) => {
     });
 
     app.post('/api/authenticate', authLimiter, async (req, res) => {
-        const { initData, profile_pic } = req.body;
+        const { initData } = req.body;
         if (!initData) return res.status(400).json({ error: 'Missing initData' });
 
         const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
@@ -116,10 +116,6 @@ module.exports = (app, io) => {
             }
 
             await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tgId]);
-            
-            if (profile_pic) {
-                await redis.hset('user_profiles', tgId, profile_pic);
-            }
 
             res.json({ success: true, userId: tgId });
         } catch (err) {
