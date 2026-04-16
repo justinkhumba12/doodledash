@@ -154,6 +154,8 @@ const LeaderboardView = ({ socket, setModal }) => {
     const [activeTab, setActiveTab] = useState('inviters');
     const [inviters, setInviters] = useState([]);
     const [guessers, setGuessers] = useState([]);
+    const [prevInviters, setPrevInviters] = useState([]);
+    const [prevGuessers, setPrevGuessers] = useState([]);
     const [donators, setDonators] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -167,8 +169,10 @@ const LeaderboardView = ({ socket, setModal }) => {
             }
             
             const handleLeaderboard = (data) => { 
-                setInviters(data.inviters); 
-                setGuessers(data.guessers);
+                setInviters(data.inviters || []); 
+                setGuessers(data.guessers || []);
+                setPrevInviters(data.prevInviters || []);
+                setPrevGuessers(data.prevGuessers || []);
                 setLoading(false); 
             };
             const handleDon = (data) => { setDonators(data); setLoading(false); };
@@ -183,18 +187,49 @@ const LeaderboardView = ({ socket, setModal }) => {
         }
     }, [socket, activeTab]);
 
+    const renderList = (dataList, type, isPrevious = false) => {
+        if (dataList.length === 0) return null;
+        return (
+            <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white ${isPrevious ? 'opacity-75' : ''}`}>
+                {dataList.map((l, index) => {
+                    let rankStyle = "bg-primary";
+                    if (index === 0) rankStyle = "bg-warning text-dark";
+                    if (index === 1) rankStyle = "bg-secondary text-white";
+                    if (index === 2) rankStyle = "bg-danger text-white";
+
+                    return (
+                        <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                            <div className="d-flex align-items-center gap-2">
+                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                    #{index + 1}
+                                </div>
+                                <div className="flex-shrink-0 ms-1">
+                                    {l.profile_pic ? <img src={l.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
+                                </div>
+                                <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
+                                    <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
+                                    <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{l.username !== 'unset' ? `@${l.username}` : ''}</span>
+                                </div>
+                            </div>
+                            <div className={`badge bg-light ${type === 'guessers' ? 'text-primary border-primary' : 'text-dark border-secondary'} border px-3 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
+                                {type === 'guessers' ? <i className="fas fa-star text-warning"></i> : null} {l.score}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
     return (
         <div className="container mt-4 pb-5">
-            <div className="text-center mb-4 position-relative">
-                <button className="btn btn-link text-muted position-absolute end-0 top-0 fs-4 p-0 shadow-none hover-up" onClick={() => setModal({type: 'leaderboard_rules'})}>
-                    <i className="fas fa-info-circle"></i>
-                </button>
+            <div className="text-center mb-4">
                 <i className="fas fa-trophy text-warning mb-2" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}></i>
                 <h3 className="fw-bold m-0">Leaderboard</h3>
                 <p className="small text-muted">See the top players and supporters!</p>
             </div>
 
-            <div className="lobby-tabs-wrapper mb-4 overflow-auto" style={{whiteSpace: 'nowrap'}}>
+            <div className="lobby-tabs-wrapper mb-2 overflow-auto" style={{whiteSpace: 'nowrap'}}>
                 <div className={`lobby-tab ${activeTab === 'inviters' ? 'active' : ''}`} onClick={() => setActiveTab('inviters')}>
                     <i className="fas fa-user-plus me-2"></i>Inviters
                 </div>
@@ -206,6 +241,15 @@ const LeaderboardView = ({ socket, setModal }) => {
                 </div>
             </div>
 
+            <div className="alert alert-light border shadow-sm py-2 px-3 mb-4 d-flex justify-content-between align-items-center rounded-3">
+                <span className="small text-muted fw-bold">
+                    {activeTab === 'inviters' ? 'Current Week: Top Inviters' : (activeTab === 'guessers' ? 'Current Week: Top Guessers' : 'All-Time: Top Donators')}
+                </span>
+                <button className="btn btn-sm btn-link p-0 text-primary shadow-none" onClick={() => setModal({type: 'leaderboard_rules', activeTab})}>
+                    <i className="fas fa-info-circle fs-5"></i>
+                </button>
+            </div>
+
             {loading ? (
                 <div className="text-center mt-5">
                     <i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i>
@@ -214,41 +258,23 @@ const LeaderboardView = ({ socket, setModal }) => {
             ) : (
                 <>
                 {(activeTab === 'inviters' || activeTab === 'guessers') && (
-                    (activeTab === 'inviters' ? inviters : guessers).length > 0 ? (
-                        <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
-                            {(activeTab === 'inviters' ? inviters : guessers).map((l, index) => {
-                                let rankStyle = "bg-primary";
-                                if (index === 0) rankStyle = "bg-warning text-dark";
-                                if (index === 1) rankStyle = "bg-secondary text-white";
-                                if (index === 2) rankStyle = "bg-danger text-white";
-
-                                return (
-                                    <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
-                                        <div className="d-flex align-items-center gap-2">
-                                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
-                                                #{index + 1}
-                                            </div>
-                                            <div className="flex-shrink-0 ms-1">
-                                                {l.profile_pic ? <img src={l.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
-                                            </div>
-                                            <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                                <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
-                                                <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{l.username !== 'unset' ? `@${l.username}` : ''}</span>
-                                            </div>
-                                        </div>
-                                        <div className={`badge bg-light ${activeTab === 'guessers' ? 'text-primary border-primary' : 'text-dark border-secondary'} border px-3 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
-                                            {activeTab === 'guessers' ? <i className="fas fa-star text-warning"></i> : null} {l.score}
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    ) : (
-                        <div className="text-center mt-5 text-muted">
-                            <i className={`fas ${activeTab === 'inviters' ? 'fa-users-slash' : 'fa-brain'} mb-3 text-secondary opacity-50`} style={{ fontSize: '3rem' }}></i>
-                            <h5>No data yet this week!</h5>
-                        </div>
-                    )
+                    <>
+                        {(activeTab === 'inviters' ? inviters : guessers).length > 0 ? (
+                            renderList(activeTab === 'inviters' ? inviters : guessers, activeTab, false)
+                        ) : (
+                            <div className="text-center mt-5 text-muted">
+                                <i className={`fas ${activeTab === 'inviters' ? 'fa-users-slash' : 'fa-brain'} mb-3 text-secondary opacity-50`} style={{ fontSize: '3rem' }}></i>
+                                <h5>No data yet this week!</h5>
+                            </div>
+                        )}
+                        
+                        {(activeTab === 'inviters' ? prevInviters : prevGuessers).length > 0 && (
+                            <div className="mt-4">
+                                <h6 className="fw-bold text-secondary mb-3"><i className="fas fa-history me-2"></i>Last Week's Top 5</h6>
+                                {renderList(activeTab === 'inviters' ? prevInviters : prevGuessers, activeTab, true)}
+                            </div>
+                        )}
+                    </>
                 )}
 
                 {activeTab === 'donators' && (
