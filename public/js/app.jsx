@@ -259,7 +259,7 @@ const App = () => {
             setLoadingState('Connecting to server...');
             setIsDisconnected(false);
             setIsReloading(false);
-            newSocket.emit('auth', { initData: window.initData });
+            newSocket.emit('auth', { initData: window.initData, photoUrl: window.profilePic });
             
             if (lastKnownRoomRef.current) {
                 setTimeout(() => {
@@ -412,12 +412,16 @@ const App = () => {
 
     if (isDisconnected) {
         return (
-            <div className="container mt-5 text-center px-4">
-                <div className="alert bg-white border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
-                    <i className="fas fa-plug fs-1 text-danger mb-3"></i>
-                    <h4 className="fw-bold">Connection Lost</h4>
-                    <p className="text-muted small mt-2">You have been disconnected from the server.</p>
-                    <button className="btn btn-primary rounded-pill px-5 py-2 mt-3 fw-bold shadow-sm" disabled={isReloading} onClick={() => { 
+            <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
+                <div className="card border-0 shadow-lg p-5 rounded-4 text-center" style={{ maxWidth: '400px', width: '90%', background: 'linear-gradient(145deg, #ffffff, #fef2f2)' }}>
+                    <div className="mb-4">
+                        <div className="bg-danger bg-opacity-10 rounded-circle d-inline-flex p-4">
+                            <i className="fas fa-wifi text-danger" style={{ fontSize: '3rem' }}></i>
+                        </div>
+                    </div>
+                    <h4 className="fw-bold text-dark mb-2">Connection Lost</h4>
+                    <p className="text-muted small mb-4">We've lost touch with the server. Let's try getting you back online.</p>
+                    <button className="btn btn-danger rounded-pill px-5 py-3 fw-bold shadow-sm w-100" disabled={isReloading} onClick={() => { 
                         setIsReloading(true); 
                         if (socket) {
                             socket.connect();
@@ -435,10 +439,14 @@ const App = () => {
 
     if (!user || !socket || !isAuthComplete) {
         return (
-            <div className="container mt-5 text-center px-4">
-                <div className="alert alert-light border shadow-lg py-5 rounded-4 d-flex flex-column align-items-center">
-                    <i className="fas fa-circle-notch fa-spin fs-1 text-primary mb-3"></i>
-                    <h4 className="fw-bold">{loadingState}</h4>
+            <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
+                <div className="card border-0 shadow-lg p-5 rounded-4 text-center" style={{ maxWidth: '400px', width: '90%', background: 'linear-gradient(145deg, #ffffff, #f8fafc)' }}>
+                    <div className="position-relative d-inline-block mb-4">
+                        <div className="spinner-border text-primary" style={{ width: '4rem', height: '4rem', borderWidth: '0.3em' }}></div>
+                        <i className="fas fa-palette position-absolute top-50 start-50 translate-middle text-primary fs-3"></i>
+                    </div>
+                    <h4 className="fw-bold text-dark mb-2">{loadingState}</h4>
+                    <p className="text-muted small mb-0">Please wait while we set up your creative space.</p>
                 </div>
             </div>
         );
@@ -558,7 +566,7 @@ const App = () => {
                                     </div>
                                     
                                     {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} />}
+                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} roomData={roomData} />}
                                     {activeTab === 'sounds' && (
                                         <div className="panel-body">
                                             <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
@@ -603,7 +611,7 @@ const App = () => {
                            {profileModal.pic ? (
                                <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
                            ) : (
-                               <i className="fas fa-user-circle text-secondary mb-3" style={{fontSize: '100px'}}></i>
+                               <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm" style={{fontSize: '100px'}}></i>
                            )}
                            <h3 className="mb-1">{window.toHex(profileModal.user_id)}</h3>
                            <p className="text-muted small fw-bold mb-3">{profileModal.gender || 'Gender Not Set'}</p>
