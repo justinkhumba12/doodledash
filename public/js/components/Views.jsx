@@ -1,11 +1,72 @@
 const { useState, useEffect } = React;
 
-const ProfileView = ({ user }) => (
-    <div className="container mt-5 text-center">
-        <img src={window.profilePic || 'https://via.placeholder.com/120'} className="rounded-circle shadow-lg mb-4 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
-        <h3 className="fw-bold text-dark">{window.toHex(user.tg_id)}</h3>
-    </div>
-);
+const ProfileView = ({ user, socket, setModal }) => {
+    const [editingGender, setEditingGender] = useState(false);
+    const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
+
+    const handleSaveGender = () => {
+        if (user?.gender && user.gender !== selectedGender) {
+            setModal({ type: 'confirm_gender_change', gender: selectedGender, title: 'Change Gender' });
+        } else if (!user?.gender) {
+            socket.emit('set_gender', { gender: selectedGender });
+        }
+        setEditingGender(false);
+    };
+
+    const handleDonateClick = () => {
+        const botLink = `https://t.me/doodledashbot?start=donate`;
+        if (window.tg && window.tg.openTelegramLink) {
+            try { window.tg.openTelegramLink(botLink); setTimeout(() => window.tg.close(), 300); }
+            catch (e) { window.open(botLink, '_blank'); }
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
+
+    return (
+        <div className="container mt-4 pb-5">
+            <div className="text-center mb-4">
+                <img src={window.profilePic || 'https://via.placeholder.com/120'} className="rounded-circle shadow-lg mb-3 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
+                <h3 className="fw-bold text-dark mb-1">{window.toHex(user.tg_id)}</h3>
+                {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
+            </div>
+
+            <div className="card bg-white rounded-4 border shadow-sm mb-4">
+                <div className="card-body p-3">
+                    <div className="d-flex justify-content-between align-items-center">
+                        <span className="fw-bold text-secondary"><i className="fas fa-venus-mars me-2"></i> Gender</span>
+                        {editingGender ? (
+                            <div className="d-flex align-items-center gap-2">
+                                <select className="form-select form-select-sm rounded-pill" value={selectedGender} onChange={e => setSelectedGender(e.target.value)}>
+                                    <option value="Male">Male</option>
+                                    <option value="Female">Female</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                                <button className="btn btn-success btn-sm rounded-pill px-3" onClick={handleSaveGender}><i className="fas fa-check"></i></button>
+                            </div>
+                        ) : (
+                            <div className="d-flex align-items-center gap-2">
+                                <span className="fw-bold">{user?.gender || 'Not Set'}</span>
+                                <button className="btn btn-light btn-sm rounded-circle shadow-sm" onClick={() => setEditingGender(true)} title={user?.gender ? "Edit (5 Credits)" : "Set Gender"}>
+                                    <i className="fas fa-edit text-primary"></i>
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            <div className="card bg-light border border-primary rounded-4 cursor-pointer hover-up" onClick={handleDonateClick} style={{ transition: '0.3s' }}>
+                <div className="card-body p-4 text-center">
+                    <i className="fas fa-heart text-danger fs-1 mb-2"></i>
+                    <h5 className="fw-bold text-dark">Support DoodleDash</h5>
+                    <p className="small text-muted mb-0">Donate Telegram Stars to keep the servers running and get featured on the Donators Leaderboard!</p>
+                    <button className="btn btn-primary rounded-pill mt-3 px-4 fw-bold shadow-sm">Donate via Bot</button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const TasksView = ({ user, socket }) => {
     // Dynamic invite counts fetched from Redis cache (weekly)
@@ -92,68 +153,134 @@ const TasksView = ({ user, socket }) => {
     );
 };
 
-const LeaderboardView = ({ socket }) => {
-    const [leaders, setLeaders] = useState([]);
+const LeaderboardView = ({ socket, setModal }) => {
+    const [activeTab, setActiveTab] = useState('inviters');
+    const [inviters, setInviters] = useState([]);
+    const [donators, setDonators] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         if (socket) {
-            socket.emit('get_leaderboard');
-            const handleLeaderboardData = (data) => {
-                setLeaders(data);
-                setLoading(false);
-            };
-            socket.on('leaderboard_data', handleLeaderboardData);
-            return () => socket.off('leaderboard_data', handleLeaderboardData);
+            setLoading(true);
+            if (activeTab === 'inviters') {
+                socket.emit('get_leaderboard');
+            } else {
+                socket.emit('get_donators_leaderboard');
+            }
+            
+            const handleInv = (data) => { setInviters(data); setLoading(false); };
+            const handleDon = (data) => { setDonators(data); setLoading(false); };
+            
+            socket.on('leaderboard_data', handleInv);
+            socket.on('donators_leaderboard_data', handleDon);
+            
+            return () => {
+                socket.off('leaderboard_data', handleInv);
+                socket.off('donators_leaderboard_data', handleDon);
+            }
         }
-    }, [socket]);
+    }, [socket, activeTab]);
 
     return (
         <div className="container mt-4 pb-5">
-            <div className="text-center mb-4">
+            <div className="text-center mb-4 position-relative">
+                <button className="btn btn-link text-muted position-absolute end-0 top-0 fs-4 p-0 shadow-none hover-up" onClick={() => setModal({type: 'leaderboard_rules'})}>
+                    <i className="fas fa-info-circle"></i>
+                </button>
                 <i className="fas fa-trophy text-warning mb-2" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}></i>
-                <h3 className="fw-bold m-0">Weekly Top Inviters</h3>
-                <p className="small text-muted">See who invited the most friends this week!</p>
+                <h3 className="fw-bold m-0">Leaderboard</h3>
+                <p className="small text-muted">See the top players and supporters!</p>
+            </div>
+
+            <div className="lobby-tabs-wrapper mb-4">
+                <div className={`lobby-tab ${activeTab === 'inviters' ? 'active' : ''}`} onClick={() => setActiveTab('inviters')}>
+                    <i className="fas fa-user-plus me-2"></i>Top Inviters
+                </div>
+                <div className={`lobby-tab ${activeTab === 'donators' ? 'active' : ''}`} onClick={() => setActiveTab('donators')}>
+                    <i className="fas fa-heart me-2"></i>Top Donators
+                </div>
             </div>
 
             {loading ? (
                 <div className="text-center mt-5">
                     <i className="fas fa-circle-notch fa-spin fs-2 text-primary"></i>
-                    <p className="text-muted mt-2">Loading leaderboard...</p>
-                </div>
-            ) : leaders.length > 0 ? (
-                <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
-                    {leaders.map((l, index) => {
-                        let rankStyle = "bg-primary";
-                        if (index === 0) rankStyle = "bg-warning text-dark";
-                        if (index === 1) rankStyle = "bg-secondary text-white";
-                        if (index === 2) rankStyle = "bg-danger text-white";
-
-                        return (
-                            <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
-                                <div className="d-flex align-items-center gap-3">
-                                    <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm ${rankStyle}`} style={{width: '45px', height: '45px', fontSize: '1.2rem'}}>
-                                        #{index + 1}
-                                    </div>
-                                    <div className="d-flex flex-column">
-                                        <span className="fw-bold text-dark fs-5">{window.toHex(l.tg_id)}</span>
-                                        {index === 0 && <span className="small text-warning fw-bold"><i className="fas fa-crown"></i> Current Leader</span>}
-                                    </div>
-                                </div>
-                                <div className="badge bg-white text-dark border border-light px-3 py-2 rounded-pill shadow-sm" style={{ fontSize: '1rem' }}>
-                                    <i className="fas fa-user-plus text-success me-2"></i> 
-                                    {l.invites}
-                                </div>
-                            </div>
-                        );
-                    })}
+                    <p className="text-muted mt-2">Loading...</p>
                 </div>
             ) : (
-                <div className="text-center mt-5 text-muted">
-                    <i className="fas fa-users-slash mb-3 text-secondary opacity-50" style={{ fontSize: '4rem' }}></i>
-                    <h5 className="fw-bold">No invites yet this week!</h5>
-                    <p className="small">Head to the Tasks tab and be the first to invite your friends.</p>
-                </div>
+                activeTab === 'inviters' ? (
+                    inviters.length > 0 ? (
+                        <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
+                            {inviters.map((l, index) => {
+                                let rankStyle = "bg-primary";
+                                if (index === 0) rankStyle = "bg-warning text-dark";
+                                if (index === 1) rankStyle = "bg-secondary text-white";
+                                if (index === 2) rankStyle = "bg-danger text-white";
+
+                                return (
+                                    <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                                        <div className="d-flex align-items-center gap-2">
+                                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                                #{index + 1}
+                                            </div>
+                                            <div className="flex-shrink-0 ms-1">
+                                                {l.profile_pic ? <img src={l.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
+                                            </div>
+                                            <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
+                                                <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
+                                                <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{l.username !== 'unset' ? `@${l.username}` : ''}</span>
+                                            </div>
+                                        </div>
+                                        <div className="badge bg-light text-dark border border-secondary px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
+                                            {l.invites}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="text-center mt-5 text-muted">
+                            <i className="fas fa-users-slash mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
+                            <h5>No invites yet this week!</h5>
+                        </div>
+                    )
+                ) : (
+                    donators.length > 0 ? (
+                        <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
+                            {donators.map((d, index) => {
+                                let rankStyle = "bg-primary";
+                                if (index === 0) rankStyle = "bg-warning text-dark";
+                                if (index === 1) rankStyle = "bg-secondary text-white";
+                                if (index === 2) rankStyle = "bg-danger text-white";
+
+                                return (
+                                    <div key={d.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                                        <div className="d-flex align-items-center gap-2">
+                                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem'}}>
+                                                #{index + 1}
+                                            </div>
+                                            <div className="flex-shrink-0 ms-1">
+                                                {d.profile_pic ? <img src={d.profile_pic} className="rounded-circle shadow-sm" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/> : <i className="fas fa-user-circle fs-2 text-secondary"></i>}
+                                            </div>
+                                            <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
+                                                <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(d.tg_id)}</span>
+                                                <span className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px'}}>{d.username !== 'unset' ? `@${d.username}` : ''}</span>
+                                            </div>
+                                        </div>
+                                        <div className="badge bg-light text-danger border border-danger px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
+                                            <i className="fas fa-star"></i> {d.total_donated}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="text-center mt-5 text-muted">
+                            <i className="fas fa-heart-broken mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
+                            <h5>No donations yet.</h5>
+                            <p className="small">Be the first to support DoodleDash!</p>
+                        </div>
+                    )
+                )
             )}
         </div>
     );
