@@ -52,7 +52,8 @@ const initWorkerDB = async () => {
                 status VARCHAR(20) DEFAULT 'active',
                 ban_until DATE DEFAULT NULL,
                 mute_until DATE DEFAULT NULL,
-                gender VARCHAR(10) DEFAULT NULL
+                gender VARCHAR(10) DEFAULT NULL,
+                avatar_url VARCHAR(255) DEFAULT NULL
             )
         `);
         
@@ -92,6 +93,7 @@ const initWorkerDB = async () => {
             "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL",
             "ALTER TABLE users DROP COLUMN username",
             "ALTER TABLE users DROP COLUMN tg_username",
             "ALTER TABLE referrals CHANGE created_at updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
