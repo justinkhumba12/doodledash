@@ -93,7 +93,7 @@ module.exports = (io) => {
             if (userState) socket.emit('user_update', userState);
         };
 
-        socket.on('auth', async ({ initData }) => {
+        socket.on('auth', async ({ initData, photoUrl }) => {
             try {
                 let currentUser;
                 
@@ -116,6 +116,10 @@ module.exports = (io) => {
                 
                 socket.data.currentUser = currentUser;
                 await redis.hdel('user_disconnects', currentUser);
+                
+                if (photoUrl) {
+                    await redis.hset('user_photos', currentUser, photoUrl);
+                }
 
                 socket.join(`user_${currentUser}`);
 
@@ -161,23 +165,32 @@ module.exports = (io) => {
                 const weekKey = getWeekKey();
                 
                 const [inviterRows] = await db.query(`
-                    SELECT tg_id, invites FROM user_weekly_stats 
-                    WHERE week_key = ? AND invites > 0 
-                    ORDER BY invites DESC, invites_updated_at ASC LIMIT 50
+                    SELECT s.tg_id, s.invites
+                    FROM user_weekly_stats s
+                    WHERE s.week_key = ? AND s.invites > 0 
+                    ORDER BY s.invites DESC, s.invites_updated_at ASC LIMIT 50
                 `, [weekKey]);
                 
                 const [guesserRows] = await db.query(`
-                    SELECT tg_id, guesses FROM user_weekly_stats 
-                    WHERE week_key = ? AND guesses > 0 
-                    ORDER BY guesses DESC, guesses_updated_at ASC LIMIT 50
+                    SELECT s.tg_id, s.guesses
+                    FROM user_weekly_stats s
+                    WHERE s.week_key = ? AND s.guesses > 0 
+                    ORDER BY s.guesses DESC, s.guesses_updated_at ASC LIMIT 50
                 `, [weekKey]);
 
                 const populateProfiles = async (rows, scoreField) => {
+                    if (rows.length === 0) return [];
                     const result = [];
+                    const ids = rows.map(r => r.tg_id);
+                    
+                    const [userRows] = await db.query(`SELECT tg_id, avatar_url FROM users WHERE tg_id IN (?)`, [ids]);
+                    const avatarMap = {};
+                    userRows.forEach(u => avatarMap[u.tg_id] = u.avatar_url);
+
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        result.push({ tg_id: id, score: row[scoreField], username });
+                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id] });
                     }
                     return result;
                 };
@@ -206,11 +219,17 @@ module.exports = (io) => {
                     return socket.emit('donators_leaderboard_data', JSON.parse(cached));
                 }
                 
-                const [rows] = await db.query('SELECT tg_id, total_donated FROM donations ORDER BY total_donated DESC LIMIT 50');
+                const [rows] = await db.query(`
+                    SELECT d.tg_id, d.total_donated, u.avatar_url 
+                    FROM donations d
+                    LEFT JOIN users u ON d.tg_id = u.tg_id
+                    ORDER BY d.total_donated DESC LIMIT 50
+                `);
+                
                 const leaderboard = [];
                 for (const row of rows) {
                     const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
-                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username });
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url });
                 }
                 await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); 
                 socket.emit('donators_leaderboard_data', leaderboard);
