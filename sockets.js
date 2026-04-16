@@ -31,6 +31,11 @@ module.exports = (io) => {
         const performJoinRoom = async (userId, roomIdNum, password, bypassCost = false) => {
             const room = await getRoom(roomIdNum);
             if (!room) return socket.emit('join_error', 'Room not found.');
+            
+            if (room.banned_members && room.banned_members.includes(userId)) {
+                return socket.emit('join_error', 'You were kicked from this private room by the creator and cannot rejoin.');
+            }
+
             if (room.members.length >= room.max_members) return socket.emit('join_error', 'Room is full.');
 
             const existingMember = room.members.find(m => m.user_id === userId);
@@ -172,8 +177,7 @@ module.exports = (io) => {
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        const profile_pic = await redis.hget('user_profiles', id);
-                        result.push({ tg_id: id, score: row[scoreField], username, profile_pic });
+                        result.push({ tg_id: id, score: row[scoreField], username });
                     }
                     return result;
                 };
@@ -206,8 +210,7 @@ module.exports = (io) => {
                 const leaderboard = [];
                 for (const row of rows) {
                     const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
-                    const profile_pic = await redis.hget('user_profiles', row.tg_id);
-                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, profile_pic });
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username });
                 }
                 await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); 
                 socket.emit('donators_leaderboard_data', leaderboard);
@@ -392,7 +395,7 @@ module.exports = (io) => {
                     modified_at: new Date(), is_private: is_private ? 1 : 0, password: is_private ? password : null,
                     max_members: limit, base_hints: '[]', creator_id: is_private ? currentUser : null, expire_at: expDate,
                     undo_steps: 0, redo_steps: 0,
-                    members: []
+                    members: [], banned_members: []
                 });
 
                 if (auto_join) {
@@ -520,6 +523,9 @@ module.exports = (io) => {
             if (!currentUser || !currentRoom) return;
             const room = await getRoom(currentRoom);
             if (!room || !room.is_private || room.creator_id !== currentUser) return;
+
+            if (!room.banned_members) room.banned_members = [];
+            room.banned_members.push(target_id);
 
             room.members = room.members.filter(m => m.user_id !== target_id);
             await saveRoom(room);
