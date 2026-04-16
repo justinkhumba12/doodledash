@@ -8,12 +8,12 @@ window.tg = window.Telegram.WebApp;
 window.tg.expand();
 
 // Platform Hard Check to enforce Mobile Usage and block circumvention
-// Update: Allowed all origins and platforms per requirements.
 window.isBlockedPlatform = false;
 
 window.initData = window.tg.initData; 
 window.tgId = window.tg.initDataUnsafe?.user?.id?.toString();
 window.profilePic = window.tg.initDataUnsafe?.user?.photo_url || '';
+window.username = window.tg.initDataUnsafe?.user?.username || 'unset';
 
 window.toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
@@ -477,8 +477,8 @@ const App = () => {
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} />}
-                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} />}
-                        {mainPageTab === 'profile' && <ProfileView user={user} />}
+                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} />}
+                        {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} />}
                         
                         <div className="bottom-nav">
                             <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
