@@ -96,12 +96,12 @@ const App = () => {
                 setIsAuthComplete(true);
             } else {
                 if (data.error === 'not_registered') {
-                    setLoadingState('Please start the bot first! Closing...');
+                    setLoadingState('Please start the bot first! Redirecting...');
                     if (window.tg) {
                         try {
-                            window.tg.openTelegramLink('https://t.me/doodledashbot');
+                            window.tg.openTelegramLink('https://t.me/doodledashbot?start=1');
                         } catch(e) {}
-                        setTimeout(() => window.tg.close(), 1500);
+                        setTimeout(() => window.tg.close(), 500);
                     }
                 } else if (data.error === 'banned') {
                     setLoadingState('You are banned. Check the bot for details. Closing...');
@@ -449,14 +449,16 @@ const App = () => {
     }
 
     const handleLoadBalance = () => {
+        const link = 'https://t.me/doodledashbot?start=load_balance';
         if (window.tg && window.tg.openTelegramLink) {
             try {
-                window.tg.openTelegramLink('https://t.me/doodledashbot?start=load_balance');
+                window.tg.openTelegramLink(link);
             } catch (e) {
-                window.open('https://t.me/doodledashbot?start=load_balance', '_blank');
+                window.open(link, '_blank');
             }
+            setTimeout(() => window.tg.close(), 300);
         } else {
-            window.open('https://t.me/doodledashbot?start=load_balance', '_blank');
+            window.open(link, '_blank');
         }
     };
 
