@@ -97,36 +97,52 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         <small className="text-muted">Require password</small>
                     </div>
                     <div className="form-check form-switch fs-4 mb-0">
-                        <input className="form-check-input mt-0 cursor-pointer" type="checkbox" checked={isPriv} readOnly />
+                        <input className="form-check-input mt-0 cursor-pointer shadow-none" type="checkbox" checked={isPriv} readOnly />
                     </div>
                 </div>
 
                 {isPriv ? (
                     <>
                         <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                        
                         <div className="mb-3">
-                            <label className="form-label text-muted small mb-1">Max Players</label>
-                            <select className="form-select" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
-                                <option value={2}>2 Players (1 Credit)</option>
-                                <option value={3}>3 Players (3 Credits)</option>
-                                <option value={4}>4 Players (4 Credits)</option>
-                            </select>
+                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
+                            <div className="d-flex gap-2">
+                                {[2, 3, 4].map(num => (
+                                    <div key={num}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s'}}>
+                                        <div className="fw-bold fs-5">{num}</div>
+                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{num === 2 ? 1 : (num === 3 ? 3 : 4)} Creds</div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
+                        
                         <div className="mb-3">
-                            <label className="form-label text-muted small mb-1">Room Duration</label>
-                            <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                                <option value={2}>2 Hours (1 Credit)</option>
-                                <option value={4}>4 Hours (2 Credits)</option>
-                            </select>
+                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
+                            <div className="d-flex gap-2">
+                                {[2, 4].map(hours => (
+                                    <div key={hours}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
+                                        <div className="fw-bold fs-5">{hours} <span className="fs-6">hrs</span></div>
+                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </>
                 ) : (
                     <>
                         <div className="mb-3">
-                            <label className="form-label text-muted small mb-1">Max Players</label>
-                            <input type="text" className="form-control text-dark" value="4 Players (Fixed)" disabled />
+                            <label className="form-label text-muted small mb-1 fw-bold">Max Players</label>
+                            <div className="w-100 text-center border rounded-3 py-2 bg-light text-muted">
+                                <div className="fw-bold fs-5">4</div>
+                                <div style={{fontSize: '0.65rem'}}>Players (Fixed)</div>
+                            </div>
                         </div>
-                        <div className="alert alert-success py-2 small mb-3">
+                        <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
                             <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
                             <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
                         </div>
@@ -134,14 +150,15 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 )}
 
                 {(isPriv) && (
-                    <div className="alert alert-warning py-2 small mb-3">
-                        <i className="fas fa-coins text-warning me-1"></i> Total Cost: {baseRoomCost} Credits
+                    <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between">
+                        <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
+                        <span>{baseRoomCost} Credits</span>
                     </div>
                 )}
 
                 <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
+                    <button className="btn btn-light w-50 rounded-pill fw-bold border" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold shadow-sm" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
                         socket.emit('create_room', { 
                             is_private: isPriv, 
                             password: pwd, 
@@ -150,7 +167,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                             auto_join: true 
                         }); 
                         close(); 
-                    }}>Create</button>
+                    }}>Create Room</button>
                 </div>
             </>
         );
@@ -190,18 +207,25 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         content = (
             <>
                 <div className="mb-3">
-                    <label className="form-label text-muted small mb-1">Add Duration</label>
-                    <select className="form-select" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                        <option value={2}>+2 Hours (1 Credit)</option>
-                        <option value={4}>+4 Hours (2 Credits)</option>
-                    </select>
+                    <label className="form-label text-muted small mb-2 fw-bold">Add Duration</label>
+                    <div className="d-flex gap-2">
+                        {[2, 4].map(hours => (
+                            <div key={hours}
+                                 className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                 onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
+                                <div className="fw-bold fs-5">+{hours} <span className="fs-6">hrs</span></div>
+                                <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                <div className="alert alert-warning py-2 small mb-3">
-                    <i className="fas fa-coins text-warning me-1"></i> Cost: {expireHours === 4 ? 2 : 1} Credits
+                <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between shadow-sm">
+                    <span><i className="fas fa-coins text-warning me-1"></i> Cost:</span>
+                    <span>{expireHours === 4 ? 2 : 1} Credits</span>
                 </div>
                 <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}><i className="fas fa-clock"></i> Extend</button>
+                    <button className="btn btn-light border w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                    <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}><i className="fas fa-clock"></i> Extend</button>
                 </div>
             </>
         );
