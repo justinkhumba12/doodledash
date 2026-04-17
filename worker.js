@@ -53,6 +53,7 @@ const initWorkerDB = async () => {
                 ban_until DATE DEFAULT NULL,
                 mute_until DATE DEFAULT NULL,
                 gender VARCHAR(10) DEFAULT NULL,
+                name VARCHAR(50) DEFAULT NULL,
                 avatar_url VARCHAR(255) DEFAULT NULL
             )
         `);
@@ -93,6 +94,7 @@ const initWorkerDB = async () => {
             "ALTER TABLE users ADD COLUMN ban_until DATE DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN mute_until DATE DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN gender VARCHAR(10) DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN name VARCHAR(50) DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL",
             "ALTER TABLE users DROP COLUMN username",
             "ALTER TABLE users DROP COLUMN tg_username",
