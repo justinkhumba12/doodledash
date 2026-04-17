@@ -293,6 +293,27 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 </div>
             </>
         );
+    } else if (modal.type === 'confirm_name_change') {
+        content = (
+            <>
+                <p className="text-dark text-center mb-3">
+                    Are you sure you want to set your display name to <b>{modal.name}</b>?
+                </p>
+                {modal.isFirstTime ? (
+                    <div className="alert alert-info py-2 small mb-4">
+                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
+                    </div>
+                ) : (
+                    <div className="alert alert-warning py-2 small mb-4">
+                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
+                    </div>
+                )}
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_name', { name: modal.name }); close(); }}>Confirm</button>
+                </div>
+            </>
+        );
     } else if (modal.type === 'confirm_drawer_give_up') {
         content = (
             <>
