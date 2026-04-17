@@ -20,6 +20,9 @@ window.username = window.tg?.initDataUnsafe?.user?.username || 'unset';
 
 window.toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
+// NEW HELPER: Fetch custom display name or fall back to Hex ID
+window.getDisplayName = (id, namesObj) => (namesObj && namesObj[id]) ? namesObj[id] : window.toHex(id);
+
 window.getStatusText = (status) => {
     const map = {
         'WAITING': 'Lobby Waiting',
@@ -485,11 +488,11 @@ const App = () => {
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                <div className="d-flex align-items-center bg-white rounded-pill shadow-sm border" style={{ padding: '4px 8px 4px 12px' }}>
-                    <i className="fas fa-coins text-warning fs-5 me-2" style={{ filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' }}></i>
-                    <span className="fw-bold fs-6 me-3" style={{ color: '#1e293b' }}>{user.credits}</span>
-                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm hover-up" onClick={handleLoadBalance} title="Load Balance" style={{ width: '28px', height: '28px' }}>
-                        <i className="fas fa-plus text-white" style={{ fontSize: '0.8rem' }}></i>
+                <div className="d-flex align-items-center bg-white rounded-pill shadow-sm border" style={{ padding: '2px 8px 2px 8px' }}>
+                    <i className="fas fa-coins text-warning me-1" style={{ filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.1))', fontSize: '0.8rem' }}></i>
+                    <span className="fw-bold me-2" style={{ color: '#1e293b', fontSize: '0.85rem' }}>{user.credits}</span>
+                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm hover-up" onClick={handleLoadBalance} title="Load Balance" style={{ width: '22px', height: '22px' }}>
+                        <i className="fas fa-plus text-white" style={{ fontSize: '0.65rem' }}></i>
                     </button>
                 </div>
             </div>
@@ -498,7 +501,7 @@ const App = () => {
                 {!currentRoomId ? (
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
-                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} />}
+                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} />}
                         {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} />}
                         {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} />}
                         
@@ -614,7 +617,7 @@ const App = () => {
                            ) : (
                                <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm" style={{fontSize: '100px'}}></i>
                            )}
-                           <h3 className="mb-1">{window.toHex(profileModal.user_id)}</h3>
+                           <h3 className="mb-1">{window.getDisplayName(profileModal.user_id, roomData?.names)}</h3>
                            <p className="text-muted small fw-bold mb-3">{profileModal.gender || 'Gender Not Set'}</p>
                            <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
                        </div>
