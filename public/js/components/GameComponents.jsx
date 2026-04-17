@@ -761,7 +761,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
     return (
-        <div className="row">
+        <div className="row pb-5">
             <div className="col-12 col-lg-8 mx-auto">
                 <div className="whiteboard-wrapper">
                     
@@ -809,4 +809,23 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                                     </div>
                                     
                                     <div className="d-flex align-items-center gap-2">
-                                        {m.is_ready
+                                        {m.is_ready ? (
+                                            <span className="badge bg-success shadow-sm"><i className="fas fa-check"></i> Ready</span>
+                                        ) : (
+                                            <span className="badge bg-secondary shadow-sm">Waiting</span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+window.Whiteboard = Whiteboard;
+window.ChatBox = ChatBox;
+window.GuessBox = GuessBox;
+window.GameRoom = GameRoom;
