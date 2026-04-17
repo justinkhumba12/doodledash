@@ -47,9 +47,6 @@ window.triggerVibration = (style) => {
 // Extract hooks for App 
 const { useState, useEffect, useRef, useCallback } = React;
 
-// Extract components from window attached in prior scripts
-const { LobbyView, TasksView, LeaderboardView, ProfileView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
-
 
 // --- Main App Component ---
 const App = () => {
@@ -451,6 +448,20 @@ const App = () => {
                     <h4 className="fw-bold text-dark mb-2">{loadingState}</h4>
                     <p className="text-muted small mb-0">Please wait while we set up your creative space.</p>
                 </div>
+            </div>
+        );
+    }
+
+    // NEW FAILSAFE: Dynamically extract components at render-time. 
+    // Prevents crashing if app.jsx executes before Views.jsx or GameComponents.jsx
+    const { LobbyView, TasksView, LeaderboardView, ProfileView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
+    
+    if (!LobbyView || !GameRoom || !ModalManager) {
+        return (
+            <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
+                <div className="spinner-border text-primary" style={{ width: '4rem', height: '4rem', borderWidth: '0.3em' }}></div>
+                <h4 className="fw-bold text-dark mt-3">Loading Interface...</h4>
+                <p className="text-muted small">Preparing game assets.</p>
             </div>
         );
     }
