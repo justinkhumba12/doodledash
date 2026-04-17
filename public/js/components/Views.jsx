@@ -3,10 +3,24 @@ const { useState, useEffect } = React;
 const ProfileView = ({ user, socket, setModal }) => {
     const [editingGender, setEditingGender] = useState(false);
     const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
+    
+    const [editingName, setEditingName] = useState(false);
+    const [inputName, setInputName] = useState(user?.name || '');
+
+    useEffect(() => {
+        if (user?.name) setInputName(user.name);
+    }, [user?.name]);
 
     const handleSaveGender = () => {
         setModal({ type: 'confirm_gender_change', gender: selectedGender, isFirstTime: !user?.gender });
         setEditingGender(false);
+    };
+
+    const handleSaveName = () => {
+        const finalName = inputName.trim();
+        if (finalName.length < 2) return setModal({ type: 'error', title: 'Invalid Name', content: 'Name must be at least 2 characters long.' });
+        setModal({ type: 'confirm_name_change', name: finalName, isFirstTime: !user?.name });
+        setEditingName(false);
     };
 
     const handleDonateClick = () => {
@@ -28,13 +42,42 @@ const ProfileView = ({ user, socket, setModal }) => {
                 ) : (
                     <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '120px', color: 'var(--primary)'}}></i>
                 )}
-                <h3 className="fw-bold text-dark mb-1">{window.toHex(user.tg_id)}</h3>
+                <h3 className="fw-bold text-dark mb-1">{user?.name || window.toHex(user?.tg_id)}</h3>
                 {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
             </div>
 
             <div className="card bg-white rounded-4 border shadow-sm mb-4">
                 <div className="card-body p-3">
-                    <div className="d-flex flex-column gap-2">
+                    
+                    {/* Display Name Setting */}
+                    <div className="d-flex flex-column gap-2 mb-3">
+                        <span className="fw-bold text-secondary mb-1"><i className="fas fa-id-card me-2"></i> Display Name</span>
+                        {editingName ? (
+                            <div className="d-flex flex-column align-items-center gap-2 w-100">
+                                <input type="text" className="form-control text-center shadow-sm border" placeholder="Enter Name (Max 15)" maxLength={15} value={inputName} onChange={e => setInputName(e.target.value)} />
+                                <div className="d-flex gap-2 w-100 mt-2">
+                                    <button className="btn btn-outline-danger flex-shrink-0 rounded shadow-sm py-2 px-3" onClick={() => { setEditingName(false); setInputName(user?.name || ''); }} title="Cancel">
+                                        <i className="fas fa-times"></i>
+                                    </button>
+                                    <button className="btn btn-success flex-grow-1 rounded fw-bold py-2 shadow-sm" onClick={handleSaveName}>
+                                        <i className="fas fa-check me-2"></i> Save Name
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="d-flex align-items-center justify-content-between mt-1">
+                                <span className="fw-bold text-dark fs-5">{user?.name || 'Not Set'}</span>
+                                <button className="btn btn-light btn-sm rounded-pill shadow-sm px-3 fw-bold border" onClick={() => setEditingName(true)} title={user?.name ? "Edit (5 Credits)" : "Set Name"}>
+                                    <i className="fas fa-edit text-primary me-1"></i> Edit
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    
+                    <hr className="my-3 text-muted opacity-25" />
+
+                    {/* Gender Selection */}
+                    <div className="d-flex flex-column gap-2 mt-2">
                         <span className="fw-bold text-secondary mb-1"><i className="fas fa-venus-mars me-2"></i> Gender Selection</span>
                         {editingGender ? (
                             <div className="d-flex flex-column align-items-center gap-2 w-100">
@@ -76,8 +119,9 @@ const ProfileView = ({ user, socket, setModal }) => {
     );
 };
 
-const TasksView = ({ user, socket }) => {
-    // Dynamic invite counts fetched from database
+const TasksView = ({ user, socket, setModal }) => {
+    const [adState, setAdState] = useState({ show: false });
+
     const inviteCount = user?.weekly_invites || 0;
     const goal = 3;
     const isCompleted = inviteCount >= goal;
@@ -102,49 +146,134 @@ const TasksView = ({ user, socket }) => {
         }
     };
 
+    const triggerAd = (adNum, prefix) => {
+        setAdState({ show: true });
+        
+        if (typeof window.show_10812134 !== 'function') {
+            setTimeout(() => {
+                socket.emit('claim_reward', { type: prefix });
+                setAdState({ show: false });
+            }, 2500);
+            return;
+        }
+
+        const adConfig = { ymid: user.tg_id.toString() };
+
+        if (adNum === 1) {
+            window.show_10812134({ type: 'pop', ...adConfig }).then(() => {
+                socket.emit('claim_reward', { type: prefix });
+                setAdState({ show: false });
+            }).catch(e => {
+                setAdState({ show: false });
+                setModal({ type: 'error', title: 'Ad Error', content: 'Popup ad failed to open or was blocked. Try again later.' });
+            });
+        } else {
+            window.show_10812134(adConfig).then(() => {
+                socket.emit('claim_reward', { type: prefix });
+                setAdState({ show: false });
+            }).catch(e => {
+                setAdState({ show: false });
+                setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now or skipped. Try again later.' });
+            });
+        }
+    };
+
+    const renderAdBtn = (adNum) => {
+        const prefix = adNum === 1 ? 'ad' : 'ad2';
+        const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
+        const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
+        const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
+        const maxClaims = adNum === 1 ? 3 : 5;
+
+        let btnText = `Watch ad (${claims}/${maxClaims})`;
+        let disabled = false;
+        
+        if (!isAvailable) {
+            disabled = true;
+            if (claims >= maxClaims) { 
+                btnText = `Max ${maxClaims}/${maxClaims} Reached`; 
+            } else { 
+                const wH = Math.floor(waitMins / 60);
+                const wM = waitMins % 60;
+                btnText = `Wait ${wH > 0 ? wH + 'h ' : ''}${wM > 0 ? wM + 'm' : ''}`.trim(); 
+            }
+        }
+
+        return (
+            <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
+                {btnText}
+            </button>
+        );
+    };
+
     return (
         <div className="container mt-4 pb-5">
-            <h3 className="fw-bold mb-4 text-center">Your Tasks</h3>
+            <h3 className="fw-bold mb-4 text-center">Tasks & Rewards</h3>
 
-            <div className="card bg-white rounded-4 border shadow-sm overflow-hidden mb-3" style={{ transition: '0.3s' }}>
-                <div className="card-body p-4">
-                    <div className="d-flex align-items-center justify-content-between mb-3">
-                        <div className="d-flex align-items-center gap-3">
-                            <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '55px', height: '55px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
-                                <i className="fas fa-user-friends fs-4"></i>
-                            </div>
-                            <div>
-                                <h5 className="fw-bold mb-1">Weekly Invite Challenge</h5>
-                                <p className="text-muted small mb-0">Invite 3 friends this week for 5 Credits!</p>
-                            </div>
+            {/* Daily Claim */}
+            <div className="card bg-white rounded-4 border shadow-sm mb-3">
+                <div className="card-body p-3 d-flex align-items-center justify-content-between">
+                    <div className="d-flex align-items-center gap-3">
+                        <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
+                            <i className="fas fa-calendar-check fs-5"></i>
                         </div>
-                        <div className="text-end">
-                            <span className="badge bg-warning text-dark fs-6 rounded-pill shadow-sm py-2 px-3">
-                                <i className="fas fa-coins me-1"></i> 5
-                            </span>
+                        <div>
+                            <h6 className="fw-bold mb-1">Daily Claim</h6>
+                            <p className="text-muted small mb-0">Get 1 Free Credit everyday!</p>
                         </div>
                     </div>
+                    <button className={`btn btn-sm rounded-pill fw-bold px-3 ${user?.daily_available ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!user?.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                        {user?.daily_available ? 'Claim' : 'Claimed'}
+                    </button>
+                </div>
+            </div>
 
-                    <div className="mb-3 mt-4">
-                        <div className="d-flex justify-content-between small fw-bold mb-2 px-1">
-                            <span className="text-secondary">Weekly Progress</span>
+            {/* Earn Credit (Ads) */}
+            <div className="card bg-white rounded-4 border shadow-sm mb-3">
+                <div className="card-body p-3">
+                    <div className="d-flex align-items-center gap-3 mb-3">
+                        <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
+                            <i className="fas fa-tv fs-5"></i>
+                        </div>
+                        <div>
+                            <h6 className="fw-bold mb-1">Earn Credit</h6>
+                            <p className="text-muted small mb-0">Watch ads to earn Credits instantly.</p>
+                        </div>
+                    </div>
+                    <div className="d-flex gap-2">
+                        {renderAdBtn(1)}
+                        {renderAdBtn(2)}
+                    </div>
+                </div>
+            </div>
+
+            {/* Invite Friends */}
+            <div className="card bg-white rounded-4 border shadow-sm mb-3">
+                <div className="card-body p-3">
+                    <div className="d-flex align-items-center gap-3 mb-3">
+                        <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
+                            <i className="fas fa-user-friends fs-5"></i>
+                        </div>
+                        <div>
+                            <h6 className="fw-bold mb-1">Invite Friends</h6>
+                            <p className="text-muted small mb-0">Invite 3 friends for 5 Credits!</p>
+                        </div>
+                    </div>
+                    <div className="mb-3">
+                        <div className="d-flex justify-content-between small fw-bold mb-1">
+                            <span className="text-secondary">Progress</span>
                             <span className={isCompleted ? 'text-success' : 'text-primary'}>{inviteCount} / {goal}</span>
                         </div>
-                        <div className="progress rounded-pill bg-light border shadow-sm" style={{height: '14px'}}>
-                            <div className={`progress-bar progress-bar-striped progress-bar-animated rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${Math.min((inviteCount / goal) * 100, 100)}%`}}></div>
+                        <div className="progress rounded-pill bg-light border shadow-sm" style={{height: '8px'}}>
+                            <div className={`progress-bar rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${Math.min((inviteCount / goal) * 100, 100)}%`}}></div>
                         </div>
                     </div>
-
-                    <div className="d-flex gap-2 mt-4 pt-2 border-top">
-                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2" onClick={handleInvite}>
-                            <i className="fas fa-paper-plane me-2"></i> Invite Link
+                    <div className="d-flex gap-2">
+                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm" onClick={handleInvite}>
+                            <i className="fas fa-paper-plane me-1"></i> Share Link
                         </button>
-                        <button
-                            className={`btn ${isCompleted && !hasClaimed ? 'btn-success shadow-sm' : 'btn-light text-muted border'} rounded-pill fw-bold px-4 py-2`}
-                            disabled={!isCompleted || hasClaimed}
-                            onClick={handleClaim}
-                        >
-                            {hasClaimed ? 'Claimed' : 'Claim'}
+                        <button className={`btn flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm ${isCompleted && !hasClaimed ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!isCompleted || hasClaimed} onClick={handleClaim}>
+                            {hasClaimed ? 'Claimed' : 'Claim 5 Credits'}
                         </button>
                     </div>
                 </div>
@@ -157,6 +286,14 @@ const TasksView = ({ user, socket }) => {
                     <p className="small mb-0">Stay tuned for more ways to earn credits!</p>
                 </div>
             </div>
+
+            {adState.show && (
+                <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
+                    <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
+                    <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                    <p className="text-muted mt-5 small">Please wait, do not close.</p>
+                </div>
+            )}
         </div>
     );
 };
@@ -203,7 +340,7 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
         return (
             <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white ${isPrevious ? 'opacity-75' : ''}`}>
                 {dataList.map((l, index) => {
-                    let rankStyle = "bg-primary";
+                    let rankStyle = "bg-primary text-white";
                     if (index === 0) rankStyle = "bg-warning text-dark";
                     if (index === 1) rankStyle = "bg-secondary text-white";
                     if (index === 2) rankStyle = "bg-danger text-white";
@@ -211,8 +348,8 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
                     return (
                         <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
                             <div className="d-flex align-items-center gap-2">
-                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem', zIndex: 1}}>
-                                    #{index + 1}
+                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '24px', height: '24px', fontSize: '0.75rem', zIndex: 1}}>
+                                    {index + 1}
                                 </div>
                                 {l.avatar_url ? (
                                     <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: l.avatar_url, gender: l.gender})}>
@@ -226,7 +363,7 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
                                     </div>
                                 )}
                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                    <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(l.tg_id)}</span>
+                                    <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
                                     {l.username && l.username !== 'unset' ? (
                                         <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
                                             @{l.username}
@@ -234,8 +371,11 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
                                     ) : null}
                                 </div>
                             </div>
-                            <div className={`badge bg-light ${type === 'guessers' ? 'text-primary border-primary' : 'text-dark border-secondary'} border px-3 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
-                                {type === 'guessers' ? <i className="fas fa-star text-warning"></i> : null} {l.score}
+                            <div className="badge bg-light text-dark px-2 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
+                                {type === 'guessers' ? <i className="fas fa-check-circle text-success me-1"></i> : null}
+                                {type === 'inviters' ? <i className="fas fa-user-plus text-primary me-1"></i> : null}
+                                {type === 'donators' ? <i className="fas fa-star me-1" style={{color: '#d946ef'}}></i> : null}
+                                {l.score || l.total_donated}
                             </div>
                         </div>
                     );
@@ -308,46 +448,7 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
                             </button>
                         </div>
                         {donators.length > 0 ? (
-                            <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
-                                {donators.map((d, index) => {
-                                    let rankStyle = "bg-primary";
-                                    if (index === 0) rankStyle = "bg-warning text-dark";
-                                    if (index === 1) rankStyle = "bg-secondary text-white";
-                                    if (index === 2) rankStyle = "bg-danger text-white";
-
-                                    return (
-                                        <div key={d.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
-                                            <div className="d-flex align-items-center gap-2">
-                                                <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '35px', height: '35px', fontSize: '0.9rem', zIndex: 1}}>
-                                                    #{index + 1}
-                                                </div>
-                                                {d.avatar_url ? (
-                                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: d.tg_id, pic: d.avatar_url, gender: d.gender})}>
-                                                        <img src={d.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: d.tg_id, pic: null, gender: d.gender})}>
-                                                        <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
-                                                            <i className="fas fa-user fs-5"></i>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                                <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                                    <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{window.toHex(d.tg_id)}</span>
-                                                    {d.username && d.username !== 'unset' ? (
-                                                        <a href={`https://t.me/${d.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
-                                                            @{d.username}
-                                                        </a>
-                                                    ) : null}
-                                                </div>
-                                            </div>
-                                            <div className="badge bg-light text-danger border border-danger px-3 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
-                                                <i className="fas fa-star"></i> {d.total_donated}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                            renderList(donators, activeTab, false)
                         ) : (
                             <div className="text-center mt-5 text-muted">
                                 <i className="fas fa-heart-broken mb-3 text-secondary opacity-50" style={{ fontSize: '3rem' }}></i>
@@ -365,13 +466,12 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
 
 const LobbyView = ({ user, rooms, setModal, socket }) => {
     const [searchId, setSearchId] = useState('');
-    const [adState, setAdState] = useState({ show: false });
     const [activeTab, setActiveTab] = useState('public');
     const [hideFull, setHideFull] = useState(false);
     
     const [touchStartPos, setTouchStartPos] = useState(null);
 
-    const hasGender = !!user?.gender;
+    const hasProfileSetup = !!user?.gender && !!user?.name;
 
     useEffect(() => {
         if (typeof window.show_10812134 === 'function' && user?.tg_id) {
@@ -398,66 +498,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
             else if (activeTab === 'private') setActiveTab('public');
         }
         setTouchStartPos(null);
-    };
-
-    const triggerAd = (adNum, prefix) => {
-        setAdState({ show: true });
-        
-        if (typeof window.show_10812134 !== 'function') {
-            setTimeout(() => {
-                socket.emit('claim_reward', { type: prefix });
-                setAdState({ show: false });
-            }, 2500);
-            return;
-        }
-
-        const adConfig = { ymid: user.tg_id.toString() };
-
-        if (adNum === 1) {
-            window.show_10812134({ type: 'pop', ...adConfig }).then(() => {
-                socket.emit('claim_reward', { type: prefix });
-                setAdState({ show: false });
-            }).catch(e => {
-                setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'Popup ad failed to open or was blocked. Try again later.' });
-            });
-        } else {
-            window.show_10812134(adConfig).then(() => {
-                socket.emit('claim_reward', { type: prefix });
-                setAdState({ show: false });
-            }).catch(e => {
-                setAdState({ show: false });
-                setModal({ type: 'error', title: 'Ad Error', content: 'No ad available right now or skipped. Try again later.' });
-            });
-        }
-    };
-
-    const renderAdBtn = (adNum) => {
-        const prefix = adNum === 1 ? 'ad' : 'ad2';
-        const claims = adNum === 1 ? user.ad_claims_today : user.ad2_claims_today;
-        const isAvailable = adNum === 1 ? user.ad1_available : user.ad2_available;
-        const waitMins = Number(adNum === 1 ? user.ad1_wait_mins : user.ad2_wait_mins) || 0;
-        const maxClaims = adNum === 1 ? 3 : 5;
-
-        let btnText = `Watch ad (${claims}/${maxClaims})`;
-        let disabled = false;
-        
-        if (!isAvailable) {
-            disabled = true;
-            if (claims >= maxClaims) { 
-                btnText = `Max ${maxClaims}/${maxClaims} Reached`; 
-            } else { 
-                const wH = Math.floor(waitMins / 60);
-                const wM = waitMins % 60;
-                btnText = `Wait ${wH > 0 ? wH + 'h ' : ''}${wM > 0 ? wM + 'm' : ''}`.trim(); 
-            }
-        }
-
-        return (
-            <button className="btn btn-light fw-bold rounded-pill btn-sm w-100 text-dark" disabled={disabled} onClick={() => triggerAd(adNum, prefix)}>
-                {btnText}
-            </button>
-        );
     };
 
     let filteredRooms = rooms.filter(r => {
@@ -491,32 +531,11 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
 
     return (
         <div className="container mt-3 pb-4">
-            <div className="row mb-4">
-                <div className="col-md-6 mb-3">
-                    <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
-                        <h5><i className="fas fa-calendar-check"></i> Daily Claim</h5>
-                        <p className="small mb-2">Get 1 Free Credit everyday!</p>
-                        <button className="btn btn-light text-success fw-bold rounded-pill btn-sm w-100 mt-2" disabled={!user.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
-                            {user.daily_available ? 'Claim Now' : 'Claimed Today'}
-                        </button>
-                    </div>
-                </div>
-                <div className="col-md-6 mb-3">
-                    <div className="hero-section h-100" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #f43f5e 100%)'}}>
-                        <h5><i className="fas fa-tv"></i> Ad Bonuses</h5>
-                        <p className="small mb-2">Watch ads to earn Credits! (Bonus credits on final views)</p>
-                        <div className="d-flex flex-column gap-2 mt-2">
-                            {renderAdBtn(1)}
-                            {renderAdBtn(2)}
-                        </div>
-                    </div>
-                </div>
-            </div>
             
             <div className="d-flex justify-content-between align-items-center mb-3">
                 <h3 className="fw-bold m-0">Game Lobbies</h3>
                 {!isRoomLimitReached ? (
-                    <button className="btn btn-primary shadow-sm rounded-pill px-4" disabled={!hasGender} onClick={() => { if(hasGender) setModal({ type: 'create_room', title: 'Create Room' }) }}>
+                    <button className="btn btn-primary shadow-sm rounded-pill px-4" disabled={!hasProfileSetup} onClick={() => { if(hasProfileSetup) setModal({ type: 'create_room', title: 'Create Room' }) }}>
                         <i className="fas fa-plus"></i> Create
                     </button>
                 ) : (
@@ -547,16 +566,16 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
             </div>
 
             <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="position-relative swipe-container" style={{ minHeight: '300px' }}>
-                {!hasGender && (
+                {!hasProfileSetup && (
                     <div className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center pt-5" style={{zIndex: 10, background: 'rgba(248, 250, 252, 0.85)', backdropFilter: 'blur(3px)', borderRadius: '16px', border: '1px solid #e2e8f0'}}>
                         <i className="fas fa-lock text-danger mb-3" style={{fontSize: '3rem'}}></i>
                         <h5 className="fw-bold text-dark">Profile Locked</h5>
-                        <p className="text-muted small text-center px-4">Please set your gender in your Profile tab to enter game rooms.</p>
+                        <p className="text-muted small text-center px-4">Please set your Name and Gender in your Profile tab to enter game rooms.</p>
                     </div>
                 )}
 
                 <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
-                    <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} disabled={!hasGender} />
+                    <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} disabled={!hasProfileSetup} />
                 </div>
 
                 <div className="row g-3">
@@ -587,7 +606,7 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
                                             <i className="fas fa-users text-secondary"></i> {r.member_count} / {r.max_members}
                                         </div>
                                         <button className={`btn btn-sm ${isFull ? 'btn-light text-muted' : (isFree ? 'btn-success' : 'btn-primary')} rounded-pill px-4 fw-bold shadow-sm`} 
-                                            disabled={isFull || !hasGender}
+                                            disabled={isFull || !hasProfileSetup}
                                             onClick={() => {
                                                 if (r.is_private && activeTab !== 'my_rooms') {
                                                     setModal({ type: 'prompt_pwd', title: 'Join Private Room', room_id: r.id });
@@ -612,14 +631,6 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
                     )}
                 </div>
             </div>
-
-            {adState.show && (
-                <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
-                    <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
-                    <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
-                    <p className="text-muted mt-5 small">Please wait, do not close.</p>
-                </div>
-            )}
         </div>
     );
 };
