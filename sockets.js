@@ -183,18 +183,20 @@ module.exports = (io) => {
                     const result = [];
                     const ids = rows.map(r => r.tg_id);
                     
-                    const [userRows] = await db.query(`SELECT tg_id, avatar_url, gender FROM users WHERE tg_id IN (?)`, [ids]);
+                    const [userRows] = await db.query(`SELECT tg_id, avatar_url, gender, name FROM users WHERE tg_id IN (?)`, [ids]);
                     const avatarMap = {};
                     const genderMap = {};
+                    const nameMap = {};
                     userRows.forEach(u => {
                         avatarMap[u.tg_id] = u.avatar_url;
                         genderMap[u.tg_id] = u.gender;
+                        nameMap[u.tg_id] = u.name;
                     });
 
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id] });
+                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id], name: nameMap[id] });
                     }
                     return result;
                 };
@@ -224,7 +226,7 @@ module.exports = (io) => {
                 }
                 
                 const [rows] = await db.query(`
-                    SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender 
+                    SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender, u.name
                     FROM donations d
                     LEFT JOIN users u ON d.tg_id = u.tg_id
                     ORDER BY d.total_donated DESC LIMIT 50
@@ -233,7 +235,7 @@ module.exports = (io) => {
                 const leaderboard = [];
                 for (const row of rows) {
                     const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
-                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url, gender: row.gender });
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url, gender: row.gender, name: row.name });
                 }
                 await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); 
                 socket.emit('donators_leaderboard_data', leaderboard);
@@ -263,6 +265,33 @@ module.exports = (io) => {
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);
             } catch (err) { console.error('Set Gender Error:', err); }
+        });
+
+        socket.on('set_name', async ({ name }) => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser || typeof name !== 'string' || name.trim().length < 2) return;
+            try {
+                const [rows] = await db.query('SELECT name, credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (rows.length === 0) return;
+                
+                let cost = 0;
+                if (rows[0].name !== null) {
+                    cost = 5;
+                    if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change name.');
+                }
+                
+                const finalName = name.trim();
+                
+                if (cost > 0) {
+                    await db.query('UPDATE users SET credits = credits - ?, name = ? WHERE tg_id = ?', [cost, finalName, currentUser]);
+                    await redis.hset('user_credits', currentUser, rows[0].credits - cost);
+                } else {
+                    await db.query('UPDATE users SET name = ? WHERE tg_id = ?', [finalName, currentUser]);
+                }
+                socket.emit('reward_success', `Name updated to ${finalName}.`);
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            } catch (err) { console.error('Set Name Error:', err); }
         });
 
         socket.on('request_initial_drawings', async () => {
@@ -606,6 +635,8 @@ module.exports = (io) => {
             if (!room || !['DRAWING', 'PRE_DRAW'].includes(room.status)) return;
 
             const isDrawer = room.current_drawer_id === currentUser;
+            const uState = await getUserState(currentUser);
+            const dName = uState?.name || toHex(currentUser);
 
             if (isDrawer) {
                 if (room.status === 'PRE_DRAW') {
@@ -629,7 +660,7 @@ module.exports = (io) => {
                 if (member) member.has_given_up = 1;
                 
                 const cId = await redis.incr('global_chat_id');
-                const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} voted to give up.`, created_at: new Date() };
+                const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${dName} voted to give up.`, created_at: new Date() };
                 await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                 await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
 
@@ -756,14 +787,15 @@ module.exports = (io) => {
                     member.purchased_hints = JSON.stringify(purchased);
                     await saveRoom(room);
                     
+                    const uState = await getUserState(currentUser);
+                    const dName = uState?.name || toHex(currentUser);
+                    
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint for 1 Credit!`, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${dName} used a hint for 1 Credit!`, created_at: new Date() };
                     await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
                     
-                    const userState = await getUserState(currentUser);
-                    if (userState) socket.emit('user_update', userState);
-                    
+                    if (uState) socket.emit('user_update', uState);
                     await syncRoom(currentRoom, io);
                 }
             } catch (err) { console.error('Buy Hint Error:', err); }
@@ -788,8 +820,11 @@ module.exports = (io) => {
                     member.purchased_hints = JSON.stringify(purchased);
                     await saveRoom(room);
                     
+                    const uState = await getUserState(currentUser);
+                    const dName = uState?.name || toHex(currentUser);
+                    
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${toHex(currentUser)} used a hint by watching an ad!`, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: 'System', message: `${dName} used a hint by watching an ad!`, created_at: new Date() };
                     await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${currentRoom}:chats`, -30, -1);
                     
