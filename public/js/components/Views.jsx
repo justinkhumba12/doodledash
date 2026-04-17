@@ -161,7 +161,7 @@ const TasksView = ({ user, socket }) => {
     );
 };
 
-const LeaderboardView = ({ socket, setModal }) => {
+const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
     const [activeTab, setActiveTab] = useState('inviters');
     const [inviters, setInviters] = useState([]);
     const [guessers, setGuessers] = useState([]);
@@ -215,12 +215,14 @@ const LeaderboardView = ({ socket, setModal }) => {
                                     #{index + 1}
                                 </div>
                                 {l.avatar_url ? (
-                                    <div className="flex-shrink-0 ms-2">
-                                        <img src={l.avatar_url} className="rounded-circle shadow-sm border" width="40" height="40" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/>
+                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: l.avatar_url, gender: l.gender})}>
+                                        <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
                                     </div>
                                 ) : (
-                                    <div className="flex-shrink-0 ms-2">
-                                        <i className="fas fa-user-circle fs-1 text-secondary" style={{fontSize: '40px'}}></i>
+                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: null, gender: l.gender})}>
+                                        <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
+                                            <i className="fas fa-user fs-5"></i>
+                                        </div>
                                     </div>
                                 )}
                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
@@ -320,12 +322,14 @@ const LeaderboardView = ({ socket, setModal }) => {
                                                     #{index + 1}
                                                 </div>
                                                 {d.avatar_url ? (
-                                                    <div className="flex-shrink-0 ms-2">
-                                                        <img src={d.avatar_url} className="rounded-circle shadow-sm border" width="40" height="40" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/>
+                                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: d.tg_id, pic: d.avatar_url, gender: d.gender})}>
+                                                        <img src={d.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
                                                     </div>
                                                 ) : (
-                                                    <div className="flex-shrink-0 ms-2">
-                                                        <i className="fas fa-user-circle fs-1 text-secondary" style={{fontSize: '40px'}}></i>
+                                                    <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: d.tg_id, pic: null, gender: d.gender})}>
+                                                        <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
+                                                            <i className="fas fa-user fs-5"></i>
+                                                        </div>
                                                     </div>
                                                 )}
                                                 <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
