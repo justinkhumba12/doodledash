@@ -421,7 +421,7 @@ const App = () => {
                     </div>
                     <h4 className="fw-bold text-dark mb-2">Connection Lost</h4>
                     <p className="text-muted small mb-4">We've lost touch with the server. Let's try getting you back online.</p>
-                    <button className="btn btn-danger rounded-pill px-5 py-3 fw-bold shadow-sm w-100" disabled={isReloading} onClick={() => { 
+                    <button className="btn btn-danger rounded-pill py-2 fw-bold shadow-sm w-100" disabled={isReloading} onClick={() => { 
                         setIsReloading(true); 
                         if (socket) {
                             socket.connect();
@@ -430,7 +430,7 @@ const App = () => {
                             window.location.reload();
                         }
                     }}>
-                        {isReloading ? <><i className="fas fa-spinner fa-spin me-2"></i> Reconnecting...</> : <><i className="fas fa-redo me-2"></i> Reconnect</>}
+                        {isReloading ? 'Reconnecting...' : 'Reconnect'}
                     </button>
                 </div>
             </div>
@@ -485,10 +485,11 @@ const App = () => {
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                <div className="badge bg-light text-dark border border-warning px-3 py-2 rounded-pill shadow-sm d-flex align-items-center">
-                    <i className="fas fa-coins text-warning me-1"></i> <b className="me-2">{user.credits}</b>
-                    <button className="btn btn-sm btn-link p-0 text-success m-0 lh-1" onClick={handleLoadBalance} title="Load Balance">
-                        <i className="fas fa-plus-circle fs-5"></i>
+                <div className="d-flex align-items-center bg-white rounded-pill shadow-sm border" style={{ padding: '4px 8px 4px 12px' }}>
+                    <i className="fas fa-coins text-warning fs-5 me-2" style={{ filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' }}></i>
+                    <span className="fw-bold fs-6 me-3" style={{ color: '#1e293b' }}>{user.credits}</span>
+                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm hover-up" onClick={handleLoadBalance} title="Load Balance" style={{ width: '28px', height: '28px' }}>
+                        <i className="fas fa-plus text-white" style={{ fontSize: '0.8rem' }}></i>
                     </button>
                 </div>
             </div>
@@ -498,7 +499,7 @@ const App = () => {
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} />}
-                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} />}
+                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} />}
                         {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} />}
                         
                         <div className="bottom-nav">
@@ -615,7 +616,7 @@ const App = () => {
                            )}
                            <h3 className="mb-1">{window.toHex(profileModal.user_id)}</h3>
                            <p className="text-muted small fw-bold mb-3">{profileModal.gender || 'Gender Not Set'}</p>
-                           <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close Profile</button>
+                           <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
                        </div>
                    ) : (
                        <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
