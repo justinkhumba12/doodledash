@@ -1,318 +1,377 @@
-const { useState, useEffect } = React;
+const { useState } = React;
 
 const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted }) => {
     if (!modal) return null;
-
-    const [inputValue, setInputValue] = useState('');
-    const [isPrivate, setIsPrivate] = useState(false);
+    const [pwd, setPwd] = useState('');
+    const [isPriv, setIsPriv] = useState(false);
     const [maxMembers, setMaxMembers] = useState(4);
     const [expireHours, setExpireHours] = useState(2);
-    const [autoJoin, setAutoJoin] = useState(true);
+    
+    // New Ad loading state for Hints
+    const [adLoading, setAdLoading] = useState(false);
 
-    const close = () => setModal(null);
+    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
 
-    const renderContent = () => {
-        switch (modal.type) {
-            case 'sound_policy':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-volume-up text-primary fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Enable Game Sounds</h4>
-                        <p className="text-muted small">DoodleDash uses sound effects for messages and guesses to keep you in the game!</p>
-                        <button className="btn btn-primary rounded-pill w-100 fw-bold shadow-sm" onClick={() => {
-                            setSoundPolicyAccepted(true);
-                            close();
-                        }}>Allow Sounds</button>
-                    </div>
-                );
-
-            case 'error':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-exclamation-circle text-danger fs-1 mb-3"></i>
-                        <h4 className="fw-bold">{modal.title || 'Error'}</h4>
-                        <p className="text-muted">{modal.content}</p>
-                        <button className="btn btn-secondary rounded-pill px-4 fw-bold" onClick={close}>Close</button>
-                    </div>
-                );
-
-            case 'success':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-check-circle text-success fs-1 mb-3"></i>
-                        <h4 className="fw-bold">{modal.title || 'Success'}</h4>
-                        <p className="text-muted">{modal.content}</p>
-                        <button className="btn btn-success rounded-pill px-4 fw-bold" onClick={close}>Awesome!</button>
-                    </div>
-                );
-
-            case 'idle_warning':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-clock text-warning fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Are you still there?</h4>
-                        <p className="text-muted">You will be disconnected in <strong className="text-danger">{idleTimer}</strong> seconds.</p>
-                        <button className="btn btn-primary rounded-pill px-4 fw-bold" onClick={() => {
-                            if (socket) socket.emit('active_event');
-                            close();
-                        }}>I'm Here!</button>
-                    </div>
-                );
-
-            case 'confirm_leave':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-sign-out-alt text-danger fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Leave Room?</h4>
-                        <p className="text-muted">Are you sure you want to return to the lobby?</p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-danger rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('leave_room');
-                                close();
-                            }}>Leave</button>
-                        </div>
-                    </div>
-                );
-
-            case 'create_room':
-                return (
-                    <div>
-                        <h4 className="fw-bold text-center mb-3">Create Room</h4>
-                        <div className="mb-3">
-                            <div className="form-check form-switch mb-2">
-                                <input className="form-check-input shadow-none" type="checkbox" id="isPrivate" checked={isPrivate} onChange={e => setIsPrivate(e.target.checked)} />
-                                <label className="form-check-label fw-bold" htmlFor="isPrivate">Private Room (Requires Password)</label>
-                            </div>
-                            {isPrivate && (
-                                <>
-                                    <input type="text" className="form-control mb-2 rounded" placeholder="Password (6-10 chars)" maxLength="10" value={inputValue} onChange={e => setInputValue(e.target.value)} />
-                                    <div className="d-flex justify-content-between mb-2">
-                                        <span className="small text-muted fw-bold">Duration</span>
-                                        <select className="form-select form-select-sm w-auto shadow-none" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                                            <option value={2}>2 Hours</option>
-                                            <option value={4}>4 Hours</option>
-                                        </select>
-                                    </div>
-                                </>
-                            )}
-                            <div className="d-flex justify-content-between align-items-center mb-3 mt-2">
-                                <span className="small text-muted fw-bold">Max Players</span>
-                                <select className="form-select form-select-sm w-auto shadow-none" value={maxMembers} onChange={e => setMaxMembers(Number(e.target.value))}>
-                                    <option value={2}>2 Players</option>
-                                    <option value={3}>3 Players</option>
-                                    <option value={4}>4 Players</option>
-                                </select>
-                            </div>
-                            <div className="form-check form-switch">
-                                <input className="form-check-input shadow-none" type="checkbox" id="autoJoin" checked={autoJoin} onChange={e => setAutoJoin(e.target.checked)} />
-                                <label className="form-check-label small fw-bold text-muted" htmlFor="autoJoin">Auto-join upon creation</label>
-                            </div>
-                        </div>
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('create_room', { is_private: isPrivate, password: inputValue, max_members: maxMembers, expire_hours: expireHours, auto_join: autoJoin });
-                                close();
-                            }}>Create</button>
-                        </div>
-                    </div>
-                );
-
-            case 'prompt_pwd':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-lock text-warning fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Private Room</h4>
-                        <p className="text-muted small mb-3">Please enter the password to join Room {modal.room_id}.</p>
-                        <input type="text" className="form-control text-center mb-3 rounded" placeholder="Password" value={inputValue} onChange={e => setInputValue(e.target.value)} />
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('join_room', { room_id: modal.room_id, password: inputValue });
-                                close();
-                            }}>Join</button>
-                        </div>
-                    </div>
-                );
-
-            case 'change_password':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-key text-primary fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Change Password</h4>
-                        <p className="text-muted small mb-3">Enter a new password (6-10 chars).</p>
-                        <input type="text" className="form-control text-center mb-3 rounded" placeholder="New Password" maxLength="10" value={inputValue} onChange={e => setInputValue(e.target.value)} />
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-success rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('change_password', { password: inputValue });
-                                close();
-                            }}>Update</button>
-                        </div>
-                    </div>
-                );
-
-            case 'extend_room':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-clock text-info fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Extend Room</h4>
-                        <p className="text-muted small mb-3">Add more time before your private room expires.</p>
-                        <select className="form-select mb-3 shadow-none text-center" value={expireHours} onChange={e => setExpireHours(Number(e.target.value))}>
-                            <option value={2}>+ 2 Hours (Cost: 1 Credit)</option>
-                            <option value={4}>+ 4 Hours (Cost: 2 Credits)</option>
-                        </select>
-                        <div className="d-flex gap-2">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('extend_room', { expire_hours: expireHours });
-                                close();
-                            }}>Extend</button>
-                        </div>
-                    </div>
-                );
-
-            case 'confirm_delete_room':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-trash-alt text-danger fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Delete Room?</h4>
-                        <p className="text-muted small">This will kick all players and close the room permanently. Are you sure?</p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-danger rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('delete_room');
-                                close();
-                            }}>Delete</button>
-                        </div>
-                    </div>
-                );
-
-            case 'confirm_buy_ink':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-tint text-primary fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Refill Ink</h4>
-                        <p className="text-muted small">Run out of ink? Refill your pen for {modal.cost} Credit.</p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('buy_ink');
-                                close();
-                            }}>Buy Ink</button>
-                        </div>
-                    </div>
-                );
-
-            case 'confirm_buy_hint':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-lightbulb text-warning fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Reveal Letter</h4>
-                        <p className="text-muted small">Unlock this letter hint to help you guess?</p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-warning rounded-pill flex-grow-1 fw-bold text-dark" onClick={() => {
-                                if (socket) socket.emit('buy_hint', { index: modal.index });
-                                close();
-                            }}>Unlock (1 Credit)</button>
-                        </div>
-                    </div>
-                );
-                
-            case 'confirm_guess_credit':
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-unlock text-success fs-1 mb-3"></i>
-                        <h4 className="fw-bold">{modal.title}</h4>
-                        <p className="text-muted small">You've reached the free guess limit. Use 1 Credit to unlock 2 more guesses for this round?</p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-success rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('guess', { guess: modal.guess });
-                                close();
-                            }}>Unlock (1 Credit)</button>
-                        </div>
-                    </div>
-                );
-
-            case 'confirm_drawer_give_up':
-            case 'confirm_guesser_give_up':
-                const isDrawer = modal.type === 'confirm_drawer_give_up';
-                return (
-                    <div className="text-center">
-                        <i className="fas fa-flag text-danger fs-1 mb-3"></i>
-                        <h4 className="fw-bold">Give Up?</h4>
-                        <p className="text-muted small">
-                            {isDrawer 
-                                ? "Are you sure you want to give up drawing? This will end your turn." 
-                                : "Vote to give up this round? If everyone gives up, the word is revealed."}
-                        </p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-danger rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) socket.emit('give_up');
-                                close();
-                            }}>Confirm</button>
-                        </div>
-                    </div>
-                );
-
-            case 'confirm_gender_change':
-            case 'confirm_name_change':
-                const isName = modal.type === 'confirm_name_change';
-                return (
-                    <div className="text-center">
-                        <i className={`fas ${isName ? 'fa-id-card' : 'fa-venus-mars'} text-primary fs-1 mb-3`}></i>
-                        <h4 className="fw-bold">Confirm Change</h4>
-                        <p className="text-muted small">
-                            {modal.isFirstTime 
-                                ? `Are you sure you want to set your ${isName ? 'name' : 'gender'}? This is free the first time.` 
-                                : `Changing your ${isName ? 'name' : 'gender'} will cost 5 Credits. Are you sure?`}
-                        </p>
-                        <div className="d-flex gap-2 mt-3">
-                            <button className="btn btn-light border rounded-pill flex-grow-1 fw-bold" onClick={close}>Cancel</button>
-                            <button className="btn btn-primary rounded-pill flex-grow-1 fw-bold" onClick={() => {
-                                if (socket) {
-                                    if (isName) socket.emit('set_name', { name: modal.name });
-                                    else socket.emit('set_gender', { gender: modal.gender });
-                                }
-                                close();
-                            }}>Confirm</button>
-                        </div>
-                    </div>
-                );
-
-            case 'leaderboard_rules':
-                return (
-                    <div>
-                        <h4 className="fw-bold text-center mb-3">Leaderboard Info</h4>
-                        <ul className="text-muted small mb-0 ps-3">
-                            <li className="mb-2"><strong>Top Inviters:</strong> Players with the most successful invites this week.</li>
-                            <li className="mb-2"><strong>Top Guessers:</strong> Players who correctly guessed the most words this week.</li>
-                            <li className="mb-2"><strong>Donators:</strong> All-time top supporters of DoodleDash via Telegram Stars.</li>
-                            <li><em>Weekly challenges reset every Monday. Top 5 players in weekly categories win Credit rewards!</em></li>
-                        </ul>
-                        <button className="btn btn-primary w-100 rounded-pill mt-4 fw-bold shadow-sm" onClick={close}>Got It</button>
-                    </div>
-                );
-
-            default:
-                return null;
+    const triggerHintAd = (index) => {
+        setAdLoading(true);
+        if (typeof window.show_10812134 !== 'function') {
+            socket.emit('buy_hint_ad', { index });
+            setAdLoading(false);
+            return;
         }
+        window.show_10812134({ ymid: window.tgId || 'unknown' }).then(() => {
+            socket.emit('buy_hint_ad', { index });
+            setAdLoading(false);
+        }).catch(e => {
+            setAdLoading(false);
+            setTimeout(() => setModal({ type: 'error', title: 'Ad Error', content: 'Ad failed to load or skipped.' }), 100);
+        });
     };
 
-    return (
-        <div className="wb-overlay" style={{ zIndex: 1060, backgroundColor: 'rgba(0,0,0,0.6)' }} onClick={close}>
-            <div className="call-toast bg-white rounded-4 shadow p-4 position-relative" style={{ minWidth: '320px', maxWidth: '400px', margin: 'auto' }} onClick={e => e.stopPropagation()}>
-                {modal.type !== 'sound_policy' && modal.type !== 'idle_warning' && (
-                    <button className="btn-close position-absolute top-0 end-0 m-3" onClick={close}></button>
-                )}
-                {renderContent()}
+    let content = null;
+    if (modal.type === 'sound_policy') {
+        content = (
+            <div className="text-center py-3">
+                <i className="fas fa-volume-up fs-1 text-primary mb-3"></i>
+                <h5 className="fw-bold text-dark">Enable Sound?</h5>
+                <p className="text-muted small mb-4">Accept sound policy to trigger enable auto play sound for messages and guesses.</p>
+                <button className="btn btn-primary w-100 rounded-pill py-2 fw-bold" onClick={() => {
+                    const mgsSound = document.getElementById('mgsSound');
+                    if (mgsSound) {
+                        mgsSound.volume = 0.5;
+                        mgsSound.play().catch(()=>{});
+                    }
+                    if (setSoundPolicyAccepted) setSoundPolicyAccepted(true);
+                    close();
+                }}>Accept</button>
             </div>
-        </div>
+        );
+    } else if (modal.type === 'leaderboard_rules') {
+        content = (
+            <>
+                <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
+                <div className="small text-muted text-start mt-3 ps-1">
+                    {modal.activeTab === 'inviters' && (
+                        <p className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</p>
+                    )}
+                    {modal.activeTab === 'guessers' && (
+                        <p className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</p>
+                    )}
+                    {modal.activeTab === 'donators' && (
+                        <p className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! Refreshes immediately on new donations.</p>
+                    )}
+                    <p className="mb-0"><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</p>
+                </div>
+                <button className="btn btn-secondary w-100 rounded-pill mt-4" onClick={close}>Close</button>
+            </>
+        );
+    } else if (modal.type === 'idle_warning') {
+        content = (
+            <div className="text-center py-3">
+                <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
+                <p className="text-muted small">You've been idle for a while.</p>
+                <h1 className="text-danger fw-bold display-4 my-3">{idleTimer}s</h1>
+                <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
+                    socket.emit('active_event');
+                    close();
+                }}>Confirm</button>
+            </div>
+        );
+    } else if (modal.type === 'success' || modal.type === 'error') {
+        content = (
+            <>
+                <div className="mb-4 text-muted">{modal.content}</div>
+                <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
+            </>
+        );
+    } else if (modal.type === 'create_room') {
+        let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
+        let durationCost = expireHours === 2 ? 1 : 2;
+        let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
+
+        content = (
+            <>
+                <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
+                    <div>
+                        <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-lock text-danger me-2"></i>Private Room</h6>
+                        <small className="text-muted">Require password</small>
+                    </div>
+                    <div className="form-check form-switch fs-4 mb-0">
+                        <input className="form-check-input mt-0 cursor-pointer shadow-none" type="checkbox" checked={isPriv} readOnly />
+                    </div>
+                </div>
+
+                {isPriv ? (
+                    <>
+                        <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                        
+                        <div className="mb-3">
+                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
+                            <div className="d-flex gap-2">
+                                {[2, 3, 4].map(num => (
+                                    <div key={num}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s'}}>
+                                        <div className="fw-bold fs-5">{num}</div>
+                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{num === 2 ? 1 : (num === 3 ? 3 : 4)} Creds</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div className="mb-3">
+                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
+                            <div className="d-flex gap-2">
+                                {[2, 4].map(hours => (
+                                    <div key={hours}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
+                                        <div className="fw-bold fs-5">{hours} <span className="fs-6">hrs</span></div>
+                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="mb-3">
+                            <label className="form-label text-muted small mb-1 fw-bold">Max Players</label>
+                            <div className="w-100 text-center border rounded-3 py-2 bg-light text-muted">
+                                <div className="fw-bold fs-5">4</div>
+                                <div style={{fontSize: '0.65rem'}}>Players (Fixed)</div>
+                            </div>
+                        </div>
+                        <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
+                            <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
+                            <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
+                        </div>
+                    </>
+                )}
+
+                {(isPriv) && (
+                    <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between">
+                        <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
+                        <span>{baseRoomCost} Credits</span>
+                    </div>
+                )}
+
+                <div className="d-flex gap-2">
+                    <button className="btn btn-light w-50 rounded-pill fw-bold border" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold shadow-sm" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
+                        socket.emit('create_room', { 
+                            is_private: isPriv, 
+                            password: pwd, 
+                            max_members: isPriv ? maxMembers : 4, 
+                            expire_hours: expireHours, 
+                            auto_join: true 
+                        }); 
+                        close(); 
+                    }}>Create</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'change_password') {
+        content = (
+            <>
+                <p className="text-muted small">Set a new password (6-10 digits).</p>
+                <input type="number" className="form-control mb-3" placeholder="New Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_delete_room') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to delete this room? Everyone will be kicked and it cannot be undone.</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_room'); close(); }}>Delete</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'prompt_pwd') {
+        content = (
+            <>
+                <p className="text-muted">Enter password to join Room {modal.room_id}</p>
+                <input type="number" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'extend_room') {
+        content = (
+            <>
+                <div className="mb-3">
+                    <label className="form-label text-muted small mb-2 fw-bold">Add Duration</label>
+                    <div className="d-flex gap-2">
+                        {[2, 4].map(hours => (
+                            <div key={hours}
+                                 className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                 onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
+                                <div className="fw-bold fs-5">+{hours} <span className="fs-6">hrs</span></div>
+                                <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between shadow-sm">
+                    <span><i className="fas fa-coins text-warning me-1"></i> Cost:</span>
+                    <span>{expireHours === 4 ? 2 : 1} Credits</span>
+                </div>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-light border w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                    <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}>Extend</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'kick_player') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to remove this player from your room?</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}>Remove</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_leave') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}>Leave</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_guess_credit') {
+        content = (
+            <>
+                <p className="text-muted">You have used your 4 free guesses. Unlock your final 2 guesses for <b>1 Credit</b>.</p>
+                <div className="alert alert-warning text-center" style={{letterSpacing: '3px'}}><b>{modal.guess}</b></div>
+                <div className="d-flex gap-2 mt-4">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_buy_hint') {
+        content = (
+            <>
+                <p className="text-muted">Reveal this hidden character for <b>1 Credit</b> or Watch an Ad for free! (Limit 1 per round)</p>
+                <div className="alert alert-warning text-center py-2 mb-3"><i className="fas fa-lightbulb"></i> Hint Options</div>
+                <div className="d-flex flex-column gap-2 mt-2">
+                    <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal</button>
+                    <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}>Watch</button>
+                    <button className="btn btn-secondary w-100 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_gender_change') {
+        content = (
+            <>
+                <p className="text-dark text-center mb-3">
+                    Are you sure you want to set your gender to <b>{modal.gender}</b>?
+                </p>
+                {modal.isFirstTime ? (
+                    <div className="alert alert-info py-2 small mb-4">
+                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
+                    </div>
+                ) : (
+                    <div className="alert alert-warning py-2 small mb-4">
+                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
+                    </div>
+                )}
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_name_change') {
+        content = (
+            <>
+                <p className="text-dark text-center mb-3">
+                    Are you sure you want to set your display name to <b>{modal.name}</b>?
+                </p>
+                {modal.isFirstTime ? (
+                    <div className="alert alert-info py-2 small mb-4">
+                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
+                    </div>
+                ) : (
+                    <div className="alert alert-warning py-2 small mb-4">
+                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
+                    </div>
+                )}
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_name', { name: modal.name }); close(); }}>Confirm</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_drawer_give_up') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to give up? This will skip your turn immediately.</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Quit</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_guesser_give_up') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Vote</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_buy_ink') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">
+                    Refill your ink supply to keep drawing? (Limit: Max 5000 Ink Output/Round)
+                </p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>
+                        Buy
+                    </button>
+                </div>
+            </>
+        );
+    }
+
+    return (
+        <>
+            <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
+                <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
+                        {modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && <button className="btn-close" onClick={close}></button>}
+                    </div>
+                    {content}
+                </div>
+            </div>
+            
+            {adLoading && (
+                <div className="wb-overlay" style={{ zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed', top:0, left:0, right:0, bottom:0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <h2 className="text-white mb-4 fw-bold text-center">Loading Advertisement</h2>
+                    <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
+                    <p className="text-muted mt-2 small text-center">Please wait, your reward is loading.</p>
+                </div>
+            )}
+        </>
     );
 };
 
+// Expose to window for the main app
 window.ModalManager = ModalManager;
