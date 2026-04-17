@@ -1,377 +1,812 @@
-const { useState } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
-const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted }) => {
-    if (!modal) return null;
-    const [pwd, setPwd] = useState('');
-    const [isPriv, setIsPriv] = useState(false);
-    const [maxMembers, setMaxMembers] = useState(4);
-    const [expireHours, setExpireHours] = useState(2);
+const RANDOM_WORDS = ["bell","belt","bench","berry","bib","bike","bin","bird","blanket","block","blue","board","boat","bolt","bomb","bone","book","boot","bottle","bow","bowl","box","branch","bread","brick","broom","brush","bubble","bucket","bud","bug","bulb","bun","bunny","bus","bush","button","cabin","cactus","cage","cake","camel","camera","camp","can","candy","cane","canoe","cap","cape","card","carrot","cart","castle","cat","cave","chain","chair","chalk","cheese","chest","chin","chip","circle","city","claw","clay","clip","clock","cloud","club","coat","coin","comb","cone","coral","cord","cork","corn","couch","cow","crab","crown","cube","cup","curtain","cushion","dart","deer","desk","dice","dish","dock","dog","doll","door","donut","dot","dove","dragon","mat","medal","melon","mic","milk","mint","mirror","mitt","mole","money","mop","motor","mug","nail","napkin","net","nose","nut","oar","onion","orange","owl","paint","pan","panda","pants","paper","park","parrot","pasta","paw","pea","peach","pear","pen","pencil","pepper","piano","pig","pillow","pin","pine","pipe","pizza","plane","plate","plum","pocket","pond","pony","popcorn","pot","potato","pumpkin","purse","puzzle","quill","rabbit","rake","rat","ribbon","rice","ring","river","robot","rock","rocket","roller","rope","rose","ruler","saddle","salt","sand","saw","scarf","scissors","screw","seed","sheep","shell","shield","ship","shirt","shoe","shovel","sink","skate","skirt","skull","sled","slide","slime","snail","snake","sock","sofa","soil","spear","spider","spoon","spring","square","squid","star","stick","stone","stool","straw","string","stump","sugar","sun","surf","swan","swing","sword","taco","tail","tape","teapot","teddy","tent","tie","tiger","tile","tire","toast","toe","tomato","tooth","top","torch","towel","tower","toy","train","tray","tree","truck","tube","tulip","turtle","tv","umbrella","vase","vest","vine","violin","wagon","wall","wand","watch","wave","web","whale","wheat","wheel","whip","whistle","wig","wind","window","wing","wire","wolf","worm","yarn","yoyo","zebra","zipper","zombie","acorn","airplane","almond","anchor","angel","ant","apron","arm","arrow","ash","axe","badge","bag","bait","ball","bamboo","band","bank","banner","barn","barrel","basket","bat","battery","beach","bean","beard","bee","bagel","bakery","balcony","balloon","bandana","bar","bark","bath","beanbag","beehive","bicycle","blender","bonnet","bracelet","bridge","buckle","buffalo","calendar","campfire","candle","capsule","carpet","catfish","cloth","cobra","collar","compass","cookie","crate","dome","drill","drum","duck","dust","eagle","ear","egg","elbow","elk","engine","envelope","eye","fan","fang","farm","feather","fence","fern","ferry","fig","fin","fire","fish","flag","flame","flute","fly","fog","fork","fox","frame","frog","fruit","gate","gear","gem","gift","glass","glove","glue","goat","goblet","goggles","gold","goose","grape","grass","grill","guitar","hair","hammer","hand","hanger","hat","heart","hive","hook","horn","horse","hose","house","ice","ink","iron","island","jacket","jam","jar","jaw","jeep","jelly","jet","jewel","key","kite","knee","knife","ladder","lake","lamp","land","leaf","leg","lemon","letter","lid","light","lily","lime","line","lock","log","lollipop","loop","magnet","mailbox","map","mask","match","mail","dune","food","foot","girl","gun","hill","lantern","leash","ankle","anvil","applepie","armor","astronaut","avocado","bandage","banjo","beaver","blueberry","broomstick","building","calculator","calf","cherry","chimney","cloak","clover","coconut","comet","cotton","cutlass","dagger","daisy","diamond","eraser","fountain","funnel","galaxy","gamepad","ginger","goldfish","golf","grid","gum","hamster","helmet","icecream","moon","table","bed","car","rain","snow","flower","apple","banana","mango","burger","phone","marker","radio","lion","mouse","shark","penguin","squirrel","mountain","road","garden","ghost","smile","baby","bear","beetle","dolphin","donkey","elephant","flamingo","giraffe","hawk","hippo","iguana","kitten","koala","lizard","llama","monkey","moose","otter","peacock","seal","slug","turkey", "yak","arch","chess","flash","glasses","ladle","needle","nest","ocean","paddle","poster","quilt","sail","scale","spark","tank","ticket","tractor","wallet"];
+
+const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
+    const canvasRef = useRef(null);
+    const [localTimeLeft, setLocalTimeLeft] = useState(0);
+    const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
     
-    // New Ad loading state for Hints
-    const [adLoading, setAdLoading] = useState(false);
+    const drawingRef = useRef(false);
+    const currentLineRef = useRef([]);
+    const lastPosRef = useRef({x: 0, y: 0});
+    const inkUsedRef = useRef(0);
+    const localInkRef = useRef({});
+    
+    const initialDrawingsRef = useRef([]);
+    
+    const drawQueueRef = useRef([]);
+    const emitTimeoutRef = useRef(null);
 
-    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
+    const { room, members } = roomData;
+    const isDrawer = room.current_drawer_id === tgId;
+    const isDrawingPhase = room.status === 'DRAWING';
+    
+    const isMeReady = members.find(m => m.user_id === tgId)?.is_ready;
+    const readyCount = members.filter(m => m.is_ready).length;
+    
+    const [wordInput, setWordInput] = useState('');
+    
+    // Derived ink data based on drawer
+    const drawerMember = members.find(m => m.user_id === room.current_drawer_id) || {};
+    const drawerInkExtraObj = drawerMember.ink_extra || {};
+    
+    const currentMaxInk = window.INK_CONFIG.black.free + (drawerInkExtraObj['black'] || 0);
 
-    const triggerHintAd = (index) => {
-        setAdLoading(true);
-        if (typeof window.show_10812134 !== 'function') {
-            socket.emit('buy_hint_ad', { index });
-            setAdLoading(false);
+    const currentMaxInkRef = useRef(currentMaxInk);
+    useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
+
+    // Reactions State
+    const [userReactions, setUserReactions] = useState({});
+    const emojis = ['😂', '😍', '😋', '💦', '🍑', '🍆'];
+
+    const updateInkUI = useCallback(() => {
+        if (!isDrawingPhase) return;
+        const max = currentMaxInkRef.current;
+        const inkLeft = Math.max(0, max - inkUsedRef.current);
+        const inkPercent = max > 0 ? (inkLeft / max) * 100 : 0;
+        
+        const bar = document.getElementById('inkProgressBar');
+        const text = document.getElementById('inkProgressText');
+        const buyBtn = document.getElementById('buyInkBtn');
+        
+        if (bar) {
+            bar.style.width = `${inkPercent}%`;
+            if (inkLeft <= (max * 0.2) && max > 0) {
+                bar.style.backgroundColor = '';
+                bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+            } else {
+                bar.style.backgroundColor = '#1e293b';
+                bar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+            }
+        }
+        if (text) {
+            text.className = (inkLeft <= (max * 0.2) && max > 0) ? 'text-danger fw-bold' : 'text-muted';
+            text.innerText = `${Math.floor(inkLeft)} / ${max}`;
+        }
+        
+        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
+        if (buyBtn) {
+            buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
+        }
+    }, [isDrawer, isDrawingPhase, drawerInkExtraObj]);
+
+    const updateInkUIRef = useRef(updateInkUI);
+    useEffect(() => { updateInkUIRef.current = updateInkUI; });
+
+    useEffect(() => {
+        if (room.status !== 'DRAWING') {
+            localInkRef.current = {};
+            inkUsedRef.current = 0;
             return;
         }
-        window.show_10812134({ ymid: window.tgId || 'unknown' }).then(() => {
-            socket.emit('buy_hint_ad', { index });
-            setAdLoading(false);
-        }).catch(e => {
-            setAdLoading(false);
-            setTimeout(() => setModal({ type: 'error', title: 'Ad Error', content: 'Ad failed to load or skipped.' }), 100);
-        });
+        // Initialize ink based on drawer state when joining phase
+        const drawerInkUsedObj = drawerMember.ink_used || {};
+        localInkRef.current['black'] = drawerInkUsedObj['black'] || 0;
+        inkUsedRef.current = localInkRef.current['black'] || 0;
+        updateInkUI();
+    }, [room.status, drawerMember.ink_used, updateInkUI]);
+
+    useEffect(() => {
+        if (!socket) return;
+        const handleUpdateInk = ({ color, used }) => {
+            if (color === 'black') {
+                inkUsedRef.current = used;
+                localInkRef.current['black'] = used;
+                updateInkUIRef.current();
+            }
+        };
+        socket.on('update_ink', handleUpdateInk);
+        return () => socket.off('update_ink', handleUpdateInk);
+    }, [socket]);
+
+    // Reactions cleanup and handler
+    useEffect(() => {
+        if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
+            setUserReactions({});
+        }
+    }, [room.status, room.turn_index]);
+
+    useEffect(() => {
+        if (!socket) return;
+        const handleReaction = ({ user_id, emoji, action }) => {
+            setUserReactions(prev => {
+                const next = { ...prev };
+                if (action === 'remove') {
+                    delete next[user_id];
+                } else {
+                    next[user_id] = emoji;
+                }
+                return next;
+            });
+        };
+        socket.on('new_reaction', handleReaction);
+        return () => socket.off('new_reaction', handleReaction);
+    }, [socket]);
+
+    const sendReaction = (emoji) => {
+        if (isDrawer) return; // Drawee cannot react
+        if (socket) {
+            const action = userReactions[tgId] === emoji ? 'remove' : 'add';
+            socket.emit('send_reaction', { emoji, action });
+            // Optimistic update
+            setUserReactions(prev => {
+                const next = { ...prev };
+                if (action === 'remove') {
+                    delete next[tgId];
+                } else {
+                    next[tgId] = emoji;
+                }
+                return next;
+            });
+        }
     };
 
-    let content = null;
-    if (modal.type === 'sound_policy') {
-        content = (
-            <div className="text-center py-3">
-                <i className="fas fa-volume-up fs-1 text-primary mb-3"></i>
-                <h5 className="fw-bold text-dark">Enable Sound?</h5>
-                <p className="text-muted small mb-4">Accept sound policy to trigger enable auto play sound for messages and guesses.</p>
-                <button className="btn btn-primary w-100 rounded-pill py-2 fw-bold" onClick={() => {
-                    const mgsSound = document.getElementById('mgsSound');
-                    if (mgsSound) {
-                        mgsSound.volume = 0.5;
-                        mgsSound.play().catch(()=>{});
-                    }
-                    if (setSoundPolicyAccepted) setSoundPolicyAccepted(true);
-                    close();
-                }}>Accept</button>
-            </div>
-        );
-    } else if (modal.type === 'leaderboard_rules') {
-        content = (
-            <>
-                <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
-                <div className="small text-muted text-start mt-3 ps-1">
-                    {modal.activeTab === 'inviters' && (
-                        <p className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</p>
-                    )}
-                    {modal.activeTab === 'guessers' && (
-                        <p className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</p>
-                    )}
-                    {modal.activeTab === 'donators' && (
-                        <p className="mb-2"><b>Top Donators:</b> All-time list of our generous supporters! Refreshes immediately on new donations.</p>
-                    )}
-                    <p className="mb-0"><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</p>
-                </div>
-                <button className="btn btn-secondary w-100 rounded-pill mt-4" onClick={close}>Close</button>
-            </>
-        );
-    } else if (modal.type === 'idle_warning') {
-        content = (
-            <div className="text-center py-3">
-                <i className="fas fa-user-clock fs-1 text-warning mb-3"></i>
-                <p className="text-muted small">You've been idle for a while.</p>
-                <h1 className="text-danger fw-bold display-4 my-3">{idleTimer}s</h1>
-                <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
-                    socket.emit('active_event');
-                    close();
-                }}>Confirm</button>
-            </div>
-        );
-    } else if (modal.type === 'success' || modal.type === 'error') {
-        content = (
-            <>
-                <div className="mb-4 text-muted">{modal.content}</div>
-                <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
-            </>
-        );
-    } else if (modal.type === 'create_room') {
-        let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
-        let durationCost = expireHours === 2 ? 1 : 2;
-        let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
+    useEffect(() => {
+        if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
+            const offset = Date.now() - new Date(roomData.server_time).getTime();
+            const targetTime = new Date(room.break_end_time).getTime() + offset;
+            
+            const updateTime = () => {
+                const diff = targetTime - Date.now();
+                setLocalTimeLeft(Math.max(0, Math.ceil(diff / 1000)));
+            };
+            updateTime();
+            const intv = setInterval(updateTime, 1000);
+            return () => clearInterval(intv);
+        }
+    }, [room.status, room.break_end_time, roomData.server_time]);
 
-        content = (
-            <>
-                <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
-                    <div>
-                        <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-lock text-danger me-2"></i>Private Room</h6>
-                        <small className="text-muted">Require password</small>
-                    </div>
-                    <div className="form-check form-switch fs-4 mb-0">
-                        <input className="form-check-input mt-0 cursor-pointer shadow-none" type="checkbox" checked={isPriv} readOnly />
-                    </div>
-                </div>
+    useEffect(() => {
+        if (room.status === 'PRE_DRAW' && room.round_end_time) {
+            const offset = Date.now() - new Date(roomData.server_time).getTime();
+            const targetTime = new Date(room.round_end_time).getTime() + offset;
+            
+            const updateTime = () => {
+                const diff = targetTime - Date.now();
+                setPreDrawTimeLeft(Math.max(0, Math.ceil(diff / 1000)));
+            };
+            updateTime();
+            const intv = setInterval(updateTime, 1000);
+            return () => clearInterval(intv);
+        }
+    }, [room.status, room.round_end_time, roomData.server_time]);
 
-                {isPriv ? (
-                    <>
-                        <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
-                        
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
-                            <div className="d-flex gap-2">
-                                {[2, 3, 4].map(num => (
-                                    <div key={num}
-                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s'}}>
-                                        <div className="fw-bold fs-5">{num}</div>
-                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{num === 2 ? 1 : (num === 3 ? 3 : 4)} Creds</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
-                            <div className="d-flex gap-2">
-                                {[2, 4].map(hours => (
-                                    <div key={hours}
-                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                        <div className="fw-bold fs-5">{hours} <span className="fs-6">hrs</span></div>
-                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-1 fw-bold">Max Players</label>
-                            <div className="w-100 text-center border rounded-3 py-2 bg-light text-muted">
-                                <div className="fw-bold fs-5">4</div>
-                                <div style={{fontSize: '0.65rem'}}>Players (Fixed)</div>
-                            </div>
-                        </div>
-                        <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
-                            <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
-                            <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
-                        </div>
-                    </>
-                )}
+    const redraw = useCallback(() => {
+        const canvas = canvasRef.current;
+        if(!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0,0, canvas.width, canvas.height);
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 5;
+        
+        initialDrawingsRef.current.forEach(data => {
+            ctx.strokeStyle = data.color === 'black' ? '#000000' : (data.color || '#000000');
+            const lines = data.lines;
+            if (!lines) return;
+            for (let i = 0; i < lines.length; i += 4) {
+                ctx.beginPath();
+                ctx.moveTo(lines[i], lines[i+1]);
+                ctx.lineTo(lines[i+2], lines[i+3]);
+                ctx.stroke();
+            }
+        });
+    }, []);
 
-                {(isPriv) && (
-                    <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between">
-                        <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
-                        <span>{baseRoomCost} Credits</span>
-                    </div>
-                )}
+    useEffect(() => { 
+        redraw(); 
+        if (socket) socket.emit('request_initial_drawings');
+    }, [redraw, socket]);
 
-                <div className="d-flex gap-2">
-                    <button className="btn btn-light w-50 rounded-pill fw-bold border" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill fw-bold shadow-sm" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
-                        socket.emit('create_room', { 
-                            is_private: isPriv, 
-                            password: pwd, 
-                            max_members: isPriv ? maxMembers : 4, 
-                            expire_hours: expireHours, 
-                            auto_join: true 
-                        }); 
-                        close(); 
-                    }}>Create</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'change_password') {
-        content = (
-            <>
-                <p className="text-muted small">Set a new password (6-10 digits).</p>
-                <input type="number" className="form-control mb-3" placeholder="New Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_delete_room') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">Are you sure you want to delete this room? Everyone will be kicked and it cannot be undone.</p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_room'); close(); }}>Delete</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'prompt_pwd') {
-        content = (
-            <>
-                <p className="text-muted">Enter password to join Room {modal.room_id}</p>
-                <input type="number" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'extend_room') {
-        content = (
-            <>
-                <div className="mb-3">
-                    <label className="form-label text-muted small mb-2 fw-bold">Add Duration</label>
-                    <div className="d-flex gap-2">
-                        {[2, 4].map(hours => (
-                            <div key={hours}
-                                 className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                 onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                <div className="fw-bold fs-5">+{hours} <span className="fs-6">hrs</span></div>
-                                <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-                <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between shadow-sm">
-                    <span><i className="fas fa-coins text-warning me-1"></i> Cost:</span>
-                    <span>{expireHours === 4 ? 2 : 1} Credits</span>
-                </div>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-light border w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}>Extend</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'kick_player') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">Are you sure you want to remove this player from your room?</p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}>Remove</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_leave') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}>Leave</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_guess_credit') {
-        content = (
-            <>
-                <p className="text-muted">You have used your 4 free guesses. Unlock your final 2 guesses for <b>1 Credit</b>.</p>
-                <div className="alert alert-warning text-center" style={{letterSpacing: '3px'}}><b>{modal.guess}</b></div>
-                <div className="d-flex gap-2 mt-4">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_buy_hint') {
-        content = (
-            <>
-                <p className="text-muted">Reveal this hidden character for <b>1 Credit</b> or Watch an Ad for free! (Limit 1 per round)</p>
-                <div className="alert alert-warning text-center py-2 mb-3"><i className="fas fa-lightbulb"></i> Hint Options</div>
-                <div className="d-flex flex-column gap-2 mt-2">
-                    <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal</button>
-                    <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}>Watch</button>
-                    <button className="btn btn-secondary w-100 rounded-pill fw-bold" onClick={close}>Cancel</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_gender_change') {
-        content = (
-            <>
-                <p className="text-dark text-center mb-3">
-                    Are you sure you want to set your gender to <b>{modal.gender}</b>?
-                </p>
-                {modal.isFirstTime ? (
-                    <div className="alert alert-info py-2 small mb-4">
-                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
-                    </div>
-                ) : (
-                    <div className="alert alert-warning py-2 small mb-4">
-                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
-                    </div>
-                )}
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_name_change') {
-        content = (
-            <>
-                <p className="text-dark text-center mb-3">
-                    Are you sure you want to set your display name to <b>{modal.name}</b>?
-                </p>
-                {modal.isFirstTime ? (
-                    <div className="alert alert-info py-2 small mb-4">
-                        <i className="fas fa-info-circle"></i> Note: This first change is free. Future changes will cost 5 Credits.
-                    </div>
-                ) : (
-                    <div className="alert alert-warning py-2 small mb-4">
-                        <i className="fas fa-exclamation-triangle"></i> This will cost 5 Credits.
-                    </div>
-                )}
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('set_name', { name: modal.name }); close(); }}>Confirm</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_drawer_give_up') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">Are you sure you want to give up? This will skip your turn immediately.</p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Quit</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_guesser_give_up') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Vote</button>
-                </div>
-            </>
-        );
-    } else if (modal.type === 'confirm_buy_ink') {
-        content = (
-            <>
-                <p className="text-muted text-center mb-4">
-                    Refill your ink supply to keep drawing? (Limit: Max 5000 Ink Output/Round)
-                </p>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>
-                        Buy
-                    </button>
-                </div>
-            </>
-        );
-    }
+    useEffect(() => {
+        if (!socket) return;
+        const handleInitialDrawings = (drawings) => {
+            initialDrawingsRef.current = drawings;
+            redraw();
+        };
+        socket.on('sync_initial_drawings', handleInitialDrawings);
+        return () => socket.off('sync_initial_drawings', handleInitialDrawings);
+    }, [socket, redraw]);
+
+    useEffect(() => {
+        if (!socket) return;
+        const handleLiveDraw = (data) => {
+            let lines = data.lines;
+            let color = data.color || 'black';
+            const canvas = canvasRef.current;
+            if(!canvas || !lines) return;
+            
+            const ctx = canvas.getContext('2d');
+            ctx.strokeStyle = color === 'black' ? '#000000' : color;
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 5;
+            for (let i = 0; i < lines.length; i += 4) {
+                ctx.beginPath();
+                ctx.moveTo(lines[i], lines[i+1]);
+                ctx.lineTo(lines[i+2], lines[i+3]);
+                ctx.stroke();
+            }
+            
+            initialDrawingsRef.current.push({ lines, color });
+            
+            // Increment ink locally for viewers to keep UI smooth
+            if (!isDrawer) {
+                let strokeLength = 0;
+                for (let i = 0; i < lines.length; i += 4) {
+                    strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
+                }
+                inkUsedRef.current += strokeLength;
+                updateInkUIRef.current();
+            }
+        };
+        socket.on('live_draw', handleLiveDraw);
+        return () => socket.off('live_draw', handleLiveDraw);
+    }, [socket, isDrawer]);
+
+    const getMousePos = (e) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return { 
+            x: (e.clientX - rect.left) * scaleX, 
+            y: (e.clientY - rect.top) * scaleY 
+        };
+    };
+
+    const startDraw = (e) => {
+        if (!isDrawer || !isDrawingPhase) return;
+        try { e.target.setPointerCapture(e.pointerId); } catch(err) {}
+        drawingRef.current = true;
+        currentLineRef.current = [];
+        lastPosRef.current = getMousePos(e);
+    };
+
+    const moveDraw = (e) => {
+        if (!drawingRef.current) return;
+        e.preventDefault();
+        const newPos = getMousePos(e);
+        
+        const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
+        if (dist < 1) return; 
+        
+        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
+        
+        if (inkUsedRef.current + dist > currentMaxInkRef.current) {
+            stopDraw(e); 
+            if (!hasMaxInk) {
+                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+            }
+            return;
+        }
+        
+        inkUsedRef.current += dist;
+        localInkRef.current['black'] = inkUsedRef.current; 
+
+        updateInkUI();
+        
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.beginPath();
+        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+        ctx.lineTo(newPos.x, newPos.y);
+        ctx.strokeStyle = '#000000';
+        ctx.stroke();
+
+        currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
+        lastPosRef.current = newPos;
+    };
+
+    const flushDrawQueue = useCallback(() => {
+        if (drawQueueRef.current.length > 0) {
+            if (socket) socket.emit('draw', { lines: drawQueueRef.current });
+            drawQueueRef.current = [];
+        }
+        emitTimeoutRef.current = null;
+    }, [socket]);
+
+    const stopDraw = (e) => {
+        if(!drawingRef.current) return;
+        drawingRef.current = false;
+        try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
+        
+        if(currentLineRef.current.length > 0) {
+            drawQueueRef.current.push(...currentLineRef.current);
+        }
+        
+        if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
+            emitTimeoutRef.current = setTimeout(() => {
+                flushDrawQueue();
+            }, 500);
+        }
+    };
 
     return (
-        <>
-            <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
-                <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
-                    <div className="d-flex justify-content-between align-items-center mb-3">
-                        <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
-                        {modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && <button className="btn-close" onClick={close}></button>}
+        <div className="w-100 d-flex flex-column align-items-center">
+            {/* The Ink Level only renders for the drawer to declutter the UI */}
+            {isDrawingPhase && isDrawer && (
+                <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
+                    <div className="d-flex justify-content-between small fw-bold mb-1">
+                        <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                        <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
                     </div>
-                    {content}
-                </div>
-            </div>
-            
-            {adLoading && (
-                <div className="wb-overlay" style={{ zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed', top:0, left:0, right:0, bottom:0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                    <h2 className="text-white mb-4 fw-bold text-center">Loading Advertisement</h2>
-                    <div className="spinner-border text-primary mb-4" style={{width: '4rem', height: '4rem', borderWidth: '0.4em'}}></div>
-                    <p className="text-muted mt-2 small text-center">Please wait, your reward is loading.</p>
+                    <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
+                        <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                             style={{width: '100%', transition: 'width 0.1s'}}></div>
+                    </div>
+                    <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                        <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                        }}>
+                            <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
+                        </button>
+                    </div>
                 </div>
             )}
-        </>
+
+            <div className="whiteboard-container">
+                <canvas 
+                    ref={canvasRef} width="500" height="500"
+                    style={{ touchAction: 'none' }}
+                    onPointerDown={startDraw} 
+                    onPointerMove={moveDraw} 
+                    onPointerUp={stopDraw} 
+                    onPointerOut={stopDraw}
+                    onPointerCancel={stopDraw}
+                />
+                
+                {room.status === 'PRE_DRAW' && isDrawer && (
+                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center" style={{background: 'rgba(255,255,255,0.95)'}}>
+                        <h4 className="text-primary fw-bold mb-1">Your Turn!</h4>
+                        <h5 className="text-danger fw-bold mb-3"><i className="fas fa-stopwatch"></i> {preDrawTimeLeft}s</h5>
+                        <div className="w-75 p-3 bg-white rounded-4 shadow-sm border text-center">
+                            <label className="small fw-bold text-muted mb-2">Word to draw (3-10 chars)</label>
+                            <div className="input-group mb-3">
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center fw-bold text-dark fs-5" placeholder="Enter word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} style={{letterSpacing: '2px'}} />
+                                {wordInput && <button className="btn btn-outline-secondary" onClick={() => setWordInput('')}><i className="fas fa-times"></i></button>}
+                            </div>
+                            <div className="d-flex flex-column gap-2">
+                                <button className="btn btn-outline-primary rounded-pill shadow-sm fw-bold" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-dice me-1"></i> Random Word</button>
+                                <button className="btn btn-success rounded-pill shadow-sm fw-bold fs-5 py-2 mt-1" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}><i className="fas fa-paint-brush me-1"></i> Start Drawing!</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {room.status === 'PRE_DRAW' && !isDrawer && (
+                    <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                )}
+
+                {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                    <div className="wb-overlay">
+                        {room.status !== 'WAITING' && (
+                            <>
+                                {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
+                                    <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h6>
+                                )}
+                                
+                                {room.end_reason === 'drawer_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
+                                ) : room.end_reason === 'all_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
+                                ) : room.end_reason === 'timeout_predraw' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
+                                ) : room.end_reason === 'drawer_skipped' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
+                                ) : room.end_reason === 'drawer_disconnected' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
+                                ) : room.last_winner_id ? (
+                                    <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm">
+                                        {(roomData?.photos?.[room.last_winner_id]) ? (
+                                            <img src={roomData.photos[room.last_winner_id]} className="rounded-circle shadow border" width="60" height="60" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Winner"/>
+                                        ) : (
+                                            <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
+                                        )}
+                                        <span className="fs-5"><b>{window.getDisplayName(room.last_winner_id, roomData?.names)}</b> guessed it!</span>
+                                    </div>
+                                ) : (
+                                    <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
+                                )}
+                            </>
+                        )}
+                        
+                        {isMeReady ? (
+                            <h5 className="mt-4 text-muted fw-bold">
+                                {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                            </h5>
+                        ) : (
+                            <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {isDrawer && isDrawingPhase && (
+                <div className="d-flex gap-2 justify-content-center mt-3 w-100">
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                            onClick={() => socket.emit('undo')} 
+                            disabled={(room.undo_steps || 0) === 0}
+                            title="Undo">
+                        <i className="fas fa-undo"></i> <span className="badge bg-secondary rounded-circle">{room.undo_steps || 0}</span>
+                    </button>
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-danger d-flex align-items-center gap-2 border border-danger" 
+                            onClick={() => socket.emit('clear_all')} 
+                            title="Clear All">
+                        <i className="fas fa-trash-alt"></i> Clear All
+                    </button>
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                            onClick={() => socket.emit('redo')} 
+                            disabled={(room.redo_steps || 0) === 0}
+                            title="Redo">
+                        <i className="fas fa-redo"></i> <span className="badge bg-secondary rounded-circle">{room.redo_steps || 0}</span>
+                    </button>
+                </div>
+            )}
+            
+            {/* Emojis Section: Modernized UI */}
+            {isDrawingPhase && (
+                <div className="d-flex justify-content-center mt-3 w-100 px-3">
+                    <div className="bg-white rounded-4 shadow-sm border p-2 d-flex flex-wrap gap-2 justify-content-center" style={{ maxWidth: '100%' }}>
+                        {emojis.map(emoji => {
+                            const count = Object.values(userReactions).filter(e => e === emoji).length;
+                            const myReaction = userReactions[tgId] === emoji;
+                            // Only show actively reacted emojis to the drawer
+                            if (isDrawer && count === 0) return null;
+                            
+                            return (
+                                <button key={emoji} 
+                                    className={`btn rounded-circle d-flex align-items-center justify-content-center position-relative flex-shrink-0 ${myReaction ? 'bg-primary border-primary text-white shadow' : 'bg-light border-0'}`}
+                                    onClick={() => sendReaction(emoji)} 
+                                    title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
+                                    disabled={isDrawer}
+                                    style={{ 
+                                        width: '38px', height: '38px',
+                                        transition: 'all 0.2s',
+                                        transform: myReaction ? 'scale(1.15)' : 'scale(1)',
+                                        opacity: 1
+                                    }}>
+                                    <span className="fs-5 lh-1" style={{ transform: myReaction ? 'translateY(-1px)' : 'none' }}>{emoji}</span>
+                                    {count > 0 && (
+                                        <span className="position-absolute translate-middle badge rounded-pill bg-danger shadow-sm border border-2 border-white" style={{ top: '2px', left: '90%', fontSize: '0.65rem', padding: '0.2em 0.4em' }}>
+                                            {count}
+                                        </span>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
     );
 };
 
-// Expose to window for the main app
-window.ModalManager = ModalManager;
+const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
+    const [input, setInput] = useState('');
+    const messagesEndRef = useRef(null);
+    
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chats]);
+
+    const handleUnmute = () => {
+        const botLink = `https://t.me/doodledashbot?start=unmute`;
+        if (window.tg && window.tg.openTelegramLink) {
+            try {
+                window.tg.openTelegramLink(botLink);
+                setTimeout(() => window.tg.close(), 300);
+            } catch (e) {
+                window.open(botLink, '_blank');
+            }
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
+
+    return (
+        <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+            <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                {chats.map(c => {
+                    const photo = roomData?.photos?.[c.user_id];
+                    return (
+                        <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                            {c.user_id !== 'System' && (
+                                photo ? 
+                                    <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                    <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            )}
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
+                                </small>
+                                <span style={{marginTop: '2px'}}>{c.message}</span>
+                            </div>
+                        </div>
+                    );
+                })}
+                <div ref={messagesEndRef} />
+            </div>
+            
+            <div className="chat-input-wrapper d-flex align-items-end mt-auto gap-2" style={{padding: '10px 15px', backgroundColor: 'white', borderTop: '1px solid #e2e8f0'}}>
+                {user?.status === 'mute' ? (
+                    <button 
+                        className="btn btn-danger w-100 rounded-pill fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
+                        style={{ height: '45px' }}
+                        onClick={handleUnmute}
+                    >
+                        <i className="fas fa-volume-mute"></i> Unmute in Bot
+                    </button>
+                ) : (
+                    <>
+                        <textarea
+                            className="form-control bg-light border-0"
+                            style={{ resize: 'none', minHeight: '40px', maxHeight: '80px', borderRadius: '20px', padding: '10px 15px', overflowY: 'auto' }}
+                            rows={1}
+                            value={input}
+                            maxLength={200}
+                            placeholder="Type message..."
+                            onChange={(e) => {
+                                setInput(e.target.value);
+                                e.target.style.height = 'auto';
+                                e.target.style.height = Math.min(e.target.scrollHeight, 80) + 'px';
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (input.trim()) {
+                                        socket.emit('chat', {message: input.trim()});
+                                        setInput('');
+                                        e.target.style.height = 'auto';
+                                    }
+                                }
+                            }}
+                        />
+                        <button
+                            className="btn btn-primary rounded-circle flex-shrink-0 shadow-sm"
+                            style={{width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
+                            onClick={() => {
+                                if (input.trim()) {
+                                    socket.emit('chat', {message: input.trim()});
+                                    setInput('');
+                                    const ta = document.querySelector('.chat-input-wrapper textarea');
+                                    if (ta) ta.style.height = 'auto';
+                                }
+                            }}>
+                            <i className="fas fa-paper-plane"></i>
+                        </button>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
+    const [rawInput, setRawInput] = useState('');
+    const isDrawer = roomData.room.current_drawer_id === tgId;
+    const messagesEndRef = useRef(null);
+
+    const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
+    const isFree = myGuessesCount < 4;
+    const isBlocked = myGuessesCount >= 6;
+    const needsPayment = myGuessesCount === 4;
+
+    const myMemberData = roomData.members.find(m => m.user_id === tgId);
+    const hasGivenUp = myMemberData?.has_given_up;
+
+    const totalGuessers = Math.max(0, roomData.members.length - 1);
+    const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
+
+    const wordData = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word : null;
+    const wordLength = wordData ? wordData.length : 10;
+    const unrevealedCount = wordData ? wordData.filter(w => !w.revealed).length : wordLength;
+
+    useEffect(() => {
+        if (rawInput.length > unrevealedCount) {
+            setRawInput(rawInput.slice(0, unrevealedCount));
+        }
+    }, [unrevealedCount, rawInput]);
+
+    const reconstructGuess = () => {
+        if (!wordData) return rawInput;
+        let result = '';
+        let rawIdx = 0;
+        for (const item of wordData) {
+            if (item.revealed) {
+                result += item.char;
+            } else {
+                result += rawInput[rawIdx] || ' ';
+                rawIdx++;
+            }
+        }
+        return result;
+    };
+
+    const handleGuessSubmit = () => {
+        if (isBlocked) return;
+        if (rawInput.length !== unrevealedCount) {
+            setModal({ type: 'error', title: 'Invalid Guess', content: `Please fill in all ${unrevealedCount} missing letters.`});
+            return;
+        }
+        
+        const fullGuess = reconstructGuess();
+
+        if (needsPayment) {
+            setModal({ type: 'confirm_guess_credit', guess: fullGuess, title: 'Unlock 2 Extra Guesses?' });
+            setRawInput('');
+        } else {
+            if (socket) socket.emit('guess', {guess: fullGuess});
+            setRawInput('');
+        }
+    };
+
+    const handleInputChange = (e) => {
+        const val = e.target.value.toUpperCase();
+        if (val.length <= unrevealedCount) {
+            setRawInput(val);
+        }
+    };
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [guesses]);
+
+    return (
+        <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+            <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                {guesses.map(g => {
+                    const photo = roomData?.photos?.[g.user_id];
+                    return (
+                        <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                            {photo ? 
+                                <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            }
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {window.getDisplayName(g.user_id, roomData?.names)}
+                                </small>
+                                <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                            </div>
+                        </div>
+                    );
+                })}
+                <div ref={messagesEndRef} />
+            </div>
+            
+            {roomData.room.status === 'DRAWING' || roomData.room.status === 'PRE_DRAW' ? (
+                <div className="chat-input-wrapper d-flex flex-column mt-auto pb-3">
+                    <button 
+                        className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                        onClick={() => {
+                            setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                        }}
+                        disabled={!isDrawer && hasGivenUp}
+                    >
+                        <i className="fas fa-flag"></i> 
+                        {isDrawer ? 'Give Up Turn' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                    </button>
+
+                    {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
+                        <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
+                            <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
+                                
+                                {/* Box-by-Box Overlay */}
+                                <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
+                                    {wordData ? (
+                                        (() => {
+                                            let rawIdx = 0;
+                                            return wordData.map((item, i) => {
+                                                let displayChar = '';
+                                                let isHint = item.revealed;
+                                                let showCursor = false;
+                                                if (isHint) {
+                                                    displayChar = item.char;
+                                                } else {
+                                                    displayChar = rawInput[rawIdx] || '';
+                                                    if (rawIdx === rawInput.length && !isBlocked) showCursor = true;
+                                                    rawIdx++;
+                                                }
+                                                return (
+                                                    <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
+                                                        {displayChar}
+                                                        {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                    </div>
+                                                );
+                                            })
+                                        })()
+                                    ) : (
+                                        Array.from({length: wordLength}).map((_, i) => {
+                                            const showCursor = (i === rawInput.length) && !isBlocked;
+                                            return (
+                                                <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                    {rawInput[i] || ''}
+                                                    {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                                
+                                {/* Hidden Input that captures key presses seamlessly */}
+                                <input type="text"
+                                    className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
+                                    style={{opacity: 0, zIndex: 10, cursor: 'text'}}
+                                    value={rawInput}
+                                    onChange={handleInputChange}
+                                    onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
+                                    maxLength={unrevealedCount}
+                                    disabled={isBlocked}
+                                    autoComplete="off"
+                                    autoCorrect="off"
+                                    spellCheck="false"
+                                />
+                            </div>
+                            <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || rawInput.length !== unrevealedCount}>
+                                {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
+                            </button>
+                        </div>
+                    ) : null}
+                    
+                    {!isDrawer && !hasGivenUp && isBlocked && (
+                        <div className="text-danger fw-bold text-center small mt-1">Max 6 guesses reached.</div>
+                    )}
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
+    const { room, members } = roomData;
+    const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
+
+    return (
+        <div className="row">
+            <div className="col-12 col-lg-8 mx-auto">
+                <div className="whiteboard-wrapper">
+                    
+                    {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
+                    <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
+                        {roomData.masked_word.map((item, i) => (
+                            <div 
+                                key={i}
+                                className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
+                                style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                onClick={() => {
+                                    if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                        setModal({ type: 'confirm_buy_hint', index: item.index });
+                                    }
+                                }}
+                                title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (1 Credit)" : ""}
+                            >
+                                {item.revealed ? item.char : '?'}
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
+
+                <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} />
+
+                    <div className="mt-4 w-100">
+                        <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
+                        {sortedMembers.map(m => {
+                            const photo = roomData?.photos?.[m.user_id];
+                            return (
+                                <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                    <div className="d-flex align-items-center">
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: photo, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
+                                            {photo ? 
+                                                <img src={photo} className="rounded-circle me-2 border" width="35" height="35" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Player"/> : 
+                                                <i className="fas fa-user-circle fs-2 text-secondary me-2 bg-white rounded-circle"></i>
+                                            }
+                                        </div>
+                                        <div className="d-flex flex-column">
+                                            <span className="fw-bold">{window.getDisplayName(m.user_id, roomData?.names)} {m.user_id === tgId ? ' (You)' : ''}</span>
+                                            <div className="d-flex align-items-center gap-1">
+                                                {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="d-flex align-items-center gap-2">
+                                        {m.is_ready
