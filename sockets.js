@@ -183,14 +183,18 @@ module.exports = (io) => {
                     const result = [];
                     const ids = rows.map(r => r.tg_id);
                     
-                    const [userRows] = await db.query(`SELECT tg_id, avatar_url FROM users WHERE tg_id IN (?)`, [ids]);
+                    const [userRows] = await db.query(`SELECT tg_id, avatar_url, gender FROM users WHERE tg_id IN (?)`, [ids]);
                     const avatarMap = {};
-                    userRows.forEach(u => avatarMap[u.tg_id] = u.avatar_url);
+                    const genderMap = {};
+                    userRows.forEach(u => {
+                        avatarMap[u.tg_id] = u.avatar_url;
+                        genderMap[u.tg_id] = u.gender;
+                    });
 
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id] });
+                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id] });
                     }
                     return result;
                 };
@@ -220,7 +224,7 @@ module.exports = (io) => {
                 }
                 
                 const [rows] = await db.query(`
-                    SELECT d.tg_id, d.total_donated, u.avatar_url 
+                    SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender 
                     FROM donations d
                     LEFT JOIN users u ON d.tg_id = u.tg_id
                     ORDER BY d.total_donated DESC LIMIT 50
@@ -229,7 +233,7 @@ module.exports = (io) => {
                 const leaderboard = [];
                 for (const row of rows) {
                     const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
-                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url });
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url, gender: row.gender });
                 }
                 await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); 
                 socket.emit('donators_leaderboard_data', leaderboard);
