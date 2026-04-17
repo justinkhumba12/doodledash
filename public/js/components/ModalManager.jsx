@@ -62,7 +62,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     )}
                     <p className="mb-0"><b>Usernames:</b> If your username shows as 'unset', please update it in your Telegram profile.</p>
                 </div>
-                <button className="btn btn-secondary w-100 rounded-pill mt-4" onClick={close}>Got it</button>
+                <button className="btn btn-secondary w-100 rounded-pill mt-4" onClick={close}>Close</button>
             </>
         );
     } else if (modal.type === 'idle_warning') {
@@ -74,7 +74,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <button className="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold" onClick={() => {
                     socket.emit('active_event');
                     close();
-                }}>Yes, I'm here</button>
+                }}>Confirm</button>
             </div>
         );
     } else if (modal.type === 'success' || modal.type === 'error') {
@@ -167,7 +167,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                             auto_join: true 
                         }); 
                         close(); 
-                    }}>Create Room</button>
+                    }}>Create</button>
                 </div>
             </>
         );
@@ -188,7 +188,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted text-center mb-4">Are you sure you want to delete this room? Everyone will be kicked and it cannot be undone.</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_room'); close(); }}><i className="fas fa-trash"></i> Delete</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_room'); close(); }}>Delete</button>
                 </div>
             </>
         );
@@ -199,7 +199,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <input type="number" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join Room</button>
+                    <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join</button>
                 </div>
             </>
         );
@@ -225,7 +225,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 </div>
                 <div className="d-flex gap-2">
                     <button className="btn btn-light border w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}><i className="fas fa-clock"></i> Extend</button>
+                    <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { socket.emit('extend_room', { expire_hours: expireHours }); close(); }}>Extend</button>
                 </div>
             </>
         );
@@ -235,7 +235,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted text-center mb-4">Are you sure you want to remove this player from your room?</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}><i className="fas fa-user-times"></i> Remove</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}>Remove</button>
                 </div>
             </>
         );
@@ -245,7 +245,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted text-center mb-4">Are you sure you want to leave the room?</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}><i className="fas fa-sign-out-alt"></i> Leave</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}>Leave</button>
                 </div>
             </>
         );
@@ -256,7 +256,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <div className="alert alert-warning text-center" style={{letterSpacing: '3px'}}><b>{modal.guess}</b></div>
                 <div className="d-flex gap-2 mt-4">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm (1 Credit)</button>
+                    <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('guess', { guess: modal.guess }); close(); }}>Confirm</button>
                 </div>
             </>
         );
@@ -266,8 +266,8 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted">Reveal this hidden character for <b>1 Credit</b> or Watch an Ad for free! (Limit 1 per round)</p>
                 <div className="alert alert-warning text-center py-2 mb-3"><i className="fas fa-lightbulb"></i> Hint Options</div>
                 <div className="d-flex flex-column gap-2 mt-2">
-                    <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal (1 Cred)</button>
-                    <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}><i className="fas fa-play-circle"></i> Watch Ad (Free)</button>
+                    <button className="btn btn-success w-100 rounded-pill fw-bold" onClick={() => { socket.emit('buy_hint', { index: modal.index }); close(); }}>Reveal</button>
+                    <button className="btn btn-primary w-100 rounded-pill fw-bold" onClick={() => { triggerHintAd(modal.index); close(); }}>Watch</button>
                     <button className="btn btn-secondary w-100 rounded-pill fw-bold" onClick={close}>Cancel</button>
                 </div>
             </>
@@ -299,7 +299,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted text-center mb-4">Are you sure you want to give up? This will skip your turn immediately.</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Give Up</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Quit</button>
                 </div>
             </>
         );
@@ -309,7 +309,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <p className="text-muted text-center mb-4">Vote to give up this round? If all guessers give up, the drawing is skipped and the word is revealed.</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}><i className="fas fa-flag"></i> Vote Give Up</button>
+                    <button className="btn btn-warning w-50 rounded-pill" onClick={() => { socket.emit('give_up'); close(); }}>Vote</button>
                 </div>
             </>
         );
@@ -322,7 +322,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => { socket.emit('buy_ink'); close(); }}>
-                        Buy ({modal.cost} Cred)
+                        Buy
                     </button>
                 </div>
             </>
