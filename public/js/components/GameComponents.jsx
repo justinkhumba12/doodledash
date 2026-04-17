@@ -401,7 +401,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                                         ) : (
                                             <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
                                         )}
-                                        <span className="fs-5"><b>{window.toHex(room.last_winner_id)}</b> guessed it!</span>
+                                        <span className="fs-5"><b>{window.getDisplayName(room.last_winner_id, roomData?.names)}</b> guessed it!</span>
                                     </div>
                                 ) : (
                                     <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
@@ -516,7 +516,7 @@ const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
                             )}
                             <div className="d-flex flex-column w-100">
                                 <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {c.user_id === 'System' ? 'System' : window.toHex(c.user_id)}
+                                    {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
                                 </small>
                                 <span style={{marginTop: '2px'}}>{c.message}</span>
                             </div>
@@ -663,7 +663,7 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
                             }
                             <div className="d-flex flex-column w-100">
                                 <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {window.toHex(g.user_id)}
+                                    {window.getDisplayName(g.user_id, roomData?.names)}
                                 </small>
                                 <span style={{marginTop: '2px'}}>{g.guess_text}</span>
                             </div>
@@ -801,7 +801,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                                             }
                                         </div>
                                         <div className="d-flex flex-column">
-                                            <span className="fw-bold">{window.toHex(m.user_id)} {m.user_id === tgId ? ' (You)' : ''}</span>
+                                            <span className="fw-bold">{window.getDisplayName(m.user_id, roomData?.names)} {m.user_id === tgId ? ' (You)' : ''}</span>
                                             <div className="d-flex align-items-center gap-1">
                                                 {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
                                             </div>
@@ -809,23 +809,4 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                                     </div>
                                     
                                     <div className="d-flex align-items-center gap-2">
-                                        {m.is_ready ? <i className="fas fa-check-circle text-success fs-5 shadow-sm" title="Ready"></i> : null}
-                                        {(room.is_private === 1 && room.creator_id === tgId && m.user_id !== tgId) ? (
-                                            <button className="btn btn-sm btn-danger rounded-circle shadow-sm" onClick={() => setModal({type: 'kick_player', target_id: m.user_id, title: 'Remove Player'})} title="Remove Player"><i className="fas fa-user-times"></i></button>
-                                        ) : null}
-                                    </div>
-                                </div>
-                            )
-                        })}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// Expose to window for the main app
-window.Whiteboard = Whiteboard;
-window.ChatBox = ChatBox;
-window.GuessBox = GuessBox;
-window.GameRoom = GameRoom;
+                                        {m.is_ready
