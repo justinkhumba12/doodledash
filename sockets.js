@@ -159,6 +159,22 @@ module.exports = (io) => {
                 socket.emit('auth_error', 'Authentication processing failed.');
             }
         });
+
+        // Collect reports explicitly into db
+        socket.on('report_user', async ({ reported_id, context, reason, snapshot_data }) => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser || !reported_id || !context) return;
+            try {
+                await db.query(
+                    'INSERT INTO reports (reporter_id, reported_id, context, reason, snapshot_data) VALUES (?, ?, ?, ?, ?)',
+                    [currentUser, reported_id, context, reason, snapshot_data || 'No snapshot']
+                );
+                socket.emit('reward_success', 'Report submitted successfully. Thank you for keeping our community safe.');
+            } catch (e) {
+                console.error('Report Error:', e);
+                socket.emit('create_error', 'Failed to submit report. Try again later.');
+            }
+        });
         
         socket.on('get_leaderboard', async () => {
             try {
@@ -324,13 +340,30 @@ module.exports = (io) => {
                 let msg = '';
                 let rewardAmount = 0;
 
+                // Handles daily claim transformation into a streak check structure
                 if (type === 'daily') {
-                    const [res] = await db.query(`
-                        UPDATE users SET credits = credits + 1, last_daily_claim = UTC_DATE()
-                        WHERE tg_id = ? AND (last_daily_claim IS NULL OR DATE_FORMAT(last_daily_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'))
+                    const [userRows] = await db.query(`
+                        SELECT streak_count,
+                        (last_streak_claim IS NOT NULL AND DATE_FORMAT(last_streak_claim, '%Y-%m-%d') = DATE_FORMAT(DATE_SUB(UTC_DATE(), INTERVAL 1 DAY), '%Y-%m-%d')) as streak_maintained,
+                        (last_streak_claim IS NULL OR DATE_FORMAT(last_streak_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as can_claim
+                        FROM users WHERE tg_id = ?
                     `, [currentUser]);
-                    if (res.affectedRows > 0) { success = true; rewardAmount = 1; msg = 'Daily reward claimed! +1 Credit'; }
-                    else { msg = 'Daily reward already claimed today.'; }
+                    
+                    if (userRows.length > 0) {
+                        const u = userRows[0];
+                        if (u.can_claim) {
+                            let newStreak = u.streak_maintained ? (u.streak_count || 0) + 1 : 1;
+                            rewardAmount = Math.min(newStreak, 7); // Scalable rewards
+                            await db.query(`
+                                UPDATE users SET credits = credits + ?, streak_count = ?, last_streak_claim = UTC_DATE(), last_daily_claim = UTC_DATE()
+                                WHERE tg_id = ?
+                            `, [rewardAmount, newStreak, currentUser]);
+                            success = true;
+                            msg = `Daily streak Day ${newStreak} claimed! +${rewardAmount} Credit${rewardAmount > 1 ? 's' : ''}`;
+                        } else {
+                            msg = 'Daily reward already claimed today.';
+                        }
+                    }
                 } 
                 else if (type === 'ad' || type === 'ad2') {
                     const prefix = type === 'ad' ? 'ad' : 'ad2';
@@ -609,7 +642,8 @@ module.exports = (io) => {
             for (const raw of rawChats) {
                 const chat = JSON.parse(raw);
                 if (chat.id === message_id) {
-                    chat.message = '[Deleted by admin]';
+                    // Specific tombstone for room creators
+                    chat.message = '[Deleted by room creator]';
                 }
                 updatedChats.push(JSON.stringify(chat));
             }
