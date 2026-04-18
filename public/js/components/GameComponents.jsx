@@ -27,7 +27,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     
     const [wordInput, setWordInput] = useState('');
     
-    // Derived ink data based on drawer
     const drawerMember = members.find(m => m.user_id === room.current_drawer_id) || {};
     const drawerInkExtraObj = drawerMember.ink_extra || {};
     
@@ -36,9 +35,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     const currentMaxInkRef = useRef(currentMaxInk);
     useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
 
-    // Reactions State
     const [userReactions, setUserReactions] = useState({});
-    const emojis = ['😂', '😍', '😋', '💦', '🍑', '🍆'];
+    
+    // Expanded, engaging reaction emojis!
+    const emojis = ['😂', '😍', '😋', '💦', '🍑', '🍆', '🔥', '💀', '💯', '🤔', '😡', '👀', '🎉', '💩', '🤡', '😭'];
 
     const updateInkUI = useCallback(() => {
         if (!isDrawingPhase) return;
@@ -80,7 +80,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             inkUsedRef.current = 0;
             return;
         }
-        // Initialize ink based on drawer state when joining phase
         const drawerInkUsedObj = drawerMember.ink_used || {};
         localInkRef.current['black'] = drawerInkUsedObj['black'] || 0;
         inkUsedRef.current = localInkRef.current['black'] || 0;
@@ -100,7 +99,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
         return () => socket.off('update_ink', handleUpdateInk);
     }, [socket]);
 
-    // Reactions cleanup and handler
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
             setUserReactions({});
@@ -125,11 +123,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     }, [socket]);
 
     const sendReaction = (emoji) => {
-        if (isDrawer) return; // Drawee cannot react
+        if (isDrawer) return;
         if (socket) {
             const action = userReactions[tgId] === emoji ? 'remove' : 'add';
             socket.emit('send_reaction', { emoji, action });
-            // Optimistic update
             setUserReactions(prev => {
                 const next = { ...prev };
                 if (action === 'remove') {
@@ -229,7 +226,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
             
             initialDrawingsRef.current.push({ lines, color });
             
-            // Increment ink locally for viewers to keep UI smooth
             if (!isDrawer) {
                 let strokeLength = 0;
                 for (let i = 0; i < lines.length; i += 4) {
@@ -320,9 +316,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
         }
     };
 
+    // Derived reaction conditions to simplify UI clutter
+    const activeReactionCount = Object.values(userReactions).length;
+    const shouldHideReactions = isDrawer && activeReactionCount === 0;
+
     return (
         <div className="w-100 d-flex flex-column align-items-center">
-            {/* The Ink Level only renders for the drawer to declutter the UI */}
             {isDrawingPhase && isDrawer && (
                 <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
                     <div className="d-flex justify-content-between small fw-bold mb-1">
@@ -353,6 +352,20 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                     onPointerOut={stopDraw}
                     onPointerCancel={stopDraw}
                 />
+                
+                {/* Community reporting flag added for players viewing drawing */}
+                {room.status === 'DRAWING' && !isDrawer && (
+                    <button 
+                        className="btn btn-light text-danger shadow-sm rounded-circle position-absolute" 
+                        style={{top: '10px', right: '10px', zIndex: 100, width: '36px', height: '36px'}}
+                        onClick={() => {
+                            setModal({ type: 'report_input', context: 'drawing', reported_id: room.current_drawer_id, snapshot_data: JSON.stringify(initialDrawingsRef.current) });
+                        }}
+                        title="Report Inappropriate Drawing"
+                    >
+                        <i className="fas fa-flag"></i>
+                    </button>
+                )}
                 
                 {room.status === 'PRE_DRAW' && isDrawer && (
                     <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.95)', padding: '10px'}}>
@@ -442,14 +455,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                 </div>
             )}
             
-            {/* Emojis Section: Modernized UI */}
-            {isDrawingPhase && (
+            {/* Cleaner Emojis Section: Dynamic and expanded list */}
+            {isDrawingPhase && !shouldHideReactions && (
                 <div className="d-flex justify-content-center mt-3 w-100 px-3">
                     <div className="bg-white rounded-4 shadow-sm border p-2 d-flex flex-wrap gap-2 justify-content-center" style={{ maxWidth: '100%' }}>
                         {emojis.map(emoji => {
                             const count = Object.values(userReactions).filter(e => e === emoji).length;
                             const myReaction = userReactions[tgId] === emoji;
-                            // Only show actively reacted emojis to the drawer
                             if (isDrawer && count === 0) return null;
                             
                             return (
@@ -508,14 +520,22 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                 {chats.map(c => {
                     const photo = roomData?.photos?.[c.user_id];
-                    const isDeleted = c.message === '[Deleted by admin]';
+                    const isDeleted = c.message === '[Deleted by admin]' || c.message === '[Deleted by room creator]';
+                    
                     return (
                         <div key={c.id} 
                              className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} 
-                             style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', cursor: isCreator && c.user_id !== 'System' && !isDeleted ? 'pointer' : 'default' }}
+                             style={{ 
+                                 borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', 
+                                 cursor: (c.user_id !== 'System' && !isDeleted) ? 'pointer' : 'default' 
+                             }}
                              onClick={() => {
-                                 if (isCreator && c.user_id !== 'System' && !isDeleted && setModal) {
-                                     setModal({ type: 'confirm_delete_message', message_id: c.id });
+                                 // New Message Action Menus mapping deletion / reporting safely
+                                 if (c.user_id === 'System' || isDeleted) return;
+                                 if (setModal) {
+                                     if (c.user_id !== tgId || isCreator) {
+                                         setModal({ type: 'chat_action', message: c, isCreator });
+                                     }
                                  }
                              }}>
                             {c.user_id !== 'System' && (
@@ -707,7 +727,6 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
                         <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
                             <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
                                 
-                                {/* Box-by-Box Overlay */}
                                 <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
                                     {wordData ? (
                                         (() => {
@@ -744,7 +763,6 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
                                     )}
                                 </div>
                                 
-                                {/* Hidden Input that captures key presses seamlessly */}
                                 <input type="text"
                                     className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
                                     style={{opacity: 0, zIndex: 10, cursor: 'text'}}
