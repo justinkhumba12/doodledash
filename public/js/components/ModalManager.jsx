@@ -4,13 +4,13 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     if (!modal) return null;
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
-    const [maxMembers, setMaxMembers] = useState(4);
-    const [expireHours, setExpireHours] = useState(2);
+    const [maxMembers, setMaxMembers] = useState(6);
+    const [expireHours, setExpireHours] = useState(0.5);
     
     // New Ad loading state for Hints
     const [adLoading, setAdLoading] = useState(false);
 
-    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(4); setExpireHours(2); };
+    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); };
 
     const triggerHintAd = (index) => {
         setAdLoading(true);
@@ -85,9 +85,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'create_room') {
-        let limitCost = maxMembers === 2 ? 1 : (maxMembers === 3 ? 3 : 4);
-        let durationCost = expireHours === 2 ? 1 : 2;
-        let baseRoomCost = isPriv ? (limitCost + durationCost) : 0;
+        let baseRoomCost = isPriv ? maxMembers : 0; // 1 user = 1 credit
 
         content = (
             <>
@@ -103,17 +101,16 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
                 {isPriv ? (
                     <>
-                        <input type="number" className="form-control mb-3" placeholder="Set Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                        <input type="text" className="form-control mb-3" placeholder="Set Password (6-10 chars)..." value={pwd} onChange={e => setPwd(e.target.value)} />
                         
                         <div className="mb-3">
-                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
-                            <div className="d-flex gap-2">
-                                {[2, 3, 4].map(num => (
+                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players (1 Cred / Player)</label>
+                            <div className="d-flex gap-1 flex-wrap">
+                                {[2, 3, 4, 5, 6].map(num => (
                                     <div key={num}
-                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s'}}>
-                                        <div className="fw-bold fs-5">{num}</div>
-                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{num === 2 ? 1 : (num === 3 ? 3 : 4)} Creds</div>
+                                         className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '45px'}}>
+                                        <div className="fw-bold fs-6">{num}</div>
                                     </div>
                                 ))}
                             </div>
@@ -122,12 +119,11 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         <div className="mb-3">
                             <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
                             <div className="d-flex gap-2">
-                                {[2, 4].map(hours => (
+                                {[0.5, 1].map(hours => (
                                     <div key={hours}
-                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
                                          onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                        <div className="fw-bold fs-5">{hours} <span className="fs-6">hrs</span></div>
-                                        <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                                        <div className="fw-bold fs-6">{hours === 0.5 ? '30' : '1'} <span style={{fontSize:'0.7rem'}}>{hours === 0.5 ? 'mins' : 'hr'}</span></div>
                                     </div>
                                 ))}
                             </div>
@@ -138,7 +134,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         <div className="mb-3">
                             <label className="form-label text-muted small mb-1 fw-bold">Max Players</label>
                             <div className="w-100 text-center border rounded-3 py-2 bg-light text-muted">
-                                <div className="fw-bold fs-5">4</div>
+                                <div className="fw-bold fs-5">6</div>
                                 <div style={{fontSize: '0.65rem'}}>Players (Fixed)</div>
                             </div>
                         </div>
@@ -162,7 +158,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         socket.emit('create_room', { 
                             is_private: isPriv, 
                             password: pwd, 
-                            max_members: isPriv ? maxMembers : 4, 
+                            max_members: isPriv ? maxMembers : 6, 
                             expire_hours: expireHours, 
                             auto_join: true 
                         }); 
@@ -174,8 +170,8 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'change_password') {
         content = (
             <>
-                <p className="text-muted small">Set a new password (6-10 digits).</p>
-                <input type="number" className="form-control mb-3" placeholder="New Password (6-10 digits)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                <p className="text-muted small">Set a new password (6-10 characters).</p>
+                <input type="text" className="form-control mb-3" placeholder="New Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
@@ -196,7 +192,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         content = (
             <>
                 <p className="text-muted">Enter password to join Room {modal.room_id}</p>
-                <input type="number" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+                <input type="text" className="form-control mb-3" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); }}>Join</button>
@@ -207,21 +203,21 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         content = (
             <>
                 <div className="mb-3">
-                    <label className="form-label text-muted small mb-2 fw-bold">Add Duration</label>
+                    <label className="form-label text-muted small mb-2 fw-bold">Add Duration (Once Only)</label>
                     <div className="d-flex gap-2">
-                        {[2, 4].map(hours => (
+                        {[0.5, 1].map(hours => (
                             <div key={hours}
                                  className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
                                  onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                <div className="fw-bold fs-5">+{hours} <span className="fs-6">hrs</span></div>
-                                <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 2 ? 1 : 2} Creds</div>
+                                <div className="fw-bold fs-5">{hours === 0.5 ? '30' : '1'} <span className="fs-6">{hours === 0.5 ? 'mins' : 'hr'}</span></div>
+                                <div style={{fontSize: '0.65rem', opacity: 0.8}}>{hours === 0.5 ? 1 : 2} Creds</div>
                             </div>
                         ))}
                     </div>
                 </div>
                 <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between shadow-sm">
                     <span><i className="fas fa-coins text-warning me-1"></i> Cost:</span>
-                    <span>{expireHours === 4 ? 2 : 1} Credits</span>
+                    <span>{expireHours === 1 ? 2 : 1} Credits</span>
                 </div>
                 <div className="d-flex gap-2">
                     <button className="btn btn-light border w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
@@ -246,6 +242,26 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('leave_room'); setCurrentRoomId(null); close(); }}>Leave</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_delete_message') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to delete this message?</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_message', { message_id: modal.message_id }); close(); }}>Delete</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'confirm_clear_chat') {
+        content = (
+            <>
+                <p className="text-muted text-center mb-4">Are you sure you want to delete ALL messages in this room?</p>
+                <div className="d-flex gap-2">
+                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('clear_chat'); close(); }}>Clear All</button>
                 </div>
             </>
         );
