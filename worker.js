@@ -41,6 +41,9 @@ const initWorkerDB = async () => {
             CREATE TABLE IF NOT EXISTS users (
                 tg_id VARCHAR(50) PRIMARY KEY,
                 credits DECIMAL(10,2) DEFAULT 0,
+                gems DECIMAL(10,2) DEFAULT 0,
+                streak_count INT DEFAULT 0,
+                last_streak_claim DATE,
                 last_daily_claim DATE,
                 ad_claims_today INT DEFAULT 0,
                 last_ad_claim_time DATETIME,
@@ -86,8 +89,23 @@ const initWorkerDB = async () => {
             )
         `);
 
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS reports (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                reporter_id VARCHAR(50),
+                reported_id VARCHAR(50),
+                context VARCHAR(50),
+                reason VARCHAR(255),
+                snapshot_data LONGTEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         const migrations = [
             "ALTER TABLE users MODIFY COLUMN credits DECIMAL(10,2) DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN gems DECIMAL(10,2) DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN streak_count INT DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN last_streak_claim DATE",
             "ALTER TABLE users ADD COLUMN accepted_policy BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN last_invite_claim_week VARCHAR(10)",
             "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
