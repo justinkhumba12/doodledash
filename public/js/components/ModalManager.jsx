@@ -7,7 +7,6 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     const [maxMembers, setMaxMembers] = useState(6);
     const [expireHours, setExpireHours] = useState(0.5);
     
-    // New Ad loading state for Hints
     const [adLoading, setAdLoading] = useState(false);
 
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); };
@@ -85,7 +84,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'create_room') {
-        let baseRoomCost = isPriv ? maxMembers : 0; // 1 user = 1 credit
+        let baseRoomCost = isPriv ? maxMembers : 0; 
 
         content = (
             <>
@@ -245,13 +244,43 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 </div>
             </>
         );
-    } else if (modal.type === 'confirm_delete_message') {
+    } else if (modal.type === 'chat_action') {
+        // Message Action menu enabling robust community moderation features
         content = (
             <>
-                <p className="text-muted text-center mb-4">Are you sure you want to delete this message?</p>
+                <h6 className="fw-bold mb-3 text-center">Message Options</h6>
+                <div className="d-flex flex-column gap-2">
+                    {modal.message.user_id !== window.tgId && (
+                        <button className="btn btn-warning w-100 rounded-pill fw-bold" onClick={() => {
+                            setModal({ type: 'report_input', context: 'message', reported_id: modal.message.user_id, snapshot_data: modal.message.message });
+                        }}>
+                            <i className="fas fa-flag me-2"></i> Report Message
+                        </button>
+                    )}
+                    {modal.isCreator && (
+                        <button className="btn btn-danger w-100 rounded-pill fw-bold" onClick={() => {
+                            socket.emit('delete_message', { message_id: modal.message.id });
+                            close();
+                        }}>
+                            <i className="fas fa-trash-alt me-2"></i> Delete Message
+                        </button>
+                    )}
+                    <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={close}>Cancel</button>
+                </div>
+            </>
+        );
+    } else if (modal.type === 'report_input') {
+        // Uniform reporting reason input logic
+        content = (
+            <>
+                <p className="text-muted small">Please provide a reason for reporting this {modal.context}.</p>
+                <textarea className="form-control mb-3" placeholder="Reason..." rows="3" value={pwd} onChange={e => setPwd(e.target.value)}></textarea>
                 <div className="d-flex gap-2">
-                    <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                    <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('delete_message', { message_id: modal.message_id }); close(); }}>Delete</button>
+                    <button className="btn btn-secondary w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                    <button className="btn btn-danger w-50 rounded-pill fw-bold" disabled={pwd.trim().length < 3} onClick={() => { 
+                        socket.emit('report_user', { reported_id: modal.reported_id, context: modal.context, reason: pwd.trim(), snapshot_data: modal.snapshot_data }); 
+                        close(); 
+                    }}><i className="fas fa-paper-plane me-1"></i> Submit Report</button>
                 </div>
             </>
         );
@@ -371,7 +400,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             <div className="wb-overlay" style={{ zIndex: 4000, background: 'rgba(0,0,0,0.5)', position: 'fixed' }}>
                 <div className="call-toast text-start" style={{ width: '90%', maxWidth: '350px' }}>
                     <div className="d-flex justify-content-between align-items-center mb-3">
-                        <h5 className="m-0 fw-bold">{modal.title || 'Notification'}</h5>
+                        <h5 className="m-0 fw-bold">{modal.title || 'Notice'}</h5>
                         {modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && <button className="btn-close" onClick={close}></button>}
                     </div>
                     {content}
@@ -389,5 +418,4 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     );
 };
 
-// Expose to window for the main app
 window.ModalManager = ModalManager;
