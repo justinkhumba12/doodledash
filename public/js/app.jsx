@@ -4,13 +4,10 @@ window.INK_CONFIG = {
 };
 
 // CRITICAL FIX: Safe Initialization Check
-// If Telegram's script is delayed or missing, this ensures React doesn't crash completely.
-window.tg = window.Telegram?.WebApp;
 if (window.tg) {
     window.tg.expand();
 }
 
-// Platform Hard Check to enforce Mobile Usage and block circumvention
 window.isBlockedPlatform = false;
 
 window.initData = window.tg?.initData || ''; 
@@ -20,7 +17,6 @@ window.username = window.tg?.initDataUnsafe?.user?.username || 'unset';
 
 window.toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
-// NEW HELPER: Fetch custom display name or fall back to Hex ID
 window.getDisplayName = (id, namesObj) => (namesObj && namesObj[id]) ? namesObj[id] : window.toHex(id);
 
 window.getStatusText = (status) => {
@@ -51,7 +47,6 @@ window.renderGenderIcon = (gender) => {
     return null;
 };
 
-// Extract hooks for App 
 const { useState, useEffect, useRef, useCallback } = React;
 
 
@@ -62,7 +57,8 @@ const App = () => {
     const [isDisconnected, setIsDisconnected] = useState(false);
     const [isReloading, setIsReloading] = useState(false);
     
-    const [mainPageTab, setMainPageTab] = useState('home'); // Tabs: home, tasks, leaderboard, profile
+    // Bottom Nav Tabs
+    const [mainPageTab, setMainPageTab] = useState('home'); 
 
     const [user, setUser] = useState(null);
     const [rooms, setRooms] = useState([]);
@@ -81,7 +77,6 @@ const App = () => {
     const [unreadChat, setUnreadChat] = useState(false);
     const [unreadGuess, setUnreadGuess] = useState(false);
 
-    // Modernized sound toggle replacing the slider
     const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('soundEnabled') !== 'false');
 
     const tgIdRef = useRef(window.tgId);
@@ -95,7 +90,6 @@ const App = () => {
     useEffect(() => {
         let isMounted = true;
         
-        // Failsafe handling if initData doesn't exist
         if (!window.initData) {
             setLoadingState('Please open this Mini App directly from Telegram.');
             return;
@@ -343,7 +337,7 @@ const App = () => {
         });
 
         newSocket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
-        newSocket.on('create_error', (msg) => setModal({ type: 'error', title: 'Error', content: msg }));
+        newSocket.on('create_error', (msg) => setModal({ type: 'error', title: 'Notice', content: msg }));
         newSocket.on('join_error', (msg) => setModal({ type: 'error', title: 'Cannot Join', content: msg }));
         
         newSocket.on('join_success', (roomId) => {
@@ -459,11 +453,10 @@ const App = () => {
         );
     }
 
-    // NEW FAILSAFE: Dynamically extract components at render-time. 
-    // Prevents crashing if app.jsx executes before Views.jsx or GameComponents.jsx
-    const { LobbyView, TasksView, LeaderboardView, ProfileView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
+    // Dynmaically extract components at render-time. 
+    const { LobbyView, TasksView, LeaderboardView, ProfileView, ShopView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
     
-    if (!LobbyView || !GameRoom || !ModalManager) {
+    if (!LobbyView || !GameRoom || !ModalManager || !ShopView) {
         return (
             <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
                 <div className="spinner-border text-primary" style={{ width: '4rem', height: '4rem', borderWidth: '0.3em' }}></div>
@@ -507,6 +500,8 @@ const App = () => {
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                 <div className="d-flex align-items-center bg-light rounded-pill shadow-sm border border-secondary border-opacity-25" style={{ padding: '2px 6px' }}>
+                    <i className="fas fa-gem text-info me-1" style={{ fontSize: '0.75rem' }}></i>
+                    <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.75rem' }}>{user.gems || 0}</span>
                     <i className="fas fa-coins text-warning me-1" style={{ fontSize: '0.75rem' }}></i>
                     <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.75rem' }}>{user.credits}</span>
                     <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm" onClick={handleLoadBalance} title="Load Balance" style={{ width: '18px', height: '18px' }}>
@@ -520,6 +515,7 @@ const App = () => {
                     <div style={{ paddingBottom: '80px' }}>
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} />}
+                        {mainPageTab === 'shop' && <ShopView user={user} socket={socket} setModal={setModal} />}
                         {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} />}
                         {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} />}
                         
@@ -530,8 +526,11 @@ const App = () => {
                             <div className={`nav-item ${mainPageTab === 'tasks' ? 'active' : ''}`} onClick={() => setMainPageTab('tasks')}>
                                 <i className="fas fa-tasks"></i><span>Tasks</span>
                             </div>
+                            <div className={`nav-item ${mainPageTab === 'shop' ? 'active' : ''}`} onClick={() => setMainPageTab('shop')}>
+                                <i className="fas fa-store"></i><span>Shop</span>
+                            </div>
                             <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
-                                <i className="fas fa-trophy"></i><span>Leaderboard</span>
+                                <i className="fas fa-trophy"></i><span>Ranks</span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'profile' ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                 <i className="fas fa-user"></i><span>Profile</span>
@@ -626,21 +625,33 @@ const App = () => {
 
             <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} />
             
+            {/* The profile modal adds a flag reporting action for community safety */}
             {profileModal && (
-                <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal(null); else setProfileModal(null); }}>
+                <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
                    {!profileModal.full ? (
-                       <div className="call-toast text-center" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
+                       <div className="call-toast text-center position-relative" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
+                           {/* Flag Profile Action */}
+                           {profileModal.user_id !== window.tgId && (
+                               <button className="btn btn-link text-danger position-absolute top-0 end-0 p-3 shadow-none" title="Report Profile" onClick={(e) => {
+                                   e.stopPropagation();
+                                   setProfileModal(null);
+                                   setModal({ type: 'report_input', context: 'profile', reported_id: profileModal.user_id, snapshot_data: '' });
+                               }}>
+                                   <i className="fas fa-flag fs-5"></i>
+                               </button>
+                           )}
+                           
                            {profileModal.pic ? (
-                               <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
+                               <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border mt-3" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
                            ) : (
-                               <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm" style={{fontSize: '100px'}}></i>
+                               <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm mt-3" style={{fontSize: '100px'}}></i>
                            )}
                            <h3 className="mb-1">{window.getDisplayName(profileModal.user_id, roomData?.names)}</h3>
                            <p className="text-muted small fw-bold mb-3">{window.renderGenderIcon(profileModal.gender)}{profileModal.gender || 'Gender Not Set'}</p>
                            <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
                        </div>
                    ) : (
-                       <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal(null)}>
+                       <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal({...profileModal, full: false})}>
                            {profileModal.pic ? <img src={profileModal.pic} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} alt="Profile Full"/> : <i className="fas fa-user-circle text-secondary" style={{fontSize: '200px'}}></i>}
                        </div>
                    )}
