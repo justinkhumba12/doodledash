@@ -97,7 +97,7 @@ const ProfileView = ({ user, socket, setModal }) => {
                             </div>
                         ) : (
                             <div className="d-flex align-items-center justify-content-between mt-1">
-                                <span className="fw-bold text-dark fs-5">{user?.gender || 'Not Set'}</span>
+                                <span className="fw-bold text-dark fs-5">{window.renderGenderIcon(user?.gender)}{user?.gender || 'Not Set'}</span>
                                 <button className="btn btn-light btn-sm rounded-pill shadow-sm px-3 fw-bold border" onClick={() => setEditingGender(true)} title={user?.gender ? "Edit (5 Credits)" : "Set Gender"}>
                                     <i className="fas fa-edit text-primary me-1"></i> Edit
                                 </button>
@@ -107,12 +107,12 @@ const ProfileView = ({ user, socket, setModal }) => {
                 </div>
             </div>
 
-            <div className="card bg-light border border-primary rounded-4 cursor-pointer hover-up" onClick={handleDonateClick} style={{ transition: '0.3s' }}>
+            <div className="card bg-light border-dashed rounded-4 mb-3" style={{ transition: '0.3s' }}>
                 <div className="card-body p-4 text-center">
                     <i className="fas fa-heart text-danger fs-1 mb-2"></i>
                     <h5 className="fw-bold text-dark">Support DoodleDash</h5>
                     <p className="small text-muted mb-0">Donate Telegram Stars to keep the servers running and get featured on the Donators Leaderboard!</p>
-                    <button className="btn btn-primary rounded-pill mt-3 px-4 fw-bold shadow-sm">Donate via Bot</button>
+                    <button className="btn btn-primary rounded-pill mt-3 px-4 fw-bold shadow-sm" onClick={handleDonateClick}>Donate via Bot</button>
                 </div>
             </div>
         </div>
