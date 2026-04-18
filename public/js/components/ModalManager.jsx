@@ -280,7 +280,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     <button className="btn btn-danger w-50 rounded-pill fw-bold" disabled={pwd.trim().length < 3} onClick={() => { 
                         socket.emit('report_user', { reported_id: modal.reported_id, context: modal.context, reason: pwd.trim(), snapshot_data: modal.snapshot_data }); 
                         close(); 
-                    }}><i className="fas fa-paper-plane me-1"></i> Submit Report</button>
+                    }}><i className="fas fa-paper-plane me-1"></i> Submit</button>
                 </div>
             </>
         );
