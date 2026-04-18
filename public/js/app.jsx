@@ -4,16 +4,21 @@ window.INK_CONFIG = {
 };
 
 // CRITICAL FIX: Safe Initialization Check
-if (window.tg) {
+if (window.Telegram && window.Telegram.WebApp) {
+    window.tg = window.Telegram.WebApp;
     window.tg.expand();
 }
 
 window.isBlockedPlatform = false;
 
-window.initData = window.tg?.initData || ''; 
-window.tgId = window.tg?.initDataUnsafe?.user?.id?.toString() || null;
-window.profilePic = window.tg?.initDataUnsafe?.user?.photo_url || '';
-window.username = window.tg?.initDataUnsafe?.user?.username || 'unset';
+// FAKE TELEGRAM DATA FOR LOCAL/CANVAS TESTING
+const isTelegram = !!(window.tg && window.tg.initData);
+const mockInitData = "query_id=mock123&user=%7B%22id%22%3A123456789%2C%22first_name%22%3A%22Dev%22%2C%22last_name%22%3A%22User%22%2C%22username%22%3A%22devuser%22%7D&auth_date=1710000000&hash=mock&mock_web_auth=true";
+
+window.initData = isTelegram ? window.tg.initData : mockInitData; 
+window.tgId = isTelegram ? window.tg.initDataUnsafe?.user?.id?.toString() : '123456789';
+window.profilePic = isTelegram ? window.tg.initDataUnsafe?.user?.photo_url : '';
+window.username = isTelegram ? window.tg.initDataUnsafe?.user?.username : 'devuser';
 
 window.toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
@@ -48,7 +53,6 @@ window.renderGenderIcon = (gender) => {
 };
 
 const { useState, useEffect, useRef, useCallback } = React;
-
 
 // --- Main App Component ---
 const App = () => {
@@ -92,6 +96,14 @@ const App = () => {
         
         if (!window.initData) {
             setLoadingState('Please open this Mini App directly from Telegram.');
+            return;
+        }
+
+        // BYPASS: Automatically clear HTTP authentication for local canvas testing
+        if (window.initData.includes('mock_web_auth=true')) {
+            setTimeout(() => {
+                if (isMounted) setIsAuthComplete(true);
+            }, 500);
             return;
         }
         
