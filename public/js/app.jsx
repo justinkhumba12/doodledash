@@ -44,6 +44,13 @@ window.triggerVibration = (style) => {
     }
 };
 
+window.renderGenderIcon = (gender) => {
+    if (gender === 'Male') return <i className="fas fa-mars text-primary me-1"></i>;
+    if (gender === 'Female') return <i className="fas fa-venus text-danger me-1"></i>;
+    if (gender === 'Other') return <i className="fas fa-genderless text-success me-1"></i>;
+    return null;
+};
+
 // Extract hooks for App 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -499,11 +506,11 @@ const App = () => {
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                <div className="d-flex align-items-center bg-white rounded-pill shadow-sm border" style={{ padding: '2px 8px 2px 8px' }}>
-                    <i className="fas fa-coins text-warning me-1" style={{ filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.1))', fontSize: '0.8rem' }}></i>
-                    <span className="fw-bold me-2" style={{ color: '#1e293b', fontSize: '0.85rem' }}>{user.credits}</span>
-                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm hover-up" onClick={handleLoadBalance} title="Load Balance" style={{ width: '22px', height: '22px' }}>
-                        <i className="fas fa-plus text-white" style={{ fontSize: '0.65rem' }}></i>
+                <div className="d-flex align-items-center bg-light rounded-pill shadow-sm border border-secondary border-opacity-25" style={{ padding: '2px 6px' }}>
+                    <i className="fas fa-coins text-warning me-1" style={{ fontSize: '0.75rem' }}></i>
+                    <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.75rem' }}>{user.credits}</span>
+                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm" onClick={handleLoadBalance} title="Load Balance" style={{ width: '18px', height: '18px' }}>
+                        <i className="fas fa-plus text-white" style={{ fontSize: '0.55rem' }}></i>
                     </button>
                 </div>
             </div>
@@ -541,9 +548,9 @@ const App = () => {
                                             <span className="small text-muted fw-bold">Room {roomData.room.id} • {roomData.room.is_private ? 'Private' : 'Public'}</span>
                                             <div className="d-flex align-items-center gap-2 mt-1">
                                                 {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
-                                                {timeLeftText ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
                                                 {roomData.room.is_private === 1 && roomData.room.creator_id === window.tgId ? (
                                                     <>
+                                                        {timeLeftText && !roomData.room.has_been_extended ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
                                                         <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
                                                         <button className="btn btn-sm btn-outline-danger py-1 px-2 rounded-circle shadow-none fw-bold" title="Delete Room" onClick={() => setModal({type: 'confirm_delete_room', title: 'Delete Room'})}><i className="fas fa-trash"></i></button>
                                                     </>
@@ -581,7 +588,7 @@ const App = () => {
                                     </div>
                                     
                                     {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} roomData={roomData} />}
+                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} roomData={roomData} setModal={setModal} />}
                                     {activeTab === 'sounds' && (
                                         <div className="panel-body">
                                             <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
@@ -629,7 +636,7 @@ const App = () => {
                                <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm" style={{fontSize: '100px'}}></i>
                            )}
                            <h3 className="mb-1">{window.getDisplayName(profileModal.user_id, roomData?.names)}</h3>
-                           <p className="text-muted small fw-bold mb-3">{profileModal.gender || 'Gender Not Set'}</p>
+                           <p className="text-muted small fw-bold mb-3">{window.renderGenderIcon(profileModal.gender)}{profileModal.gender || 'Gender Not Set'}</p>
                            <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
                        </div>
                    ) : (
