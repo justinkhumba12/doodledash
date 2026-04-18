@@ -355,18 +355,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                 />
                 
                 {room.status === 'PRE_DRAW' && isDrawer && (
-                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center" style={{background: 'rgba(255,255,255,0.95)'}}>
-                        <h4 className="text-primary fw-bold mb-1">Your Turn!</h4>
-                        <h5 className="text-danger fw-bold mb-3"><i className="fas fa-stopwatch"></i> {preDrawTimeLeft}s</h5>
-                        <div className="w-75 p-3 bg-white rounded-4 shadow-sm border text-center">
-                            <label className="small fw-bold text-muted mb-2">Word to draw (3-10 chars)</label>
-                            <div className="input-group mb-3">
-                                <input type="text" maxLength={10} minLength={3} className="form-control text-center fw-bold text-dark fs-5" placeholder="Enter word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} style={{letterSpacing: '2px'}} />
-                                {wordInput && <button className="btn btn-outline-secondary" onClick={() => setWordInput('')}><i className="fas fa-times"></i></button>}
+                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.95)', padding: '10px'}}>
+                        <h5 className="text-primary fw-bold mb-1">Your Turn!</h5>
+                        <h6 className="text-danger fw-bold mb-2"><i className="fas fa-stopwatch"></i> {preDrawTimeLeft}s</h6>
+                        <div className="w-100 px-2 text-center">
+                            <label className="small fw-bold text-muted mb-1">Word to draw (3-10 chars)</label>
+                            <div className="input-group input-group-sm mb-2">
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center fw-bold text-dark" placeholder="Enter word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} style={{letterSpacing: '1px'}} />
+                                {wordInput && <button className="btn btn-outline-secondary btn-sm" onClick={() => setWordInput('')}><i className="fas fa-times"></i></button>}
                             </div>
-                            <div className="d-flex flex-column gap-2">
-                                <button className="btn btn-outline-primary rounded-pill shadow-sm fw-bold" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-dice me-1"></i> Random Word</button>
-                                <button className="btn btn-success rounded-pill shadow-sm fw-bold fs-5 py-2 mt-1" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}><i className="fas fa-paint-brush me-1"></i> Start Drawing!</button>
+                            <div className="d-flex gap-2 justify-content-center">
+                                <button className="btn btn-outline-primary btn-sm rounded-pill shadow-sm fw-bold flex-grow-1" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-dice me-1"></i> Random</button>
+                                <button className="btn btn-success btn-sm rounded-pill shadow-sm fw-bold flex-grow-1" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}><i className="fas fa-paint-brush me-1"></i> Start</button>
                             </div>
                         </div>
                     </div>
@@ -480,9 +480,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     );
 };
 
-const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
+const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
+    const isCreator = roomData.room.creator_id === tgId;
     
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -507,8 +508,16 @@ const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                 {chats.map(c => {
                     const photo = roomData?.photos?.[c.user_id];
+                    const isDeleted = c.message === '[Deleted by admin]';
                     return (
-                        <div key={c.id} className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '' }}>
+                        <div key={c.id} 
+                             className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} 
+                             style={{ borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', cursor: isCreator && c.user_id !== 'System' && !isDeleted ? 'pointer' : 'default' }}
+                             onClick={() => {
+                                 if (isCreator && c.user_id !== 'System' && !isDeleted && setModal) {
+                                     setModal({ type: 'confirm_delete_message', message_id: c.id });
+                                 }
+                             }}>
                             {c.user_id !== 'System' && (
                                 photo ? 
                                     <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
@@ -518,12 +527,20 @@ const ChatBox = ({ chats, socket, tgId, user, roomData }) => {
                                 <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
                                     {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
                                 </small>
-                                <span style={{marginTop: '2px'}}>{c.message}</span>
+                                <span style={{marginTop: '2px', fontStyle: isDeleted ? 'italic' : 'normal', color: isDeleted ? '#94a3b8' : 'inherit'}}>{c.message}</span>
                             </div>
                         </div>
                     );
                 })}
                 <div ref={messagesEndRef} />
+                
+                {isCreator && chats.length > 0 && (
+                    <div className="text-center mt-3 mb-2">
+                        <button className="btn btn-sm btn-outline-danger rounded-pill shadow-sm" onClick={() => setModal({ type: 'confirm_clear_chat' })}>
+                            <i className="fas fa-trash-alt"></i> Clear All Messages
+                        </button>
+                    </div>
+                )}
             </div>
             
             <div className="chat-input-wrapper d-flex align-items-end mt-auto gap-2" style={{padding: '10px 15px', backgroundColor: 'white', borderTop: '1px solid #e2e8f0'}}>
@@ -791,28 +808,37 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                         <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
                         {sortedMembers.map(m => {
                             const photo = roomData?.photos?.[m.user_id];
+                            const isDrawer = room.current_drawer_id === m.user_id;
                             return (
-                                <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: room.current_drawer_id === m.user_id ? 'var(--primary)' : 'transparent'}}>
+                                <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: isDrawer ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
-                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: photo, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer">
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: photo, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer position-relative">
                                             {photo ? 
-                                                <img src={photo} className="rounded-circle me-2 border" width="35" height="35" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Player"/> : 
-                                                <i className="fas fa-user-circle fs-2 text-secondary me-2 bg-white rounded-circle"></i>
+                                                <img src={photo} className="rounded-circle me-2 border" width="30" height="30" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Player"/> : 
+                                                <i className="fas fa-user-circle fs-3 text-secondary me-2 bg-white rounded-circle"></i>
                                             }
                                         </div>
                                         <div className="d-flex flex-column">
-                                            <span className="fw-bold">{window.getDisplayName(m.user_id, roomData?.names)} {m.user_id === tgId ? ' (You)' : ''}</span>
+                                            <span className="fw-bold" style={{fontSize: '0.85rem'}}>
+                                                {window.getDisplayName(m.user_id, roomData?.names)} 
+                                                {m.user_id === tgId ? <small className="text-muted" style={{fontSize: '0.7em'}}> (You)</small> : ''}
+                                            </span>
                                             <div className="d-flex align-items-center gap-1">
-                                                {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.65rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
+                                                {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.6rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
                                             </div>
                                         </div>
                                     </div>
                                     
                                     <div className="d-flex align-items-center gap-2">
-                                        {m.is_ready ? (
-                                            <span className="badge bg-success shadow-sm"><i className="fas fa-check"></i> Ready</span>
+                                        {room.is_private === 1 && room.creator_id === window.tgId && m.user_id !== window.tgId && (
+                                            <button className="btn btn-sm btn-outline-danger py-0 px-1 rounded" title="Kick Player" onClick={() => setModal({type: 'kick_player', target_id: m.user_id})}><i className="fas fa-times"></i></button>
+                                        )}
+                                        {isDrawer ? (
+                                            <span className="badge bg-primary shadow-sm" title="Drawing"><i className="fas fa-paint-brush"></i></span>
+                                        ) : m.is_ready ? (
+                                            <span className="badge bg-success shadow-sm" title="Ready"><i className="fas fa-check"></i></span>
                                         ) : (
-                                            <span className="badge bg-secondary shadow-sm">Waiting</span>
+                                            <span className="badge bg-secondary shadow-sm" title="Waiting"><i className="fas fa-hourglass-half"></i></span>
                                         )}
                                     </div>
                                 </div>
