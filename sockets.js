@@ -410,7 +410,7 @@ module.exports = (io) => {
                     return socket.emit('create_error', 'Maximum room limit (1250) reached. Cannot create more rooms at this time.');
                 }
 
-                const limit = [2, 3, 4].includes(max_members) ? max_members : 4;
+                const limit = [2, 3, 4, 5, 6].includes(max_members) ? max_members : 6;
                 let cost = 0; 
                 let expDate = null;
                 
@@ -424,11 +424,9 @@ module.exports = (io) => {
                     if (hasRoom) return socket.emit('create_error', 'You can only have 1 private room active at a time.');
                     if (!password || password.length < 6 || password.length > 10) return socket.emit('create_error', 'Password must be exactly 6 to 10 characters.');
                     
-                    const limitCost = limit === 2 ? 1 : (limit === 3 ? 3 : 4);
-                    const durationCost = expire_hours === 2 ? 1 : (expire_hours === 4 ? 2 : 1);
+                    cost = limit; // 1 credit per maximum user capacity
                     
-                    cost += limitCost + durationCost; 
-                    const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
+                    const hours = [0.5, 1].includes(expire_hours) ? expire_hours : 0.5;
                     expDate = new Date(Date.now() + hours * 3600000);
                 }
 
@@ -446,6 +444,7 @@ module.exports = (io) => {
                     round_end_time: null, break_end_time: null, last_winner_id: null, end_reason: null, turn_index: 0,
                     modified_at: new Date(), is_private: is_private ? 1 : 0, password: is_private ? password : null,
                     max_members: limit, base_hints: '[]', creator_id: is_private ? currentUser : null, expire_at: expDate,
+                    has_been_extended: false,
                     undo_steps: 0, redo_steps: 0,
                     members: [], banned_members: []
                 });
@@ -532,19 +531,22 @@ module.exports = (io) => {
                 const currentUser = socket.data.currentUser;
                 const currentRoom = socket.data.currentRoom;
                 if (!currentUser || !currentRoom) return;
-                const hours = [2, 4].includes(expire_hours) ? expire_hours : 2;
-                let cost = hours === 4 ? 2 : 1;
-                
-                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
-                if (currentCredits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
                 
                 const room = await getRoom(currentRoom);
                 if (!room || !room.is_private || room.creator_id !== currentUser) return;
+                if (room.has_been_extended) return socket.emit('create_error', 'Room duration can only be extended once.');
+
+                const hours = [0.5, 1].includes(expire_hours) ? expire_hours : 0.5;
+                let cost = hours === 1 ? 2 : 1;
+                
+                const currentCredits = parseFloat(await redis.hget('user_credits', currentUser)) || 0;
+                if (currentCredits < cost) return socket.emit('create_error', 'Not enough credits to extend room.');
 
                 await redis.hset('user_credits', currentUser, currentCredits - cost);
                 await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
                 
                 room.expire_at = new Date(room.expire_at.getTime() + hours * 3600000);
+                room.has_been_extended = true;
                 await saveRoom(room);
                 
                 const userState = await getUserState(currentUser);
@@ -592,6 +594,43 @@ module.exports = (io) => {
 
             await syncRoom(currentRoom, io);
             await broadcastRooms(io);
+        });
+
+        socket.on('delete_message', async ({ message_id }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || room.creator_id !== currentUser) return;
+
+            const rawChats = await redis.lrange(`room:${currentRoom}:chats`, 0, -1);
+            const updatedChats = [];
+            for (const raw of rawChats) {
+                const chat = JSON.parse(raw);
+                if (chat.id === message_id) {
+                    chat.message = '[Deleted by admin]';
+                }
+                updatedChats.push(JSON.stringify(chat));
+            }
+            
+            await redis.del(`room:${currentRoom}:chats`);
+            if (updatedChats.length > 0) {
+                await redis.rpush(`room:${currentRoom}:chats`, ...updatedChats);
+            }
+            await syncRoom(currentRoom, io);
+        });
+
+        socket.on('clear_chat', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || room.creator_id !== currentUser) return;
+
+            await redis.del(`room:${currentRoom}:chats`);
+            await syncRoom(currentRoom, io);
         });
 
         socket.on('chat', async ({ message }) => {
