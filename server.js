@@ -18,11 +18,14 @@ if (cluster.isPrimary) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
-            // The users table query is now fully merged with all attributes
+            // The users table query includes streak mechanics and secondary currency (gems)
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
                     credits DECIMAL(10,2) DEFAULT 0,
+                    gems DECIMAL(10,2) DEFAULT 0,
+                    streak_count INT DEFAULT 0,
+                    last_streak_claim DATE,
                     last_daily_claim DATE,
                     ad_claims_today INT DEFAULT 0,
                     last_ad_claim_time DATETIME,
@@ -65,6 +68,19 @@ if (cluster.isPrimary) {
                 CREATE TABLE IF NOT EXISTS donations (
                     tg_id VARCHAR(50) PRIMARY KEY,
                     total_donated INT DEFAULT 0
+                )
+            `);
+
+            // Creates the robust reports table to store evidence
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS reports (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    reporter_id VARCHAR(50),
+                    reported_id VARCHAR(50),
+                    context VARCHAR(50),
+                    reason VARCHAR(255),
+                    snapshot_data LONGTEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             `);
 
