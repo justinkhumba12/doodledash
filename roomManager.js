@@ -155,7 +155,8 @@ async function syncRoom(roomId, io) {
                     ...room, 
                     expire_at: room.expire_at ? room.expire_at.toISOString() : null,
                     break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
-                    round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null
+                    round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null,
+                    has_been_extended: room.has_been_extended || false
                 },
                 members,
                 chats, 
