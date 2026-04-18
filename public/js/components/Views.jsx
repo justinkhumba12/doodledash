@@ -1,5 +1,21 @@
 const { useState, useEffect } = React;
 
+// New Shop view component acting as placeholder
+const ShopView = () => {
+    return (
+        <div className="container mt-4 pb-5 text-center">
+            <i className="fas fa-store text-primary mb-3" style={{fontSize: '4rem'}}></i>
+            <h3 className="fw-bold mb-2">Item Shop</h3>
+            <p className="text-muted">Spend your Gems and Credits here to stand out!</p>
+            <div className="card bg-white rounded-4 border shadow-sm p-5 mt-4 border-dashed" style={{ borderStyle: 'dashed', borderColor: '#cbd5e1' }}>
+                <i className="fas fa-tools fs-1 text-secondary opacity-50 mb-3"></i>
+                <h5 className="fw-bold text-dark">Coming Soon</h5>
+                <p className="small text-muted mb-0">We are currently stocking the shelves with amazing exclusive avatars, custom ink colors, and boosts. Check back later!</p>
+            </div>
+        </div>
+    );
+};
+
 const ProfileView = ({ user, socket, setModal }) => {
     const [editingGender, setEditingGender] = useState(false);
     const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
@@ -127,6 +143,9 @@ const TasksView = ({ user, socket, setModal }) => {
     const isCompleted = inviteCount >= goal;
     const hasClaimed = user?.invite_claimed_this_week;
 
+    const streakCount = user?.streak_count || 0;
+    const currentDay = Math.min((user?.daily_available ? streakCount + 1 : streakCount) || 1, 7);
+
     const handleInvite = () => {
         const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
         if (window.tg && window.tg.openTelegramLink) {
@@ -210,20 +229,41 @@ const TasksView = ({ user, socket, setModal }) => {
         <div className="container mt-4 pb-5">
             <h3 className="fw-bold mb-4 text-center">Tasks & Rewards</h3>
 
-            {/* Daily Claim */}
+            {/* Daily Streak Claim System */}
             <div className="card bg-white rounded-4 border shadow-sm mb-3">
-                <div className="card-body p-3 d-flex align-items-center justify-content-between">
-                    <div className="d-flex align-items-center gap-3">
-                        <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
-                            <i className="fas fa-calendar-check fs-5"></i>
-                        </div>
-                        <div>
-                            <h6 className="fw-bold mb-1">Daily Claim</h6>
-                            <p className="text-muted small mb-0">Get 1 Free Credit everyday!</p>
+                <div className="card-body p-3">
+                    <div className="d-flex justify-content-between align-items-start mb-3">
+                        <div className="d-flex align-items-center gap-3">
+                            <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'}}>
+                                <i className="fas fa-fire fs-5"></i>
+                            </div>
+                            <div>
+                                <h6 className="fw-bold mb-1">Daily Streak <span className="badge bg-warning text-dark ms-1">Day {streakCount}</span></h6>
+                                <p className="text-muted small mb-0">Claim every day to scale your reward! Miss a day, reset to Day 1.</p>
+                            </div>
                         </div>
                     </div>
-                    <button className={`btn btn-sm rounded-pill fw-bold px-3 ${user?.daily_available ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!user?.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
-                        {user?.daily_available ? 'Claim' : 'Claimed'}
+                    
+                    <div className="d-flex justify-content-between mb-3 gap-1 px-1">
+                        {[1, 2, 3, 4, 5, 6, 7].map(day => {
+                            const isClaimed = day <= streakCount;
+                            const isNext = day === streakCount + 1 && user?.daily_available;
+                            
+                            let bgClass = "bg-light text-muted border";
+                            if (isClaimed) bgClass = "bg-success text-white shadow-sm border-success";
+                            if (isNext) bgClass = "bg-warning text-dark shadow-sm border-warning border-2 fw-bold";
+                            
+                            return (
+                                <div key={day} className={`d-flex flex-column align-items-center justify-content-center rounded py-1 flex-grow-1 ${bgClass}`} style={{fontSize: '0.7rem', transition: 'all 0.2s'}}>
+                                    <span>D{day}</span>
+                                    <span className="fw-bold mt-1">{day === 7 ? '🎁' : `+${Math.min(day, 7)}`}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    
+                    <button className={`btn w-100 rounded-pill fw-bold ${user?.daily_available ? 'btn-success shadow-sm' : 'btn-light text-muted border'}`} disabled={!user?.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                        {user?.daily_available ? `Claim Day ${currentDay} Reward` : 'Come back tomorrow'}
                     </button>
                 </div>
             </div>
@@ -276,14 +316,6 @@ const TasksView = ({ user, socket, setModal }) => {
                             {hasClaimed ? 'Claimed' : 'Claim 5 Credits'}
                         </button>
                     </div>
-                </div>
-            </div>
-
-            <div className="card bg-light border-dashed rounded-4 mb-3" style={{ borderStyle: 'dashed', borderColor: '#cbd5e1' }}>
-                <div className="card-body p-4 text-center text-muted">
-                    <i className="fas fa-lock fs-2 mb-2 text-secondary opacity-50"></i>
-                    <h6 className="fw-bold">More Tasks Coming Soon</h6>
-                    <p className="small mb-0">Stay tuned for more ways to earn credits!</p>
                 </div>
             </div>
 
@@ -635,6 +667,7 @@ const LobbyView = ({ user, rooms, setModal, socket }) => {
     );
 };
 
+window.ShopView = ShopView;
 window.ProfileView = ProfileView;
 window.TasksView = TasksView;
 window.LeaderboardView = LeaderboardView;
