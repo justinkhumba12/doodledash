@@ -371,6 +371,10 @@
             const [starPackages, setStarPackages] = useState([]);
             const [unbanCost, setUnbanCost] = useState(50);
             const [unmuteCost, setUnmuteCost] = useState(25);
+            
+            // Accordion states
+            const [showStarPkgs, setShowStarPkgs] = useState(false);
+            const [showGemPkgs, setShowGemPkgs] = useState(false);
 
             const loadSettings = () => {
                 apiFetch('/config').then(c => {
@@ -417,9 +421,9 @@
                     <h3 className="fw-bold mb-4">Economy & Monetization</h3>
                     <div className="row g-3 mb-4">
                         <div className="col-12 col-md-6">
-                            <div className="card h-100">
-                                <div className="card-header text-success"><i className="fas fa-hand-holding-usd me-2"></i>Manual Currency Grant</div>
-                                <div className="card-body d-flex flex-column gap-3">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-success fw-bold"><i className="fas fa-hand-holding-usd me-2"></i>Manual Currency Grant</div>
+                                <div className="card-body bg-light d-flex flex-column gap-3">
                                     <div><label className="form-label small fw-bold">Target Telegram ID</label><input className="form-control" placeholder="12345678" value={targetUser} onChange={e=>setTargetUser(e.target.value)} /></div>
                                     <div className="row g-2">
                                         <div className="col"><label className="form-label small fw-bold text-warning">Credits (+/-)</label><input className="form-control" type="number" value={credits} onChange={e=>setCredits(e.target.value)} /></div>
@@ -430,9 +434,9 @@
                             </div>
                         </div>
                         <div className="col-12 col-md-6">
-                            <div className="card h-100">
-                                <div className="card-header text-primary"><i className="fas fa-chart-line me-2"></i>Global Penalty Costs</div>
-                                <div className="card-body">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-primary fw-bold"><i className="fas fa-chart-line me-2"></i>Global Penalty Costs</div>
+                                <div className="card-body bg-light">
                                     <div className="row g-3 mb-3">
                                         <div className="col-6">
                                             <label className="form-label small fw-bold">Unban Cost (⭐️)</label>
@@ -448,47 +452,57 @@
                         </div>
                         
                         <div className="col-12 col-md-6">
-                            <div className="card h-100">
-                                <div className="card-header text-info"><i className="fas fa-star me-2"></i>Star Purchase Packages</div>
-                                <div className="card-body">
-                                    <div className="alert alert-info small py-2 mb-3">Configure packages users buy with Telegram Stars to get Gems.</div>
-                                    
-                                    {starPackages.map(pkg => (
-                                        <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.stars} onChange={e => updateStarPackage(pkg.id, 'stars', e.target.value)} /> 
-                                            <span className="small fw-bold text-muted">Stars =</span>
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateStarPackage(pkg.id, 'gems', e.target.value)} /> 
-                                            <span className="small fw-bold text-muted">Gems</span>
-                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeStarPackage(pkg.id)}><i className="fas fa-times"></i></button>
-                                        </div>
-                                    ))}
-                                    <button className="btn btn-sm btn-outline-info mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addStarPackage}>+ Add New Star Package</button>
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-info fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowStarPkgs(!showStarPkgs)}>
+                                    <span><i className="fas fa-star me-2"></i>Star Purchase Packages</span>
+                                    <i className={`fas fa-chevron-${showStarPkgs ? 'up' : 'down'} text-muted`}></i>
                                 </div>
+                                {showStarPkgs && (
+                                    <div className="card-body bg-light border-top">
+                                        <div className="alert alert-info small py-2 mb-3">Configure packages users buy with Telegram Stars to get Gems.</div>
+                                        
+                                        {starPackages.map(pkg => (
+                                            <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.stars} onChange={e => updateStarPackage(pkg.id, 'stars', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Stars =</span>
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateStarPackage(pkg.id, 'gems', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Gems</span>
+                                                <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeStarPackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                            </div>
+                                        ))}
+                                        <button className="btn btn-sm btn-outline-info mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addStarPackage}>+ Add New Star Package</button>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
                         <div className="col-12 col-md-6">
-                            <div className="card h-100">
-                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Gem Exchange Packages</div>
-                                <div className="card-body">
-                                    <div className="alert alert-warning small py-2 mb-3">Configure packages users can buy credits with using gems.</div>
-                                    
-                                    {gemPackages.map(pkg => (
-                                        <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateGemPackage(pkg.id, 'gems', e.target.value)} /> 
-                                            <span className="small fw-bold text-muted">Gems =</span>
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updateGemPackage(pkg.id, 'credits', e.target.value)} /> 
-                                            <span className="small fw-bold text-muted">Credits</span>
-                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeGemPackage(pkg.id)}><i className="fas fa-times"></i></button>
-                                        </div>
-                                    ))}
-                                    <button className="btn btn-sm btn-outline-warning mt-2 mb-4 w-100 fw-bold border-dashed text-dark" onClick={addGemPackage}>+ Add New Exchange Package</button>
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-warning fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowGemPkgs(!showGemPkgs)}>
+                                    <span><i className="fas fa-exchange-alt me-2 text-warning"></i>Gem Exchange Packages</span>
+                                    <i className={`fas fa-chevron-${showGemPkgs ? 'up' : 'down'} text-muted`}></i>
                                 </div>
+                                {showGemPkgs && (
+                                    <div className="card-body bg-light border-top">
+                                        <div className="alert alert-warning small py-2 mb-3 text-dark">Configure packages users can buy credits with using gems.</div>
+                                        
+                                        {gemPackages.map(pkg => (
+                                            <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateGemPackage(pkg.id, 'gems', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Gems =</span>
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updateGemPackage(pkg.id, 'credits', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Credits</span>
+                                                <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeGemPackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                            </div>
+                                        ))}
+                                        <button className="btn btn-sm btn-outline-warning mt-2 mb-4 w-100 fw-bold border-dashed text-dark" onClick={addGemPackage}>+ Add New Exchange Package</button>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
                         <div className="col-12">
-                            <button className="btn btn-primary w-100 fw-bold shadow-sm p-3" onClick={saveEconomy}><i className="fas fa-save me-2"></i> Save Economy Configuration Globally</button>
+                            <button className="btn btn-primary w-100 fw-bold shadow-sm p-3 mt-3" onClick={saveEconomy}><i className="fas fa-save me-2"></i> Save Economy Configuration Globally</button>
                         </div>
                     </div>
                 </div>
