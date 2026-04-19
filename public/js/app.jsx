@@ -60,7 +60,6 @@ const App = () => {
     const [isAuthComplete, setIsAuthComplete] = useState(false);
     const [isDisconnected, setIsDisconnected] = useState(false);
     const [isReloading, setIsReloading] = useState(false);
-    const [componentsLoaded, setComponentsLoaded] = useState(false);
     
     // Bottom Nav Tabs
     const [mainPageTab, setMainPageTab] = useState('home'); 
@@ -93,17 +92,6 @@ const App = () => {
     const lastKnownRoomRef = useRef(null);
 
     const [idleTimer, setIdleTimer] = useState(30);
-
-    // FIX: Component Loader to prevent race conditions with Babel standalone compilation
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (window.LobbyView && window.GameRoom && window.ModalManager && window.ShopView && window.ProfileView && window.TasksView && window.LeaderboardView) {
-                setComponentsLoaded(true);
-                clearInterval(interval);
-            }
-        }, 100);
-        return () => clearInterval(interval);
-    }, []);
 
     useEffect(() => {
         let isMounted = true;
@@ -488,17 +476,15 @@ const App = () => {
         );
     }
 
-    if (!componentsLoaded) {
-        return (
-            <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
-                <div className="spinner-border text-primary" style={{ width: '4rem', height: '4rem', borderWidth: '0.3em' }}></div>
-                <h4 className="fw-bold text-dark mt-3">Loading Interface...</h4>
-                <p className="text-muted small">Preparing game assets. If stuck, please refresh.</p>
-            </div>
-        );
-    }
-
-    const { LobbyView, TasksView, LeaderboardView, ProfileView, ShopView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
+    const LobbyView = window.LobbyView || (() => null);
+    const TasksView = window.TasksView || (() => null);
+    const LeaderboardView = window.LeaderboardView || (() => null);
+    const ProfileView = window.ProfileView || (() => null);
+    const ShopView = window.ShopView || (() => null);
+    const GameRoom = window.GameRoom || (() => null);
+    const ModalManager = window.ModalManager || (() => null);
+    const GuessBox = window.GuessBox || (() => null);
+    const ChatBox = window.ChatBox || (() => null);
 
     let timeLeftText = '';
     if (roomData && roomData.room.is_private && roomData.room.expire_at) {
