@@ -366,6 +366,7 @@
             const [targetUser, setTargetUser] = useState('');
             const [credits, setCredits] = useState(0);
             const [gems, setGems] = useState(0);
+            const [htmlMessage, setHtmlMessage] = useState(''); // Added HTML message state
             
             const [gemPackages, setGemPackages] = useState([]);
             const [starPackages, setStarPackages] = useState([]);
@@ -391,9 +392,9 @@
 
             const applyFunds = async () => {
                 if(!targetUser) return;
-                await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems) });
+                await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems), message: htmlMessage });
                 alert('Funds successfully applied!');
-                setCredits(0); setGems(0); setTargetUser('');
+                setCredits(0); setGems(0); setHtmlMessage(''); setTargetUser('');
             };
 
             const addGemPackage = () => {
@@ -431,6 +432,10 @@
                                     <div className="row g-2">
                                         <div className="col"><label className="form-label small fw-bold text-warning">Credits (+/-)</label><input className="form-control" type="number" value={credits} onChange={e=>setCredits(e.target.value)} /></div>
                                         <div className="col"><label className="form-label small fw-bold text-info">Gems (+/-)</label><input className="form-control" type="number" value={gems} onChange={e=>setGems(e.target.value)} /></div>
+                                    </div>
+                                    <div className="mb-2">
+                                        <label className="form-label small fw-bold text-secondary">HTML Message (Optional Notification)</label>
+                                        <textarea className="form-control form-control-sm" placeholder="<b>Congratulations!</b> You've been granted extra currency." rows="2" value={htmlMessage} onChange={e => setHtmlMessage(e.target.value)}></textarea>
                                     </div>
                                     <button className="btn btn-success mt-auto" onClick={applyFunds} disabled={!targetUser}>Execute Transaction</button>
                                 </div>
@@ -550,12 +555,14 @@
             const [msg, setMsg] = useState('');
             const [rooms, setRooms] = useState([]);
             const [maxRooms, setMaxRooms] = useState(1250);
+            const [roomLimits, setRoomLimits] = useState({ publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 });
 
             const load = () => {
                 apiFetch('/config').then(c => { 
                     setMaint(c.maintenance); 
                     setDict(c.dictionary.join(', ')); 
                     if(c.maxRooms) setMaxRooms(c.maxRooms);
+                    if(c.roomLimits) setRoomLimits(c.roomLimits);
                 });
                 apiFetch('/rooms').then(setRooms);
             };
@@ -600,7 +607,7 @@
                                         <label className="form-label small fw-bold">Max Active Rooms Capacity</label>
                                         <div className="d-flex gap-2">
                                             <input type="number" className="form-control" value={maxRooms} onChange={e=>setMaxRooms(e.target.value)} />
-                                            <button className="btn btn-primary fw-bold" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms }); alert('Server capacity updated!'); }}>Save</button>
+                                            <button className="btn btn-primary fw-bold" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); alert('Server capacity updated!'); }}>Save</button>
                                         </div>
                                         <small className="text-muted" style={{fontSize: '0.75rem'}}>Prevents new rooms if this limit is reached to save server resources.</small>
                                     </div>
@@ -611,6 +618,35 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+
+                    <div className="card mb-4">
+                        <div className="card-header bg-dark text-white"><i className="fas fa-users-cog me-2"></i>Room Configurations (Users & Cost)</div>
+                        <div className="card-body">
+                            <div className="row g-2 mb-3">
+                                <div className="col-6 col-md-3">
+                                    <label className="form-label small fw-bold">Public Max Users</label>
+                                    <input type="number" className="form-control form-control-sm" value={roomLimits.publicMax} onChange={e=>setRoomLimits({...roomLimits, publicMax: parseInt(e.target.value)})} />
+                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Fixed size</small>
+                                </div>
+                                <div className="col-6 col-md-3">
+                                    <label className="form-label small fw-bold">Private Max Users</label>
+                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateMax} onChange={e=>setRoomLimits({...roomLimits, privateMax: parseInt(e.target.value)})} />
+                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Allowed limit</small>
+                                </div>
+                                <div className="col-6 col-md-3">
+                                    <label className="form-label small fw-bold">Private Free Users</label>
+                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateFree} onChange={e=>setRoomLimits({...roomLimits, privateFree: parseInt(e.target.value)})} />
+                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Zero cost up to</small>
+                                </div>
+                                <div className="col-6 col-md-3">
+                                    <label className="form-label small fw-bold">Private Extra Cost</label>
+                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateExtraCost} onChange={e=>setRoomLimits({...roomLimits, privateExtraCost: parseInt(e.target.value)})} />
+                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Cred per user</small>
+                                </div>
+                            </div>
+                            <button className="btn btn-primary btn-sm fw-bold w-100" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); alert('Room configurations saved!'); }}>Save Room Configuration</button>
                         </div>
                     </div>
 
