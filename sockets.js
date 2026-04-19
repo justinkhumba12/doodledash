@@ -156,6 +156,9 @@ module.exports = (io) => {
                 const maint = await redis.get('maintenance_mode');
                 const maintEndTime = await redis.get('maintenance_end_time');
                 const packagesRaw = await redis.get('config_gem_packages');
+                const starPackagesRaw = await redis.get('config_star_packages');
+                const maxRoomsRaw = await redis.get('config_max_rooms');
+                
                 const systemConfig = {
                     maintenance: { active: maint === '1', end_time: maintEndTime },
                     gemPackages: packagesRaw ? JSON.parse(packagesRaw) : [
@@ -163,7 +166,14 @@ module.exports = (io) => {
                         { id: 2, gems: 3, credits: 15 },
                         { id: 3, gems: 5, credits: 25 },
                         { id: 4, gems: 10, credits: 50 }
-                    ]
+                    ],
+                    starPackages: starPackagesRaw ? JSON.parse(starPackagesRaw) : [
+                        { id: 1, stars: 20, gems: 20 },
+                        { id: 2, stars: 50, gems: 50 },
+                        { id: 3, stars: 100, gems: 100 },
+                        { id: 4, stars: 500, gems: 500 }
+                    ],
+                    maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250
                 };
 
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom, systemConfig });
@@ -171,6 +181,43 @@ module.exports = (io) => {
                 console.error('Auth Error', err); 
                 socket.emit('auth_error', 'Authentication processing failed.');
             }
+        });
+
+        socket.on('set_ready', async () => {
+            queuedAction(async () => {
+                const roomId = socket.data.currentRoom;
+                const userId = socket.data.currentUser;
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (!room) return;
+
+                const member = room.members.find(m => m.user_id === userId);
+                if (member) {
+                    member.is_ready = 1;
+                    const readyCount = room.members.filter(m => m.is_ready).length;
+                    const allReady = room.members.length >= 2 && readyCount === room.members.length;
+
+                    if (allReady && (room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL')) {
+                        room.status = 'PRE_DRAW';
+                        room.round = (room.round || 0) + 1;
+                        
+                        // Pick next drawer by iterating
+                        const currentIndex = room.members.findIndex(m => m.user_id === room.current_drawer_id);
+                        const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
+                        room.current_drawer_id = room.members[nextIndex].user_id;
+
+                        room.round_end_time = new Date(Date.now() + 30000);
+                        room.break_end_time = null;
+                        room.word_to_draw = null;
+                        room.end_reason = null;
+                        room.members.forEach(m => { m.has_given_up = 0; });
+                        await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`, `room:${roomId}:guesses`);
+                    }
+                    await saveRoom(room);
+                    await syncRoom(roomId, io);
+                    await broadcastRooms(io);
+                }
+            });
         });
 
         socket.on('report_user', async ({ reported_id, context, reason, snapshot_data }) => {
@@ -464,6 +511,14 @@ module.exports = (io) => {
                 if (!currentUser) return;
                 
                 if (!checkRateLimit()) return;
+
+                const activeRoomsCount = await redis.scard('active_rooms');
+                const maxRoomsStr = await redis.get('config_max_rooms');
+                const maxRooms = maxRoomsStr ? parseInt(maxRoomsStr) : 1250;
+                
+                if (activeRoomsCount >= maxRooms) {
+                    return socket.emit('room_limit_reached');
+                }
 
                 const maint = await redis.get('maintenance_mode');
                 if (maint === '1') return socket.emit('create_error', 'Server is in Maintenance Mode. Room creation is disabled.');
