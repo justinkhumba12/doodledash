@@ -210,6 +210,7 @@ module.exports = (io) => {
                         room.break_end_time = null;
                         room.word_to_draw = null;
                         room.end_reason = null;
+                        room.last_winner_id = null;
                         room.members.forEach(m => { m.has_given_up = 0; });
                         await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`, `room:${roomId}:guesses`);
                     }
@@ -561,6 +562,11 @@ module.exports = (io) => {
                 await saveRoom(roomData);
                 await redis.sadd('active_rooms', roomIdNum.toString());
 
+                // Auto-join the creator to the room they just made
+                if (data.auto_join) {
+                    await performJoinRoom(currentUser, roomIdNum, pwd, true);
+                }
+                
                 socket.emit('room_created', { room_id: roomIdNum });
                 
                 const userState = await getUserState(currentUser);
@@ -634,30 +640,220 @@ module.exports = (io) => {
             }
         });
 
-        // --- Essential Gameplay Passthroughs ---
-        const forwardToRoom = (event, extractKey = null) => {
-            socket.on(event, (data) => {
+        // --- Active Game Implementations ---
+        socket.on('set_word', async ({ word }) => {
+            queuedAction(async () => {
                 const roomId = socket.data.currentRoom;
                 const userId = socket.data.currentUser;
-                if (roomId && userId) {
-                    if (extractKey && data[extractKey] !== undefined) {
-                        io.to(`room_${roomId}`).emit(event, { user_id: userId, [extractKey]: data[extractKey], ...data });
-                    } else {
-                        io.to(`room_${roomId}`).emit(event, { user_id: userId, ...data });
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (room && room.current_drawer_id === userId && room.status === 'PRE_DRAW') {
+                    room.word_to_draw = word.toUpperCase();
+                    room.status = 'DRAWING';
+                    room.round_end_time = new Date(Date.now() + 90000); // 90 seconds to draw
+                    await saveRoom(room);
+                    await syncRoom(roomId, io);
+                    await broadcastRooms(io);
+                }
+            });
+        });
+
+        socket.on('chat', async ({ message }) => {
+            const roomId = socket.data.currentRoom;
+            const userId = socket.data.currentUser;
+            if (!roomId || !userId) return;
+            const chatObj = {
+                id: Date.now() + Math.random().toString(36).substr(2, 5),
+                room_id: roomId,
+                user_id: userId,
+                message: message,
+                created_at: new Date()
+            };
+            await redis.rpush(`room:${roomId}:chats`, JSON.stringify(chatObj));
+            await redis.ltrim(`room:${roomId}:chats`, -50, -1);
+            io.to(`room_${roomId}`).emit('new_chat', chatObj);
+        });
+
+        socket.on('guess', async ({ guess }) => {
+            queuedAction(async () => {
+                const roomId = socket.data.currentRoom;
+                const userId = socket.data.currentUser;
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (!room || room.status !== 'DRAWING') return;
+
+                if (room.current_drawer_id === userId) return;
+
+                const isCorrect = guess.toUpperCase() === room.word_to_draw;
+
+                const guessObj = {
+                    id: Date.now() + Math.random().toString(36).substr(2, 5),
+                    room_id: roomId,
+                    user_id: userId,
+                    guess_text: guess.toUpperCase(),
+                    is_correct: isCorrect,
+                    created_at: new Date()
+                };
+
+                await redis.rpush(`room:${roomId}:guesses`, JSON.stringify(guessObj));
+                await redis.ltrim(`room:${roomId}:guesses`, -50, -1);
+                
+                io.to(`room_${roomId}`).emit('new_guess', guessObj);
+
+                if (isCorrect) {
+                    room.status = 'REVEAL';
+                    room.last_winner_id = userId;
+                    room.break_end_time = new Date(Date.now() + 5000);
+                    room.members.forEach(m => { m.is_ready = 0; });
+                    await saveRoom(room);
+                    await syncRoom(roomId, io);
+                }
+            });
+        });
+
+        socket.on('drawer_give_up', async () => {
+            queuedAction(async () => {
+                const roomId = socket.data.currentRoom;
+                const userId = socket.data.currentUser;
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (room && room.current_drawer_id === userId && (room.status === 'DRAWING' || room.status === 'PRE_DRAW')) {
+                    room.status = 'REVEAL';
+                    room.end_reason = 'drawer_gave_up';
+                    room.break_end_time = new Date(Date.now() + 5000);
+                    room.members.forEach(m => { m.is_ready = 0; });
+                    await saveRoom(room);
+                    await syncRoom(roomId, io);
+                }
+            });
+        });
+
+        socket.on('guesser_give_up', async () => {
+            queuedAction(async () => {
+                const roomId = socket.data.currentRoom;
+                const userId = socket.data.currentUser;
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (!room || room.status !== 'DRAWING') return;
+
+                const member = room.members.find(m => m.user_id === userId);
+                if (member && !member.has_given_up) {
+                    member.has_given_up = 1;
+                    
+                    const guessers = room.members.filter(m => m.user_id !== room.current_drawer_id);
+                    const allGivenUp = guessers.length > 0 && guessers.every(m => m.has_given_up);
+                    
+                    if (allGivenUp) {
+                        room.status = 'REVEAL';
+                        room.end_reason = 'all_gave_up';
+                        room.break_end_time = new Date(Date.now() + 5000);
+                        room.members.forEach(m => { m.is_ready = 0; });
+                    }
+                    await saveRoom(room);
+                    await syncRoom(roomId, io);
+                }
+            });
+        });
+
+        socket.on('delete_chat_message', async ({ message_id }) => {
+            queuedAction(async () => {
+                const roomId = socket.data.currentRoom;
+                const userId = socket.data.currentUser;
+                if (!roomId || !userId) return;
+                const room = await getRoom(roomId);
+                if (room && room.is_private && room.creator_id === userId) {
+                    const rawChats = await redis.lrange(`room:${roomId}:chats`, 0, -1);
+                    const chats = rawChats.map(c => JSON.parse(c));
+                    let modified = false;
+                    const newChats = chats.map(c => {
+                        if (c.id === message_id) {
+                            modified = true;
+                            return { ...c, message: '[Deleted by room creator]' };
+                        }
+                        return c;
+                    });
+                    if (modified) {
+                        await redis.del(`room:${roomId}:chats`);
+                        for (const c of newChats) {
+                            await redis.rpush(`room:${roomId}:chats`, JSON.stringify(c));
+                        }
+                        await syncRoom(roomId, io);
                     }
                 }
             });
-        };
+        });
 
-        forwardToRoom('draw_line');
-        forwardToRoom('clear_canvas');
-        forwardToRoom('undo_action');
-        forwardToRoom('redo_action');
-        forwardToRoom('chat_message', 'message');
-        forwardToRoom('guess_word', 'guess');
-        forwardToRoom('drawer_give_up');
-        forwardToRoom('guesser_give_up');
-        forwardToRoom('delete_chat_message', 'message_id');
+        socket.on('draw', async (data) => {
+            const roomId = socket.data.currentRoom;
+            const userId = socket.data.currentUser;
+            if (!roomId || !userId) return;
+            const drawData = { lines: data.lines, color: data.color || 'black' };
+            await redis.rpush(`room:${roomId}:drawings`, JSON.stringify(drawData));
+            await redis.del(`room:${roomId}:redo`);
+            
+            const room = await getRoom(roomId);
+            if (room) {
+                room.undo_steps = (room.undo_steps || 0) + 1;
+                room.redo_steps = 0;
+                await saveRoom(room);
+                io.to(`room_${roomId}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: 0 });
+            }
+            
+            socket.to(`room_${roomId}`).emit('live_draw', drawData);
+        });
+
+        socket.on('clear_all', async () => {
+            const roomId = socket.data.currentRoom;
+            const userId = socket.data.currentUser;
+            if (!roomId || !userId) return;
+            const room = await getRoom(roomId);
+            if (room && room.current_drawer_id === userId) {
+                await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`);
+                room.undo_steps = 0;
+                room.redo_steps = 0;
+                await saveRoom(room);
+                io.to(`room_${roomId}`).emit('sync_initial_drawings', []);
+                io.to(`room_${roomId}`).emit('update_undo_redo', { undo_steps: 0, redo_steps: 0 });
+            }
+        });
+
+        socket.on('undo', async () => {
+            const roomId = socket.data.currentRoom;
+            const userId = socket.data.currentUser;
+            if (!roomId || !userId) return;
+            const room = await getRoom(roomId);
+            if (room && room.current_drawer_id === userId) {
+                const popped = await redis.rpop(`room:${roomId}:drawings`);
+                if (popped) {
+                    await redis.rpush(`room:${roomId}:redo`, popped);
+                    room.undo_steps = Math.max(0, (room.undo_steps || 0) - 1);
+                    room.redo_steps = (room.redo_steps || 0) + 1;
+                    await saveRoom(room);
+                    io.to(`room_${roomId}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+                }
+                const rawDrawings = await redis.lrange(`room:${roomId}:drawings`, 0, -1);
+                io.to(`room_${roomId}`).emit('sync_initial_drawings', rawDrawings.map(d => JSON.parse(d)));
+            }
+        });
+
+        socket.on('redo', async () => {
+            const roomId = socket.data.currentRoom;
+            const userId = socket.data.currentUser;
+            if (!roomId || !userId) return;
+            const room = await getRoom(roomId);
+            if (room && room.current_drawer_id === userId) {
+                const popped = await redis.rpop(`room:${roomId}:redo`);
+                if (popped) {
+                    await redis.rpush(`room:${roomId}:drawings`, popped);
+                    room.undo_steps = (room.undo_steps || 0) + 1;
+                    room.redo_steps = Math.max(0, (room.redo_steps || 0) - 1);
+                    await saveRoom(room);
+                    io.to(`room_${roomId}`).emit('update_undo_redo', { undo_steps: room.undo_steps, redo_steps: room.redo_steps });
+                }
+                const rawDrawings = await redis.lrange(`room:${roomId}:drawings`, 0, -1);
+                io.to(`room_${roomId}`).emit('sync_initial_drawings', rawDrawings.map(d => JSON.parse(d)));
+            }
+        });
 
         // --- Room Owner & Admin Controls ---
         socket.on('delete_room', async () => {
