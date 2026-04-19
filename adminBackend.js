@@ -186,10 +186,16 @@ async function setupAdminPanel(app, io) {
 
     // --- ECONOMY & CONFIG ---
     adminRouter.post('/economy/modify', async (req, res) => {
-        const { tgId, credits, gems } = req.body;
+        const { tgId, credits, gems, message } = req.body;
         await db.query(`UPDATE users SET credits = credits + ?, gems = gems + ? WHERE tg_id = ?`, [credits || 0, gems || 0, tgId]);
         if (credits) await redis.hincrbyfloat('user_credits', tgId, credits);
-        await logAdminAction(req.adminId, 'MODIFY_ECONOMY', { tgId, credits, gems });
+        
+        // If an HTML formatted message was provided, send it through the Telegram Bot
+        if (message && message.trim() !== '') {
+            sendMsg(tgId, message, null, { parse_mode: 'HTML' });
+        }
+
+        await logAdminAction(req.adminId, 'MODIFY_ECONOMY', { tgId, credits, gems, hasMessage: !!message });
         res.json({ success: true });
     });
 
@@ -197,6 +203,7 @@ async function setupAdminPanel(app, io) {
         const maintenance = await redis.get('maintenance_mode');
         const maintEndTime = await redis.get('maintenance_end_time');
         const dictionary = await redis.get('custom_dictionary');
+        const maxRooms = await redis.get('config_max_rooms');
         
         const packagesRaw = await redis.get('config_gem_packages');
         const gemPackages = packagesRaw ? JSON.parse(packagesRaw) : [
@@ -220,6 +227,9 @@ async function setupAdminPanel(app, io) {
         const unbanCost = await redis.get('config_unban_cost') || 50;
         const unmuteCost = await redis.get('config_unmute_cost') || 25;
 
+        const roomLimitsRaw = await redis.get('config_room_limits');
+        const roomLimits = roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+
         res.json({
             maintenance: maintenance === '1',
             maintenanceEndTime: maintEndTime,
@@ -228,7 +238,9 @@ async function setupAdminPanel(app, io) {
             inkConfig,
             dictionary: dictionary ? JSON.parse(dictionary) : [],
             unbanCost: parseInt(unbanCost),
-            unmuteCost: parseInt(unmuteCost)
+            unmuteCost: parseInt(unmuteCost),
+            maxRooms: maxRooms ? parseInt(maxRooms) : 1250,
+            roomLimits
         });
     });
 
@@ -260,6 +272,14 @@ async function setupAdminPanel(app, io) {
             io.emit('maintenance_update', { active: false });
         }
         await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance, duration_hours });
+        res.json({ success: true });
+    });
+
+    adminRouter.post('/config/server_limits', async (req, res) => {
+        const { maxRooms, roomLimits } = req.body;
+        if (maxRooms) await redis.set('config_max_rooms', maxRooms.toString());
+        if (roomLimits) await redis.set('config_room_limits', JSON.stringify(roomLimits));
+        await logAdminAction(req.adminId, 'UPDATE_SERVER_LIMITS', { maxRooms, roomLimits });
         res.json({ success: true });
     });
 
