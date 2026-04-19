@@ -507,7 +507,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
-    const isCreator = roomData.room.creator_id === tgId;
+    const isCreator = Boolean(roomData.room.is_private) && roomData.room.creator_id === tgId;
     
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
