@@ -626,7 +626,7 @@ const App = () => {
                 )}
             </div>
 
-            <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} />
+            <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} systemConfig={systemConfig} />
             
             {profileModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
