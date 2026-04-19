@@ -153,7 +153,20 @@ module.exports = (io) => {
                     }
                 }
 
-                socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom });
+                const maint = await redis.get('maintenance_mode');
+                const maintEndTime = await redis.get('maintenance_end_time');
+                const packagesRaw = await redis.get('config_gem_packages');
+                const systemConfig = {
+                    maintenance: { active: maint === '1', end_time: maintEndTime },
+                    gemPackages: packagesRaw ? JSON.parse(packagesRaw) : [
+                        { id: 1, gems: 1, credits: 5 },
+                        { id: 2, gems: 3, credits: 15 },
+                        { id: 3, gems: 5, credits: 25 },
+                        { id: 4, gems: 10, credits: 50 }
+                    ]
+                };
+
+                socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom, systemConfig });
             } catch (err) { 
                 console.error('Auth Error', err); 
                 socket.emit('auth_error', 'Authentication processing failed.');
