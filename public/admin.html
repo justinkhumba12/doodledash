@@ -100,6 +100,8 @@
             const [users, setUsers] = useState([]);
             const [reports, setReports] = useState([]);
             const [proofModal, setProofModal] = useState(null);
+            const [reportModalTab, setReportModalTab] = useState('reason');
+            const [actionModal, setActionModal] = useState(null);
             
             const [reportFilter, setReportFilter] = useState('all');
             const [selectedProfile, setSelectedProfile] = useState(null);
@@ -112,12 +114,49 @@
                 setUsers(res);
             };
 
-            const takeAction = async (tgId, action, days) => {
-                if(!window.confirm(`Apply ${action} to user ${tgId}?`)) return;
-                await apiFetch('/users/action', 'POST', { tgId, action, days });
-                doSearch(); 
-                apiFetch('/reports').then(setReports);
+            const fetchProfile = async (tgId, reportData = null) => {
+                const res = await apiFetch('/users/search', 'POST', { query: tgId });
+                if (res && res.length > 0) {
+                    setSelectedProfile({ ...res[0], reportData });
+                } else {
+                    alert('User not found.');
+                }
+            };
+
+            const openActionModal = (tgId, action, days, reportData = null) => {
+                let defMsg = "";
+                if (action === 'ban') defMsg = `You have been banned for ${days === 'perm' ? 'life' : days + ' days'} due to violations of our rules.`;
+                if (action === 'mute') defMsg = `You have been muted for ${days} day(s) due to chat violations.`;
+                if (action === 'unban' || action === 'unmute') defMsg = `Your restriction has been lifted.`;
+
+                setActionModal({
+                    tgId, action, days,
+                    reporterId: reportData?.reporter_id,
+                    reportId: reportData?.id,
+                    message: defMsg
+                });
+            };
+
+            const takeAction = async (data) => {
+                await apiFetch('/users/action', 'POST', {
+                    tgId: data.tgId,
+                    action: data.action,
+                    days: data.days,
+                    message: data.message,
+                    reporterId: data.reporterId,
+                    reportId: data.reportId
+                });
+                setActionModal(null);
                 setSelectedProfile(null);
+                setProofModal(null);
+                doSearch();
+                apiFetch('/reports').then(setReports);
+            };
+
+            const deleteReport = async (id) => {
+                if (!window.confirm('Are you sure you want to delete this unsolved report?')) return;
+                await apiFetch('/reports/delete', 'POST', { id });
+                apiFetch('/reports').then(setReports);
             };
 
             const filteredReports = reports.filter(r => {
@@ -156,10 +195,23 @@
                                                     </td>
                                                     <td>
                                                         <div className="btn-group btn-group-sm flex-wrap">
-                                                            <button className="btn btn-outline-warning" onClick={()=>takeAction(u.tg_id, 'mute', 1)}>Mute 24h</button>
-                                                            <button className="btn btn-outline-danger" onClick={()=>takeAction(u.tg_id, 'ban', 7)}>Ban 7d</button>
-                                                            <button className="btn btn-danger" onClick={()=>takeAction(u.tg_id, 'ban', 'perm')}>Permaban</button>
-                                                            {(u.status === 'ban' || u.status === 'mute') && <button className="btn btn-success" onClick={()=>takeAction(u.tg_id, 'unban', null)}>Pardon</button>}
+                                                            {u.status === 'ban' && (
+                                                                <button className="btn btn-success" onClick={() => openActionModal(u.tg_id, 'unban', null, null)}>Unban</button>
+                                                            )}
+                                                            {u.status === 'mute' && (
+                                                                <>
+                                                                    <button className="btn btn-success" onClick={() => openActionModal(u.tg_id, 'unmute', null, null)}>Unmute</button>
+                                                                    <button className="btn btn-outline-danger" onClick={() => openActionModal(u.tg_id, 'ban', 7, null)}>Ban 7d</button>
+                                                                    <button className="btn btn-danger" onClick={() => openActionModal(u.tg_id, 'ban', 'perm', null)}>Permaban</button>
+                                                                </>
+                                                            )}
+                                                            {u.status === 'active' && (
+                                                                <>
+                                                                    <button className="btn btn-outline-warning" onClick={() => openActionModal(u.tg_id, 'mute', 1, null)}>Mute 24h</button>
+                                                                    <button className="btn btn-outline-danger" onClick={() => openActionModal(u.tg_id, 'ban', 7, null)}>Ban 7d</button>
+                                                                    <button className="btn btn-danger" onClick={() => openActionModal(u.tg_id, 'ban', 'perm', null)}>Permaban</button>
+                                                                </>
+                                                            )}
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -183,15 +235,22 @@
                         </div>
                         <div className="table-responsive p-3">
                             <table className="table table-hover align-middle" style={{minWidth: '600px'}}>
-                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Reason</th><th>Proof</th></tr></thead>
+                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Details</th><th>Action</th></tr></thead>
                                 <tbody>
                                     {filteredReports.map(r => (
                                         <tr key={r.id}>
                                             <td className="small">{new Date(r.created_at).toLocaleString()}</td>
-                                            <td className="font-monospace small">{r.reporter_id}</td>
-                                            <td className="font-monospace small fw-bold text-danger text-decoration-underline cursor-pointer" onClick={() => setSelectedProfile(r)}>{r.reported_id}</td>
-                                            <td><span className="badge bg-info text-dark me-1">{r.context}</span> {r.reason}</td>
-                                            <td><button className="btn btn-sm btn-dark" onClick={()=>setProofModal(r)}>View Proof</button></td>
+                                            <td className="font-monospace small fw-bold text-primary text-decoration-underline cursor-pointer" onClick={() => fetchProfile(r.reporter_id)}>
+                                                {r.reporter_id}
+                                            </td>
+                                            <td className="font-monospace small fw-bold text-danger text-decoration-underline cursor-pointer" onClick={() => fetchProfile(r.reported_id, r)}>
+                                                {r.reported_id}
+                                            </td>
+                                            <td><span className="badge bg-info text-dark me-1">{r.context}</span></td>
+                                            <td className="text-end">
+                                                <button className="btn btn-sm btn-dark me-1" onClick={() => { setProofModal(r); setReportModalTab('reason'); }}>Details</button>
+                                                <button className="btn btn-sm btn-outline-danger" title="Delete Unsolved Report" onClick={() => deleteReport(r.id)}><i className="fas fa-trash"></i></button>
+                                            </td>
                                         </tr>
                                     ))}
                                     {filteredReports.length === 0 && <tr><td colSpan="5" className="text-center p-4 text-muted">No reports found matching criteria.</td></tr>}
@@ -210,15 +269,28 @@
                                     </div>
                                     <div className="modal-body text-center bg-light p-4">
                                         {selectedProfile.avatar_url ? <img src={selectedProfile.avatar_url} className="rounded-circle mb-3 shadow" width="80" height="80" style={{objectFit:'cover'}} /> : <i className="fas fa-user-circle fs-1 mb-3 text-secondary"></i>}
-                                        <h5 className="fw-bold mb-1">{selectedProfile.name || selectedProfile.reported_id}</h5>
+                                        <h5 className="fw-bold mb-1">{selectedProfile.name || selectedProfile.reported_id || selectedProfile.tg_id}</h5>
                                         <p className="text-muted small mb-2">@{selectedProfile.username} • {selectedProfile.gender || 'Unset'}</p>
                                         <p className="mb-0">Status: <span className={`badge ${selectedProfile.status==='active'?'bg-success':(selectedProfile.status==='mute'?'bg-warning text-dark':'bg-danger')}`}>{selectedProfile.status}</span></p>
                                         
                                         <div className="d-flex flex-wrap gap-2 justify-content-center mt-3 pt-3 border-top">
-                                            <button className="btn btn-sm btn-outline-warning" onClick={()=>takeAction(selectedProfile.reported_id, 'mute', 1)}>Mute 24h</button>
-                                            <button className="btn btn-sm btn-outline-danger" onClick={()=>takeAction(selectedProfile.reported_id, 'ban', 7)}>Ban 7d</button>
-                                            <button className="btn btn-sm btn-danger" onClick={()=>takeAction(selectedProfile.reported_id, 'ban', 'perm')}>Permaban</button>
-                                            {(selectedProfile.status === 'ban' || selectedProfile.status === 'mute') && <button className="btn btn-sm btn-success" onClick={()=>takeAction(selectedProfile.reported_id, 'unban', null)}>Pardon (Reset)</button>}
+                                            {selectedProfile.status === 'ban' && (
+                                                <button className="btn btn-sm btn-success" onClick={() => openActionModal(selectedProfile.tg_id, 'unban', null, selectedProfile.reportData)}>Unban</button>
+                                            )}
+                                            {selectedProfile.status === 'mute' && (
+                                                <>
+                                                    <button className="btn btn-sm btn-success" onClick={() => openActionModal(selectedProfile.tg_id, 'unmute', null, selectedProfile.reportData)}>Unmute</button>
+                                                    <button className="btn btn-sm btn-outline-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 7, selectedProfile.reportData)}>Ban 7d</button>
+                                                    <button className="btn btn-sm btn-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 'perm', selectedProfile.reportData)}>Permaban</button>
+                                                </>
+                                            )}
+                                            {selectedProfile.status === 'active' && (
+                                                <>
+                                                    <button className="btn btn-sm btn-outline-warning" onClick={() => openActionModal(selectedProfile.tg_id, 'mute', 1, selectedProfile.reportData)}>Mute 24h</button>
+                                                    <button className="btn btn-sm btn-outline-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 7, selectedProfile.reportData)}>Ban 7d</button>
+                                                    <button className="btn btn-sm btn-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 'perm', selectedProfile.reportData)}>Permaban</button>
+                                                </>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -230,9 +302,51 @@
                         <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
                             <div className="modal-dialog modal-lg modal-dialog-centered">
                                 <div className="modal-content border-0 shadow-lg rounded-4">
-                                    <div className="modal-header bg-dark text-white p-3"><h5 className="modal-title fs-6">Evidence Snapshot ({proofModal.context})</h5><button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button></div>
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">Report Details</h5>
+                                        <button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button>
+                                    </div>
                                     <div className="modal-body bg-light">
-                                        <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
+                                        <ul className="nav nav-tabs mb-3 border-bottom-0">
+                                            <li className="nav-item cursor-pointer">
+                                                <a className={`nav-link text-dark ${reportModalTab === 'reason' ? 'active fw-bold border-bottom-0 shadow-sm' : ''}`} onClick={() => setReportModalTab('reason')}>Reason</a>
+                                            </li>
+                                            <li className="nav-item cursor-pointer">
+                                                <a className={`nav-link text-dark ${reportModalTab === 'proof' ? 'active fw-bold border-bottom-0 shadow-sm' : ''}`} onClick={() => setReportModalTab('proof')}>Evidence</a>
+                                            </li>
+                                        </ul>
+                                        {reportModalTab === 'reason' && (
+                                            <div className="bg-white p-3 border rounded shadow-sm">
+                                                <h6 className="fw-bold">Context: <span className="badge bg-info text-dark fw-normal">{proofModal.context}</span></h6>
+                                                <hr className="my-2"/>
+                                                <p className="mb-0">{proofModal.reason}</p>
+                                            </div>
+                                        )}
+                                        {reportModalTab === 'proof' && (
+                                            <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {actionModal && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1060}}>
+                            <div className="modal-dialog modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">Confirm Action: {actionModal.action.toUpperCase()}</h5>
+                                        <button className="btn-close btn-close-white" onClick={() => setActionModal(null)}></button>
+                                    </div>
+                                    <div className="modal-body p-4 text-start">
+                                        <label className="form-label small fw-bold">Message to User (Bot will notify them):</label>
+                                        <textarea className="form-control mb-3" rows="3" value={actionModal.message} onChange={(e) => setActionModal({...actionModal, message: e.target.value})}></textarea>
+                                        
+                                        <div className="d-flex gap-2">
+                                            <button className="btn btn-secondary w-50 fw-bold" onClick={() => setActionModal(null)}>Cancel</button>
+                                            <button className="btn btn-primary w-50 fw-bold" onClick={() => takeAction(actionModal)}>Execute Action</button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -247,13 +361,11 @@
             const [credits, setCredits] = useState(0);
             const [gems, setGems] = useState(0);
             
-            const [rate, setRate] = useState(1);
-            const [gemRate, setGemRate] = useState(5);
+            const [gemPackages, setGemPackages] = useState([]);
 
             const loadSettings = () => {
                 apiFetch('/config').then(c => {
-                    setRate(c.creditsPerStar);
-                    setGemRate(c.creditsPerGem || 5);
+                    setGemPackages(c.gemPackages || []);
                 });
             };
             useEffect(() => { loadSettings(); }, []);
@@ -263,6 +375,19 @@
                 await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems) });
                 alert('Funds successfully applied!');
                 setCredits(0); setGems(0); setTargetUser('');
+            };
+
+            const addPackage = () => {
+                const maxId = gemPackages.length > 0 ? Math.max(...gemPackages.map(p => p.id)) : 0;
+                setGemPackages([...gemPackages, { id: maxId + 1, gems: 1, credits: 5 }]);
+            };
+
+            const updatePackage = (id, field, value) => {
+                setGemPackages(gemPackages.map(p => p.id === id ? { ...p, [field]: Number(value) } : p));
+            };
+
+            const removePackage = (id) => {
+                setGemPackages(gemPackages.filter(p => p.id !== id));
             };
 
             return (
@@ -284,25 +409,22 @@
                         </div>
                         <div className="col-12 col-md-6">
                             <div className="card h-100">
-                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Global Exchange Rates</div>
+                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Gem Exchange Packages</div>
                                 <div className="card-body">
-                                    <div className="alert alert-warning small py-2 mb-3">Changes reflect instantly for all users.</div>
+                                    <div className="alert alert-warning small py-2 mb-3">Configure packages users can buy credits with using gems. Changes reflect instantly.</div>
                                     
-                                    <label className="form-label fw-bold small">1 Telegram Star = ? Credits</label>
-                                    <div className="input-group mb-3 input-group-sm">
-                                        <input className="form-control form-control-lg text-center" type="number" value={rate} onChange={e=>setRate(e.target.value)} />
-                                        <span className="input-group-text bg-light">Credits</span>
-                                    </div>
-
-                                    <label className="form-label fw-bold small">1 Gem = ? Credits</label>
-                                    <select className="form-select form-select-sm mb-4" value={gemRate} onChange={e=>setGemRate(e.target.value)}>
-                                        <option value="2">2 Credits</option>
-                                        <option value="5">5 Credits</option>
-                                        <option value="10">10 Credits</option>
-                                        <option value="20">20 Credits</option>
-                                    </select>
+                                    {gemPackages.map(pkg => (
+                                        <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updatePackage(pkg.id, 'gems', e.target.value)} /> 
+                                            <span className="small fw-bold text-muted">Gems =</span>
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updatePackage(pkg.id, 'credits', e.target.value)} /> 
+                                            <span className="small fw-bold text-muted">Credits</span>
+                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removePackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                        </div>
+                                    ))}
+                                    <button className="btn btn-sm btn-outline-primary mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addPackage}>+ Add New Package</button>
                                     
-                                    <button className="btn btn-warning w-100 fw-bold" onClick={async () => { await apiFetch('/config/economy', 'POST', { creditsPerStar: rate, creditsPerGem: gemRate }); alert('Rates updated globally.'); }}>Save New Rates</button>
+                                    <button className="btn btn-warning w-100 fw-bold mt-auto" onClick={async () => { await apiFetch('/config/economy', 'POST', { gemPackages }); alert('Packages updated globally.'); }}>Save Exchange Rates</button>
                                 </div>
                             </div>
                         </div>
