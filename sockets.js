@@ -4,6 +4,14 @@ const { getRoom, saveRoom, releaseRoomMemory, deleteRoomData, broadcastRooms, ch
 const { getUserState } = require('./userManager');
 const config = require('./config');
 
+const calculateStrokeLength = (lines) => {
+    let strokeLength = 0;
+    for (let i = 0; i < lines.length; i += 4) {
+        strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
+    }
+    return strokeLength;
+};
+
 module.exports = (io) => {
     io.on('connection', (socket) => {
         socket.data.lastActiveEvent = Date.now();
@@ -683,11 +691,10 @@ module.exports = (io) => {
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
                 const drawObj = { lines: data.lines, color: 'black' };
                 await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
+                // Clear redo queue since new drawing action invalidates future redos
+                await redis.del(`room:${currentRoom}:redo`);
                 
-                let strokeLength = 0;
-                for (let i = 0; i < data.lines.length; i += 4) {
-                    strokeLength += Math.hypot(data.lines[i+2] - data.lines[i], data.lines[i+3] - data.lines[i+1]);
-                }
+                let strokeLength = calculateStrokeLength(data.lines);
                 
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
@@ -698,6 +705,9 @@ module.exports = (io) => {
                 }
 
                 socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
+                
+                const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: 0 });
             }
         });
 
@@ -710,7 +720,17 @@ module.exports = (io) => {
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
                 await redis.del(`room:${currentRoom}:drawings`);
                 await redis.del(`room:${currentRoom}:redo`);
+                
+                const member = room.members.find(m => m.user_id === currentUser);
+                if (member) {
+                    member.ink_used = member.ink_used || {};
+                    member.ink_used['black'] = 0;
+                    await saveRoom(room);
+                    io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: 0 });
+                }
+
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: 0, redo_steps: 0 });
             }
         });
 
@@ -721,12 +741,28 @@ module.exports = (io) => {
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-                const lastDraw = await redis.rpop(`room:${currentRoom}:drawings`);
-                if (lastDraw) {
-                    await redis.lpush(`room:${currentRoom}:redo`, lastDraw);
+                const lastDrawStr = await redis.rpop(`room:${currentRoom}:drawings`);
+                if (lastDrawStr) {
+                    await redis.lpush(`room:${currentRoom}:redo`, lastDrawStr);
+                    
+                    const lastDraw = JSON.parse(lastDrawStr);
+                    const strokeLength = calculateStrokeLength(lastDraw.lines);
+
+                    const member = room.members.find(m => m.user_id === currentUser);
+                    if (member) {
+                        member.ink_used = member.ink_used || {};
+                        member.ink_used['black'] = Math.max(0, (member.ink_used['black'] || 0) - strokeLength);
+                        await saveRoom(room);
+                        io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                    }
+
                     const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
                     const drawings = rawDrawings.map(d => JSON.parse(d));
                     io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
+
+                    const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                    const redoLen = await redis.llen(`room:${currentRoom}:redo`);
+                    io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: redoLen });
                 }
             }
         });
@@ -738,12 +774,28 @@ module.exports = (io) => {
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-                const nextDraw = await redis.lpop(`room:${currentRoom}:redo`);
-                if (nextDraw) {
-                    await redis.rpush(`room:${currentRoom}:drawings`, nextDraw);
+                const nextDrawStr = await redis.lpop(`room:${currentRoom}:redo`);
+                if (nextDrawStr) {
+                    await redis.rpush(`room:${currentRoom}:drawings`, nextDrawStr);
+                    
+                    const nextDraw = JSON.parse(nextDrawStr);
+                    const strokeLength = calculateStrokeLength(nextDraw.lines);
+
+                    const member = room.members.find(m => m.user_id === currentUser);
+                    if (member) {
+                        member.ink_used = member.ink_used || {};
+                        member.ink_used['black'] = (member.ink_used['black'] || 0) + strokeLength;
+                        await saveRoom(room);
+                        io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                    }
+
                     const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
                     const drawings = rawDrawings.map(d => JSON.parse(d));
                     io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
+
+                    const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                    const redoLen = await redis.llen(`room:${currentRoom}:redo`);
+                    io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: redoLen });
                 }
             }
         });
