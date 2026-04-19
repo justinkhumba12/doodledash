@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Admin - DoodleDash</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; }
+        .sidebar { background: #0f172a; min-height: 100vh; padding-top: 2rem; color: #cbd5e1; box-shadow: 2px 0 10px rgba(0,0,0,0.1); }
+        .nav-item { padding: 12px 20px; margin: 0 10px 5px 10px; border-radius: 8px; cursor: pointer; transition: 0.2s; font-weight: 500; }
+        .nav-item:hover { background: #1e293b; color: white; }
+        .nav-item.active { background: #3b82f6; color: white; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
+        .card { border: none; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 20px; overflow: hidden; }
+        .card-header { background: white; border-bottom: 1px solid #e2e8f0; font-weight: bold; padding: 15px 20px; }
+        .stat-card { transition: transform 0.2s; }
+        .stat-card:hover { transform: translateY(-3px); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const Dashboard = ({ apiFetch }) => {
+            const [stats, setStats] = useState(null);
+            const [logs, setLogs] = useState([]);
+
+            useEffect(() => {
+                apiFetch('/stats').then(setStats);
+                apiFetch('/audit').then(setLogs);
+            }, []);
+
+            if (!stats) return <div className="p-5 text-center"><div className="spinner-border text-primary"></div></div>;
+
+            return (
+                <div className="p-4">
+                    <h3 className="fw-bold mb-4">System Overview</h3>
+                    <div className="row g-4 mb-4">
+                        <div className="col-md-3"><div className="card stat-card bg-primary text-white p-4 h-100"><h6 className="opacity-75">Total Users</h6><h2 className="mb-0 fw-bold">{stats.totalUsers.toLocaleString()}</h2></div></div>
+                        <div className="col-md-3"><div className="card stat-card bg-success text-white p-4 h-100"><h6 className="opacity-75">Daily Active (DAU)</h6><h2 className="mb-0 fw-bold">{stats.dau.toLocaleString()}</h2></div></div>
+                        <div className="col-md-3"><div className="card stat-card bg-warning text-dark p-4 h-100"><h6 className="opacity-75">Credits in Circulation</h6><h2 className="mb-0 fw-bold">{Number(stats.totalCredits).toLocaleString()}</h2></div></div>
+                        <div className="col-md-3"><div className="card stat-card bg-danger text-white p-4 h-100"><h6 className="opacity-75">Total Star Donations</h6><h2 className="mb-0 fw-bold">{stats.totalDonated.toLocaleString()} <i className="fas fa-star ms-1 fs-5"></i></h2></div></div>
+                    </div>
+                    <div className="row g-4 mb-4">
+                        <div className="col-md-6"><div className="card stat-card bg-info text-dark p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Active Game Rooms</h6><h2 className="mb-0 fw-bold">{stats.activeRooms}</h2></div><i className="fas fa-gamepad fs-1 opacity-50"></i></div></div>
+                        <div className="col-md-6"><div className="card stat-card bg-dark text-white p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Connected Sockets</h6><h2 className="mb-0 fw-bold">{stats.activeSockets}</h2></div><i className="fas fa-plug fs-1 opacity-50"></i></div></div>
+                    </div>
+                    
+                    <div className="card">
+                        <div className="card-header"><i className="fas fa-list me-2"></i>Admin Audit Log</div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle mb-0">
+                                <thead className="table-light"><tr><th>Timestamp</th><th>Admin ID</th><th>Action Taken</th><th>Details</th></tr></thead>
+                                <tbody>
+                                    {logs.map(l => (
+                                        <tr key={l.id}>
+                                            <td className="text-muted small">{new Date(l.created_at).toLocaleString()}</td>
+                                            <td className="fw-bold">{l.admin_id}</td>
+                                            <td><span className="badge bg-secondary">{l.action}</span></td>
+                                            <td className="small font-monospace">{l.details}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Moderation = ({ apiFetch }) => {
+            const [search, setSearch] = useState('');
+            const [users, setUsers] = useState([]);
+            const [reports, setReports] = useState([]);
+            const [proofModal, setProofModal] = useState(null);
+
+            useEffect(() => { apiFetch('/reports').then(setReports); }, []);
+
+            const doSearch = async () => {
+                if(!search) return;
+                const res = await apiFetch('/users/search', 'POST', { query: search });
+                setUsers(res);
+            };
+
+            const takeAction = async (tgId, action, days) => {
+                if(!window.confirm(`Apply ${action} to user ${tgId}?`)) return;
+                await apiFetch('/users/action', 'POST', { tgId, action, days });
+                doSearch(); 
+            };
+
+            return (
+                <div className="p-4">
+                    <h3 className="fw-bold mb-4">Trust & Safety</h3>
+                    
+                    <div className="card mb-4">
+                        <div className="card-header text-primary"><i className="fas fa-search me-2"></i>User Lookup & Actions</div>
+                        <div className="card-body">
+                            <div className="input-group mb-4 w-50">
+                                <input type="text" className="form-control" placeholder="Search Telegram ID or Name..." value={search} onChange={e=>setSearch(e.target.value)} onKeyPress={e=>e.key==='Enter' && doSearch()} />
+                                <button className="btn btn-primary" onClick={doSearch}>Search</button>
+                            </div>
+                            
+                            {users.length > 0 && (
+                                <table className="table table-bordered align-middle text-center">
+                                    <thead className="table-light"><tr><th>ID</th><th>Name (@User)</th><th>Status</th><th>Ban/Mute Until</th><th>Sanctions</th></tr></thead>
+                                    <tbody>
+                                        {users.map(u => (
+                                            <tr key={u.tg_id}>
+                                                <td className="font-monospace">{u.tg_id}</td>
+                                                <td><b>{u.name || 'Unset'}</b> <br/><small className="text-muted">@{u.username}</small></td>
+                                                <td>
+                                                    {u.status === 'active' ? <span className="badge bg-success">Active</span> : 
+                                                     u.status === 'mute' ? <span className="badge bg-warning text-dark">Muted</span> : 
+                                                     <span className="badge bg-danger">Banned</span>}
+                                                </td>
+                                                <td className="small">{u.ban_until ? `Ban: ${u.ban_until.split('T')[0]}` : ''} {u.mute_until ? `Mute: ${u.mute_until.split('T')[0]}` : ''}</td>
+                                                <td>
+                                                    <div className="btn-group btn-group-sm">
+                                                        <button className="btn btn-outline-warning" onClick={()=>takeAction(u.tg_id, 'mute', 1)}>Mute 24h</button>
+                                                        <button className="btn btn-outline-danger" onClick={()=>takeAction(u.tg_id, 'ban', 7)}>Ban 7d</button>
+                                                        <button className="btn btn-danger" onClick={()=>takeAction(u.tg_id, 'ban', 'perm')}>Permaban</button>
+                                                        {(u.status === 'ban' || u.status === 'mute') && <button className="btn btn-success" onClick={()=>takeAction(u.tg_id, 'unban', null)}>Pardon (Reset)</button>}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="card">
+                        <div className="card-header text-danger"><i className="fas fa-flag me-2"></i>Player Reports</div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle">
+                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Context</th><th>Reason</th><th>Proof</th></tr></thead>
+                                <tbody>
+                                    {reports.map(r => (
+                                        <tr key={r.id}>
+                                            <td className="small">{new Date(r.created_at).toLocaleString()}</td>
+                                            <td className="font-monospace small">{r.reporter_id}</td>
+                                            <td className="font-monospace small fw-bold text-danger">{r.reported_id}</td>
+                                            <td><span className="badge bg-info text-dark">{r.context}</span></td>
+                                            <td>{r.reason}</td>
+                                            <td><button className="btn btn-sm btn-dark" onClick={()=>setProofModal(r)}>View Proof</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {proofModal && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)'}}>
+                            <div className="modal-dialog modal-lg modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white"><h5 className="modal-title">Evidence Snapshot ({proofModal.context})</h5><button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button></div>
+                                    <div className="modal-body bg-light">
+                                        <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap'}}>{proofModal.snapshot_data}</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const Economy = ({ apiFetch }) => {
+            const [targetUser, setTargetUser] = useState('');
+            const [credits, setCredits] = useState(0);
+            const [gems, setGems] = useState(0);
+            
+            const [rate, setRate] = useState(1);
+            const [shopItems, setShopItems] = useState([]);
+            const [newItem, setNewItem] = useState({ name: '', type: 'avatar', price_credits: 0, price_gems: 0 });
+
+            const loadSettings = () => {
+                apiFetch('/config').then(c => setRate(c.creditsPerStar));
+                apiFetch('/shop').then(setShopItems);
+            };
+            useEffect(() => { loadSettings(); }, []);
+
+            const applyFunds = async () => {
+                if(!targetUser) return;
+                await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems) });
+                alert('Funds successfully applied!');
+                setCredits(0); setGems(0); setTargetUser('');
+            };
+
+            return (
+                <div className="p-4">
+                    <h3 className="fw-bold mb-4">Economy & Monetization</h3>
+                    <div className="row g-4 mb-4">
+                        <div className="col-md-6">
+                            <div className="card h-100">
+                                <div className="card-header text-success"><i className="fas fa-hand-holding-usd me-2"></i>Manual Currency Grant</div>
+                                <div className="card-body d-flex flex-column gap-3">
+                                    <div><label className="form-label small fw-bold">Target Telegram ID</label><input className="form-control" placeholder="12345678" value={targetUser} onChange={e=>setTargetUser(e.target.value)} /></div>
+                                    <div className="row">
+                                        <div className="col"><label className="form-label small fw-bold text-warning">Credits (+/-)</label><input className="form-control" type="number" value={credits} onChange={e=>setCredits(e.target.value)} /></div>
+                                        <div className="col"><label className="form-label small fw-bold text-info">Gems (+/-)</label><input className="form-control" type="number" value={gems} onChange={e=>setGems(e.target.value)} /></div>
+                                    </div>
+                                    <button className="btn btn-success mt-auto" onClick={applyFunds} disabled={!targetUser}>Execute Transaction</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="col-md-6">
+                            <div className="card h-100">
+                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Exchange Rate Config</div>
+                                <div className="card-body">
+                                    <div className="alert alert-warning small">Changes reflect instantly for all new Star purchases without restarting the server.</div>
+                                    <label className="form-label fw-bold">1 Telegram Star = ? Credits</label>
+                                    <div className="input-group mb-3">
+                                        <input className="form-control form-control-lg" type="number" value={rate} onChange={e=>setRate(e.target.value)} />
+                                        <span className="input-group-text bg-light">Credits</span>
+                                    </div>
+                                    <button className="btn btn-warning w-100 fw-bold" onClick={async () => { await apiFetch('/config/economy', 'POST', { creditsPerStar: rate }); alert('Exchange rate updated globally.'); }}>Save New Rate</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="card">
+                        <div className="card-header text-primary"><i className="fas fa-store me-2"></i>Dynamic Shop Inventory</div>
+                        <div className="card-body">
+                            <div className="row g-2 mb-4 p-3 bg-light rounded border align-items-end">
+                                <div className="col-md-3"><label className="small fw-bold">Item Name</label><input className="form-control form-control-sm" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} /></div>
+                                <div className="col-md-2"><label className="small fw-bold">Type</label><select className="form-select form-select-sm" value={newItem.type} onChange={e=>setNewItem({...newItem, type: e.target.value})}><option value="avatar">Avatar</option><option value="color">Color</option><option value="boost">Boost</option></select></div>
+                                <div className="col-md-2"><label className="small fw-bold">Price (Credits)</label><input className="form-control form-control-sm" type="number" value={newItem.price_credits} onChange={e=>setNewItem({...newItem, price_credits: e.target.value})} /></div>
+                                <div className="col-md-2"><label className="small fw-bold">Price (Gems)</label><input className="form-control form-control-sm" type="number" value={newItem.price_gems} onChange={e=>setNewItem({...newItem, price_gems: e.target.value})} /></div>
+                                <div className="col-md-3"><button className="btn btn-sm btn-primary w-100" onClick={async () => { await apiFetch('/shop', 'POST', newItem); loadSettings(); }}><i className="fas fa-plus"></i> Add to Store</button></div>
+                            </div>
+                            <table className="table table-sm align-middle text-center">
+                                <thead className="table-light"><tr><th>Name</th><th>Type</th><th>Cost</th><th>Status</th><th>Action</th></tr></thead>
+                                <tbody>
+                                    {shopItems.map(item => (
+                                        <tr key={item.id}>
+                                            <td className="fw-bold">{item.name}</td>
+                                            <td><span className="badge bg-secondary">{item.type}</span></td>
+                                            <td>{item.price_credits > 0 && <span className="text-warning fw-bold">{item.price_credits}C </span>} {item.price_gems > 0 && <span className="text-info fw-bold">{item.price_gems}G</span>}</td>
+                                            <td>{item.is_active ? <span className="badge bg-success">Available</span> : <span className="badge bg-danger">Archived</span>}</td>
+                                            <td><button className={`btn btn-sm ${item.is_active ? 'btn-outline-danger' : 'btn-outline-success'}`} onClick={async () => { await apiFetch('/shop/toggle', 'POST', { id: item.id, is_active: !item.is_active }); loadSettings(); }}>{item.is_active ? 'Remove' : 'Restore'}</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ServerControl = ({ apiFetch }) => {
+            const [maint, setMaint] = useState(false);
+            const [dict, setDict] = useState('');
+            const [msg, setMsg] = useState('');
+            const [rooms, setRooms] = useState([]);
+
+            const load = () => {
+                apiFetch('/config').then(c => { setMaint(c.maintenance); setDict(c.dictionary.join(', ')); });
+                apiFetch('/rooms').then(setRooms);
+            };
+            useEffect(() => { load(); }, []);
+
+            const actionRoom = async (roomId, action) => {
+                if(!window.confirm(`${action.toUpperCase()} Room ${roomId}?`)) return;
+                await apiFetch('/rooms/action', 'POST', { roomId, action });
+                load();
+            };
+
+            return (
+                <div className="p-4">
+                    <h3 className="fw-bold mb-4">Server Architecture & Intervention</h3>
+                    
+                    <div className="row g-4 mb-4">
+                        <div className="col-md-6">
+                            <div className={`card h-100 border-2 ${maint ? 'border-danger' : 'border-success'}`}>
+                                <div className="card-body text-center p-5">
+                                    <i className={`fas ${maint ? 'fa-tools text-danger' : 'fa-server text-success'} fs-1 mb-3`}></i>
+                                    <h4>{maint ? 'Maintenance is ACTIVE' : 'Server is LIVE'}</h4>
+                                    <p className="text-muted small">When active, users cannot create new public or private lobbies.</p>
+                                    <button className={`btn rounded-pill px-5 fw-bold ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { await apiFetch('/config/maintenance', 'POST', { maintenance: !maint }); load(); }}>
+                                        {maint ? 'Disable Maintenance' : 'Activate Maintenance Mode'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="col-md-6">
+                            <div className="card h-100">
+                                <div className="card-header bg-dark text-white"><i className="fas fa-bullhorn me-2"></i>Global PA System</div>
+                                <div className="card-body d-flex flex-column">
+                                    <p className="text-muted small">Send a red alert message that appears in the chat box of every active game room instantly.</p>
+                                    <textarea className="form-control mb-3 flex-grow-1" placeholder="Attention all players..." value={msg} onChange={e=>setMsg(e.target.value)}></textarea>
+                                    <button className="btn btn-dark w-100 fw-bold" onClick={async () => { await apiFetch('/broadcast', 'POST', { message: msg }); setMsg(''); alert('Broadcast deployed!'); }} disabled={!msg}>Send Broadcast</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="card mb-4">
+                        <div className="card-header text-info"><i className="fas fa-book me-2"></i>Word Dictionary Manager</div>
+                        <div className="card-body">
+                            <p className="small text-muted">Comma-separated list of words used for prompts.</p>
+                            <textarea className="form-control mb-3" rows="3" value={dict} onChange={e=>setDict(e.target.value)}></textarea>
+                            <button className="btn btn-info text-white fw-bold" onClick={async () => { 
+                                const arr = dict.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length >= 3);
+                                await apiFetch('/dictionary/update', 'POST', { words: arr });
+                                alert('Dictionary Saved!'); 
+                            }}>Sync Dictionary to Redis</button>
+                        </div>
+                    </div>
+
+                    <div className="card">
+                        <div className="card-header text-danger"><i className="fas fa-hammer me-2"></i>Active Room Intervention</div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle text-center">
+                                <thead className="table-light"><tr><th>Room ID</th><th>Visibility</th><th>Players</th><th>Phase</th><th>Emergency Actions</th></tr></thead>
+                                <tbody>
+                                    {rooms.map(r => (
+                                        <tr key={r.id}>
+                                            <td className="fw-bold">{r.id}</td>
+                                            <td>{r.is_private ? <span className="badge bg-danger">Private</span> : <span className="badge bg-success">Public</span>}</td>
+                                            <td>{r.members}</td>
+                                            <td>{r.status}</td>
+                                            <td>
+                                                <button className="btn btn-sm btn-outline-warning me-2" onClick={()=>actionRoom(r.id, 'wipe_chat')}><i className="fas fa-eraser"></i> Wipe Chat</button>
+                                                <button className="btn btn-sm btn-danger" onClick={()=>actionRoom(r.id, 'close')}><i className="fas fa-skull"></i> Force Close</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {rooms.length === 0 && <tr><td colSpan="5" className="text-muted p-4">No active rooms found.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AdminApp = () => {
+            const [initData, setInitData] = useState('');
+            const [error, setError] = useState('');
+            const [tab, setTab] = useState('dashboard');
+
+            useEffect(() => {
+                if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+                    window.Telegram.WebApp.expand();
+                    setInitData(window.Telegram.WebApp.initData);
+                } else {
+                    // For browser canvas preview / local testing
+                    setInitData("mock_web_auth=true&user=%7B%22id%22%3A123456789%7D");
+                }
+            }, []);
+
+            const apiFetch = async (path, method = 'GET', body = null) => {
+                const options = { method, headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData } };
+                if (body) options.body = JSON.stringify(body);
+                const res = await fetch(`/api/admin${path}`, options);
+                if (res.status === 403 || res.status === 401) { setError('Access Denied: You are not authorized.'); throw new Error('Auth'); }
+                return res.json();
+            };
+
+            if (error) return <div className="container mt-5"><div className="alert alert-danger shadow-lg p-5 text-center"><i className="fas fa-shield-alt fs-1 mb-3"></i><h4>{error}</h4><p className="mb-0">Please access this panel through the official Telegram Bot.</p></div></div>;
+            if (!initData) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
+
+            return (
+                <div className="d-flex">
+                    <div className="sidebar d-flex flex-column" style={{ width: '250px' }}>
+                        <div className="text-center mb-4 mt-2">
+                            <i className="fas fa-cogs fs-2 text-primary mb-2"></i>
+                            <h5 className="fw-bold text-white m-0">Admin Center</h5>
+                        </div>
+                        <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-3 w-15"></i> Dashboard</div>
+                        <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-3 w-15"></i> Moderation</div>
+                        <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-3 w-15"></i> Economy & Shop</div>
+                        <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-3 w-15"></i> Server Control</div>
+                        
+                        <div className="mt-auto p-3 text-center opacity-50 small">
+                            DoodleDash OS v1.0
+                        </div>
+                    </div>
+                    <div className="flex-grow-1" style={{ height: '100vh', overflowY: 'auto' }}>
+                        {tab === 'dashboard' && <Dashboard apiFetch={apiFetch} />}
+                        {tab === 'moderation' && <Moderation apiFetch={apiFetch} />}
+                        {tab === 'economy' && <Economy apiFetch={apiFetch} />}
+                        {tab === 'server' && <ServerControl apiFetch={apiFetch} />}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<AdminApp />);
+    </script>
+</body>
+</html>
