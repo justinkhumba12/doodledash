@@ -203,7 +203,6 @@ module.exports = (io) => {
                         room.status = 'PRE_DRAW';
                         room.round = (room.round || 0) + 1;
                         
-                        // Pick next drawer by iterating
                         const currentIndex = room.members.findIndex(m => m.user_id === room.current_drawer_id);
                         const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
                         room.current_drawer_id = room.members[nextIndex].user_id;
@@ -472,4 +471,552 @@ module.exports = (io) => {
                             const newClaimCount = user.claims + 1;
                             rewardAmount = 1;
                             if (prefix === 'ad') {
-                                await db.query(`UPDATE users SET credits = credits + ?, ad_claims_today = ?, last_ad_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?
+                                await db.query(`UPDATE users SET credits = credits + ?, ad_claims_today = ?, last_ad_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [rewardAmount, newClaimCount, currentUser]);
+                            } else {
+                                await db.query(`UPDATE users SET credits = credits + ?, ad2_claims_today = ?, last_ad2_claim_time = UTC_TIMESTAMP() WHERE tg_id = ?`, [rewardAmount, newClaimCount, currentUser]);
+                            }
+                            success = true; msg = `Reward claimed! +${rewardAmount} Credit`;
+                        } else {
+                            msg = 'Ad reward not ready yet or max claims reached.';
+                        }
+                    }
+                } else if (type === 'invite_3') {
+                    const [userRows] = await db.query(`SELECT weekly_invites, invite_claimed_this_week FROM users WHERE tg_id = ?`, [currentUser]);
+                    if (userRows.length > 0) {
+                        if (userRows[0].weekly_invites >= 3 && !userRows[0].invite_claimed_this_week) {
+                            rewardAmount = 5;
+                            await db.query(`UPDATE users SET credits = credits + ?, invite_claimed_this_week = 1 WHERE tg_id = ?`, [rewardAmount, currentUser]);
+                            success = true; msg = 'Invite reward claimed! +5 Credits';
+                        } else {
+                            msg = 'Invite requirement not met or already claimed.';
+                        }
+                    }
+                }
+
+                if (success) {
+                    await redis.hincrbyfloat('user_credits', currentUser, rewardAmount);
+                    socket.emit('reward_success', msg);
+                    const userState = await getUserState(currentUser);
+                    if (userState) socket.emit('user_update', userState);
+                } else {
+                    socket.emit('create_error', msg || 'Could not claim reward.');
+                }
+            } catch (err) {
+                console.error('Claim Error:', err);
+            }
+        });
+
+        socket.on('create_room', async (data) => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                if (!currentUser) return;
+
+                const maxRoomsRaw = await redis.get('config_max_rooms');
+                const maxRooms = maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250;
+                const activeRooms = await redis.smembers('active_rooms');
+                if (activeRooms.length >= maxRooms) {
+                    return socket.emit('create_error', 'Server is at maximum room capacity. Please join an existing room or try again later.');
+                }
+
+                const isPriv = Boolean(data.is_private);
+                const pwd = data.password || '';
+                const maxMem = parseInt(data.max_members) || 6;
+                const expireHours = parseFloat(data.expire_hours) || 0.5;
+
+                let cost = 0;
+                if (isPriv) {
+                    cost = maxMem + (expireHours === 1 ? 2 : 1);
+                }
+
+                if (cost > 0) {
+                    const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                    if (!userRows.length || userRows[0].credits < cost) {
+                        return socket.emit('create_error', `Not enough credits. Need ${cost} Credits.`);
+                    }
+                    await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [cost, currentUser]);
+                    await redis.hincrbyfloat('user_credits', currentUser, -cost);
+                    const userState = await getUserState(currentUser);
+                    if (userState) socket.emit('user_update', userState);
+                }
+
+                const newRoomIdNum = await redis.incr('next_room_id');
+                const expiryTime = Date.now() + (expireHours * 3600000);
+                
+                const roomObj = {
+                    id: newRoomIdNum,
+                    creator_id: currentUser,
+                    is_private: isPriv ? 1 : 0,
+                    password: pwd,
+                    max_members: maxMem,
+                    status: 'WAITING',
+                    created_at: Date.now(),
+                    expires_at: expiryTime,
+                    round: 0,
+                    members: []
+                };
+                
+                await saveRoom(roomObj);
+                await redis.sadd('active_rooms', newRoomIdNum);
+                
+                if (data.auto_join) {
+                    await performJoinRoom(currentUser, newRoomIdNum, pwd, true);
+                } else {
+                    await broadcastRooms(io);
+                }
+            });
+        });
+
+        socket.on('join_room', async (data) => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                if (!currentUser) return;
+                await performJoinRoom(currentUser, data.room_id, data.password || '');
+            });
+        });
+
+        socket.on('leave_room', async () => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                if (!currentUser || !currentRoom) return;
+
+                socket.leave(`room_${currentRoom}`);
+                socket.join('lobby');
+                socket.data.currentRoom = null;
+
+                const room = await getRoom(currentRoom);
+                if (room) {
+                    room.members = room.members.filter(m => m.user_id !== currentUser);
+                    await saveRoom(room);
+                    await checkRoomReset(currentRoom);
+                    await syncRoom(currentRoom, io);
+                    await broadcastRooms(io);
+                }
+            });
+        });
+
+        socket.on('delete_room', async () => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                if (!currentUser || !currentRoom) return;
+
+                const room = await getRoom(currentRoom);
+                if (room && room.creator_id === currentUser) {
+                    io.to(`room_${currentRoom}`).emit('room_expired');
+                    await deleteRoomData(currentRoom);
+                    const sockets = await io.in(`room_${currentRoom}`).fetchSockets();
+                    for (const s of sockets) {
+                        s.leave(`room_${currentRoom}`);
+                        s.join('lobby');
+                        s.data.currentRoom = null;
+                    }
+                    await broadcastRooms(io);
+                }
+            });
+        });
+
+        socket.on('chat', async (data) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !data.message) return;
+            
+            if (!checkRateLimit()) return;
+
+            const [userRows] = await db.query('SELECT status FROM users WHERE tg_id = ?', [currentUser]);
+            if (userRows.length && userRows[0].status === 'mute') {
+                return socket.emit('create_error', 'You are currently muted and cannot send messages.');
+            }
+
+            const msgId = await redis.incr('global_chat_id');
+            const chatObj = {
+                id: msgId,
+                room_id: currentRoom,
+                user_id: currentUser,
+                message: data.message.substring(0, 200),
+                created_at: new Date()
+            };
+
+            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(chatObj));
+            await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+
+            io.to(`room_${currentRoom}`).emit('new_chat', chatObj);
+        });
+
+        socket.on('set_word', async ({ word }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !word) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'PRE_DRAW' && room.current_drawer_id === currentUser) {
+                room.word_to_draw = word.toUpperCase();
+                room.status = 'DRAWING';
+                room.round_end_time = new Date(Date.now() + 90000);
+                room.masked_word = word.split('').map((c, i) => ({ char: c, revealed: c === ' ', index: i }));
+                
+                await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`, `room:${currentRoom}:guesses`);
+                await saveRoom(room);
+                await syncRoom(currentRoom, io);
+            }
+        });
+
+        socket.on('draw', async (data) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !data.lines) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                const drawObj = { lines: data.lines, color: 'black' };
+                await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
+                
+                let strokeLength = 0;
+                for (let i = 0; i < data.lines.length; i += 4) {
+                    strokeLength += Math.hypot(data.lines[i+2] - data.lines[i], data.lines[i+3] - data.lines[i+1]);
+                }
+                
+                const member = room.members.find(m => m.user_id === currentUser);
+                if (member) {
+                    member.ink_used = member.ink_used || {};
+                    member.ink_used['black'] = (member.ink_used['black'] || 0) + strokeLength;
+                    await saveRoom(room);
+                    io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                }
+
+                socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
+            }
+        });
+
+        socket.on('clear_all', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                await redis.del(`room:${currentRoom}:drawings`);
+                await redis.del(`room:${currentRoom}:redo`);
+                io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
+            }
+        });
+
+        socket.on('undo', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                const lastDraw = await redis.rpop(`room:${currentRoom}:drawings`);
+                if (lastDraw) {
+                    await redis.lpush(`room:${currentRoom}:redo`, lastDraw);
+                    const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+                    const drawings = rawDrawings.map(d => JSON.parse(d));
+                    io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
+                }
+            }
+        });
+
+        socket.on('redo', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                const nextDraw = await redis.lpop(`room:${currentRoom}:redo`);
+                if (nextDraw) {
+                    await redis.rpush(`room:${currentRoom}:drawings`, nextDraw);
+                    const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
+                    const drawings = rawDrawings.map(d => JSON.parse(d));
+                    io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
+                }
+            }
+        });
+
+        socket.on('guess', async (data) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !data.guess) return;
+
+            const room = await getRoom(currentRoom);
+            if (!room || room.status !== 'DRAWING' || room.current_drawer_id === currentUser) return;
+
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (!member || member.has_given_up) return;
+
+            const rawGuesses = await redis.lrange(`room:${currentRoom}:guesses`, 0, -1);
+            const guesses = rawGuesses.map(g => JSON.parse(g));
+            const myGuesses = guesses.filter(g => g.user_id === currentUser);
+
+            if (myGuesses.length >= 6) return socket.emit('create_error', 'Max guesses reached.');
+
+            const isCorrect = data.guess.toUpperCase() === room.word_to_draw;
+            const guessObj = {
+                id: Date.now(),
+                user_id: currentUser,
+                guess_text: isCorrect ? 'Correct guess!' : data.guess.toUpperCase(),
+                is_correct: isCorrect
+            };
+
+            await redis.rpush(`room:${currentRoom}:guesses`, JSON.stringify(guessObj));
+            io.to(`room_${currentRoom}`).emit('new_guess', guessObj);
+
+            if (isCorrect) {
+                room.status = 'REVEAL';
+                room.last_winner_id = currentUser;
+                room.break_end_time = new Date(Date.now() + 5000);
+                room.members.forEach(m => { m.is_ready = 0; });
+                await saveRoom(room);
+
+                await db.query('UPDATE users SET credits = credits + 2 WHERE tg_id = ?', [currentUser]);
+                await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [room.current_drawer_id]);
+                await redis.hincrbyfloat('user_credits', currentUser, 2);
+                await redis.hincrbyfloat('user_credits', room.current_drawer_id, 1);
+
+                const weekKey = getWeekKey();
+                await db.query(`INSERT INTO user_weekly_stats (tg_id, week_key, guesses, guesses_updated_at) VALUES (?, ?, 1, NOW()) ON DUPLICATE KEY UPDATE guesses = guesses + 1, guesses_updated_at = NOW()`, [currentUser, weekKey]);
+
+                await syncRoom(currentRoom, io);
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            }
+        });
+
+        socket.on('buy_ink', async ({ color }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                const inkConfigRaw = await redis.get('config_ink');
+                const inkConfig = inkConfigRaw ? JSON.parse(inkConfigRaw) : { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 };
+                
+                const member = room.members.find(m => m.user_id === currentUser);
+                if (!member) return;
+                
+                member.ink_extra = member.ink_extra || {};
+                const buysMade = (member.ink_extra[color] || 0) / inkConfig.extra;
+                
+                if (buysMade >= inkConfig.max_buys) {
+                    return socket.emit('create_error', 'Maximum ink refills reached for this round.');
+                }
+
+                const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                if (userRows.length && userRows[0].credits >= inkConfig.cost) {
+                    await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [inkConfig.cost, currentUser]);
+                    await redis.hincrbyfloat('user_credits', currentUser, -inkConfig.cost);
+                    
+                    member.ink_extra[color] = (member.ink_extra[color] || 0) + inkConfig.extra;
+                    await saveRoom(room);
+                    
+                    io.to(`room_${currentRoom}`).emit('update_ink_capacity', { user_id: currentUser, extra: member.ink_extra });
+                    
+                    const userState = await getUserState(currentUser);
+                    if (userState) socket.emit('user_update', userState);
+                } else {
+                    socket.emit('create_error', 'Not enough credits to buy ink.');
+                }
+            }
+        });
+
+        socket.on('buy_hint_credit', async ({ index }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
+                const item = room.masked_word[index];
+                if (item && !item.revealed) {
+                    const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                    if (userRows.length && userRows[0].credits >= 1) {
+                        await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                        await redis.hincrbyfloat('user_credits', currentUser, -1);
+                        
+                        item.revealed = true;
+                        await saveRoom(room);
+                        await syncRoom(currentRoom, io);
+                        
+                        const userState = await getUserState(currentUser);
+                        if (userState) socket.emit('user_update', userState);
+                    } else {
+                        socket.emit('create_error', 'Not enough credits.');
+                    }
+                }
+            }
+        });
+
+        socket.on('buy_hint_ad', async ({ index }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
+                const item = room.masked_word[index];
+                if (item && !item.revealed) {
+                    item.revealed = true;
+                    await saveRoom(room);
+                    await syncRoom(currentRoom, io);
+                }
+            }
+        });
+
+        socket.on('buy_guess', async ({ guess }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+            
+            const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (userRows.length && userRows[0].credits >= 1) {
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                await redis.hincrbyfloat('user_credits', currentUser, -1);
+                
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+                
+                socket.emit('reward_success', 'Extra guesses unlocked!');
+            } else {
+                socket.emit('create_error', 'Not enough credits.');
+            }
+        });
+
+        socket.on('drawer_give_up', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                room.status = 'REVEAL';
+                room.end_reason = 'drawer_gave_up';
+                room.break_end_time = new Date(Date.now() + 5000);
+                room.members.forEach(m => { m.is_ready = 0; });
+                await saveRoom(room);
+                await syncRoom(currentRoom, io);
+            }
+        });
+
+        socket.on('guesser_give_up', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && (room.status === 'DRAWING' || room.status === 'PRE_DRAW') && room.current_drawer_id !== currentUser) {
+                const member = room.members.find(m => m.user_id === currentUser);
+                if (member) {
+                    member.has_given_up = 1;
+                    await saveRoom(room);
+                    
+                    const activeGuessers = room.members.filter(m => m.user_id !== room.current_drawer_id);
+                    const allGivenUp = activeGuessers.length > 0 && activeGuessers.every(m => m.has_given_up);
+                    
+                    if (allGivenUp && room.status === 'DRAWING') {
+                        room.status = 'REVEAL';
+                        room.end_reason = 'all_gave_up';
+                        room.break_end_time = new Date(Date.now() + 5000);
+                        room.members.forEach(m => { m.is_ready = 0; });
+                        await saveRoom(room);
+                    }
+                    await syncRoom(currentRoom, io);
+                }
+            }
+        });
+
+        socket.on('kick_player', async ({ target_id }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !target_id) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.is_private && room.creator_id === currentUser) {
+                room.members = room.members.filter(m => m.user_id !== target_id);
+                room.banned_members = room.banned_members || [];
+                if (!room.banned_members.includes(target_id)) {
+                    room.banned_members.push(target_id);
+                }
+                await saveRoom(room);
+                
+                const targetSocket = await io.in(`room_${currentRoom}`).fetchSockets().then(sockets => sockets.find(s => s.data.currentUser === target_id));
+                if (targetSocket) {
+                    targetSocket.leave(`room_${currentRoom}`);
+                    targetSocket.join('lobby');
+                    targetSocket.data.currentRoom = null;
+                    targetSocket.emit('join_error', 'You have been kicked from the room by the creator.');
+                }
+                
+                await checkRoomReset(currentRoom);
+                await syncRoom(currentRoom, io);
+                await broadcastRooms(io);
+            }
+        });
+
+        socket.on('delete_chat_message', async ({ message_id }) => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom || !message_id) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.creator_id === currentUser) {
+                const rawChats = await redis.lrange(`room:${currentRoom}:chats`, 0, -1);
+                let chats = rawChats.map(c => JSON.parse(c));
+                let updated = false;
+                chats = chats.map(c => {
+                    if (c.id === message_id) {
+                        c.message = '[Deleted by room creator]';
+                        updated = true;
+                    }
+                    return c;
+                });
+                
+                if (updated) {
+                    await redis.del(`room:${currentRoom}:chats`);
+                    for (const c of chats) {
+                        await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(c));
+                    }
+                    await syncRoom(currentRoom, io);
+                }
+            }
+        });
+
+        socket.on('clear_chat_history', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (!currentUser || !currentRoom) return;
+
+            const room = await getRoom(currentRoom);
+            if (room && room.creator_id === currentUser) {
+                await redis.del(`room:${currentRoom}:chats`);
+                await syncRoom(currentRoom, io);
+            }
+        });
+
+        socket.on('disconnect', async () => {
+            const currentUser = socket.data.currentUser;
+            const currentRoom = socket.data.currentRoom;
+            if (currentUser) {
+                await redis.hset('user_disconnects', currentUser, Date.now());
+                
+                setTimeout(async () => {
+                    const isDisconnected = await redis.hget('user_disconnects', currentUser);
+                    if (isDisconnected && currentRoom) {
+                        const room = await getRoom(currentRoom);
+                        if (room) {
+                            room.members = room.members.filter(m => m.user_id !== currentUser);
+                            await saveRoom(room);
+                            await checkRoomReset(currentRoom);
+                            await syncRoom(currentRoom, io);
+                            await broadcastRooms(io);
+                        }
+                        await redis.hdel('user_disconnects', currentUser);
+                    }
+                }, 10000);
+            }
+        });
+
+    });
+};
