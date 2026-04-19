@@ -68,6 +68,8 @@ const App = () => {
     const [rooms, setRooms] = useState([]);
     const [currentRoomId, setCurrentRoomId] = useState(null);
     const [roomData, setRoomData] = useState(null);
+    const [systemConfig, setSystemConfig] = useState(null);
+    
     const [activeTab, setActiveTab] = useState('guess');
     const [panelOpen, setPanelOpen] = useState(false);
     const [glowToggle, setGlowToggle] = useState(false);
@@ -99,7 +101,6 @@ const App = () => {
             return;
         }
 
-        // BYPASS: Automatically clear HTTP authentication for local canvas testing
         if (window.initData.includes('mock_web_auth=true')) {
             setTimeout(() => {
                 if (isMounted) setIsAuthComplete(true);
@@ -209,7 +210,8 @@ const App = () => {
         
         if (roomData.chats && roomData.chats.length > prevChatsCount.current) {
             const newChats = roomData.chats.slice(prevChatsCount.current);
-            if (newChats.some(c => c.user_id !== window.tgId && c.user_id !== 'System')) {
+            // Allow System messages to trigger sound as well
+            if (newChats.some(c => c.user_id !== window.tgId)) {
                 playAudioSafe('mgsSound');
                 window.triggerVibration('medium'); 
                 
@@ -302,9 +304,14 @@ const App = () => {
             setUser(data.user);
             setRooms(data.rooms);
             setCurrentRoomId(data.currentRoom || null);
+            setSystemConfig(data.systemConfig);
             if(!data.currentRoom) setRoomData(null);
         });
         
+        newSocket.on('maintenance_update', (data) => {
+            setSystemConfig(prev => ({ ...prev, maintenance: data }));
+        });
+
         newSocket.on('new_chat', (chatMsg) => {
             setRoomData(prev => {
                 if (!prev) return prev;
@@ -465,7 +472,6 @@ const App = () => {
         );
     }
 
-    // Dynmaically extract components at render-time. 
     const { LobbyView, TasksView, LeaderboardView, ProfileView, ShopView, GameRoom, ModalManager, GuessBox, ChatBox } = window;
     
     if (!LobbyView || !GameRoom || !ModalManager || !ShopView) {
@@ -496,15 +502,9 @@ const App = () => {
     const handleLoadBalance = () => {
         const link = 'https://t.me/doodledashbot?start=load_balance';
         if (window.tg && window.tg.openTelegramLink) {
-            try {
-                window.tg.openTelegramLink(link);
-            } catch (e) {
-                window.open(link, '_blank');
-            }
+            try { window.tg.openTelegramLink(link); } catch (e) { window.open(link, '_blank'); }
             setTimeout(() => window.tg.close(), 300);
-        } else {
-            window.open(link, '_blank');
-        }
+        } else { window.open(link, '_blank'); }
     };
 
     return (
@@ -525,11 +525,11 @@ const App = () => {
             <div className="flex-grow-1 position-relative">
                 {!currentRoomId ? (
                     <div style={{ paddingBottom: '80px' }}>
-                        {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} />}
-                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} />}
-                        {mainPageTab === 'shop' && <ShopView user={user} socket={socket} setModal={setModal} />}
-                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} />}
-                        {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} />}
+                        {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} systemConfig={systemConfig} />}
+                        {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
+                        {mainPageTab === 'shop' && <ShopView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
+                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} systemConfig={systemConfig} />}
+                        {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
                         
                         <div className="bottom-nav">
                             <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
@@ -582,6 +582,7 @@ const App = () => {
                                 socket={socket}
                                 setProfileModal={setProfileModal}
                                 setModal={setModal}
+                                systemConfig={systemConfig}
                             />
                             
                             <div className={`interaction-panel ${panelOpen ? 'open' : ''}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -637,12 +638,10 @@ const App = () => {
 
             <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} />
             
-            {/* The profile modal adds a flag reporting action for community safety */}
             {profileModal && (
                 <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
                    {!profileModal.full ? (
                        <div className="call-toast text-center position-relative" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
-                           {/* Flag Profile Action */}
                            {profileModal.user_id !== window.tgId && (
                                <button className="btn btn-link text-danger position-absolute top-0 end-0 p-3 shadow-none" title="Report Profile" onClick={(e) => {
                                    e.stopPropagation();
@@ -673,6 +672,5 @@ const App = () => {
     );
 };
 
-// Start React
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
