@@ -380,7 +380,6 @@ const App = () => {
 
         newSocket.on('room_created', ({ room_id }) => {
             setModal(null);
-            newSocket.emit('search_room', { room_id }); 
         });
 
         newSocket.on('search_result', (room) => {
