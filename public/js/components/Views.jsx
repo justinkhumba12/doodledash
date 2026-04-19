@@ -1,16 +1,63 @@
 const { useState, useEffect } = React;
 
-// New Shop view component acting as placeholder
-const ShopView = () => {
+const ShopView = ({ user, socket, setModal, systemConfig }) => {
+    const [exchangeAmount, setExchangeAmount] = useState(1);
+    const rate = systemConfig?.creditsPerGem || 5;
+
+    const handleBuyGems = () => {
+        const botLink = 'https://t.me/doodledashbot?start=buy_gems';
+        if (window.tg && window.tg.openTelegramLink) {
+            try { window.tg.openTelegramLink(botLink); } catch (e) { window.open(botLink, '_blank'); }
+            setTimeout(() => window.tg.close(), 300);
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
+
+    const handleExchange = () => {
+        if (user?.gems < exchangeAmount) return setModal({ type: 'error', title: 'Error', content: 'Not enough gems.' });
+        socket.emit('exchange_gems', { gems_to_spend: exchangeAmount });
+        setExchangeAmount(1);
+    };
+
     return (
         <div className="container mt-4 pb-5 text-center">
             <i className="fas fa-store text-primary mb-3" style={{fontSize: '4rem'}}></i>
             <h3 className="fw-bold mb-2">Item Shop</h3>
-            <p className="text-muted">Spend your Gems and Credits here to stand out!</p>
-            <div className="card bg-white rounded-4 border shadow-sm p-5 mt-4 border-dashed" style={{ borderStyle: 'dashed', borderColor: '#cbd5e1' }}>
-                <i className="fas fa-tools fs-1 text-secondary opacity-50 mb-3"></i>
-                <h5 className="fw-bold text-dark">Coming Soon</h5>
-                <p className="small text-muted mb-0">We are currently stocking the shelves with amazing exclusive avatars, custom ink colors, and boosts. Check back later!</p>
+            <p className="text-muted">Get Gems and exchange them for Credits!</p>
+            
+            <div className="row g-3 mt-3">
+                <div className="col-12 col-md-6">
+                    <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
+                        <h5 className="fw-bold"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
+                        <p className="small text-muted mb-4">Purchase Gems securely using Telegram Stars. Instant delivery.</p>
+                        <button className="btn btn-info text-white fw-bold rounded-pill mt-auto w-100 py-2 shadow-sm" onClick={handleBuyGems}>
+                            Buy Gems via Bot
+                        </button>
+                    </div>
+                </div>
+                
+                <div className="col-12 col-md-6">
+                    <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
+                        <h5 className="fw-bold"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
+                        <p className="small text-muted mb-3">Rate: 1 Gem = {rate} Credits</p>
+                        
+                        <div className="d-flex justify-content-center align-items-center gap-2 mb-3">
+                            <div className="input-group" style={{maxWidth: '150px'}}>
+                                <input type="number" className="form-control text-center fw-bold" min="1" value={exchangeAmount} onChange={e => setExchangeAmount(Math.max(1, parseInt(e.target.value) || 1))} />
+                                <span className="input-group-text bg-light text-muted"><i className="fas fa-gem"></i></span>
+                            </div>
+                        </div>
+                        
+                        <div className="alert alert-light border shadow-sm small py-2 mb-3">
+                            Receive: <b className="text-success fs-5">{exchangeAmount * rate} Credits</b>
+                        </div>
+                        
+                        <button className="btn btn-warning fw-bold rounded-pill mt-auto w-100 py-2 shadow-sm text-dark" disabled={!user || user.gems < exchangeAmount} onClick={handleExchange}>
+                            Exchange Now
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -64,8 +111,6 @@ const ProfileView = ({ user, socket, setModal }) => {
 
             <div className="card bg-white rounded-4 border shadow-sm mb-4">
                 <div className="card-body p-3">
-                    
-                    {/* Display Name Setting */}
                     <div className="d-flex flex-column gap-2 mb-3">
                         <span className="fw-bold text-secondary mb-1"><i className="fas fa-id-card me-2"></i> Display Name</span>
                         {editingName ? (
@@ -92,7 +137,6 @@ const ProfileView = ({ user, socket, setModal }) => {
                     
                     <hr className="my-3 text-muted opacity-25" />
 
-                    {/* Gender Selection */}
                     <div className="d-flex flex-column gap-2 mt-2">
                         <span className="fw-bold text-secondary mb-1"><i className="fas fa-venus-mars me-2"></i> Gender Selection</span>
                         {editingGender ? (
@@ -496,7 +540,7 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
     );
 };
 
-const LobbyView = ({ user, rooms, setModal, socket }) => {
+const LobbyView = ({ user, rooms, setModal, socket, systemConfig }) => {
     const [searchId, setSearchId] = useState('');
     const [activeTab, setActiveTab] = useState('public');
     const [hideFull, setHideFull] = useState(false);
