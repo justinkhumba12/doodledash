@@ -17,7 +17,7 @@ const logAdminAction = async (adminId, action, details) => {
 };
 
 async function setupAdminPanel(app, io) {
-    // 1. Initialize Required Admin Tables
+    // 1. Initialize Required Admin Tables (Removed dynamic shop)
     try {
         await db.query(`
             CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -25,19 +25,6 @@ async function setupAdminPanel(app, io) {
                 admin_id VARCHAR(50),
                 action VARCHAR(100),
                 details TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS shop_items (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(100),
-                type VARCHAR(50),
-                price_credits INT DEFAULT 0,
-                price_gems INT DEFAULT 0,
-                is_active BOOLEAN DEFAULT TRUE,
-                data JSON,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
@@ -62,18 +49,16 @@ async function setupAdminPanel(app, io) {
         });
     });
 
-    // 4. Public API for dynamic dictionary (Requested by frontend GameComponents.jsx)
+    // 4. Public API for dynamic dictionary
     app.get('/api/public/dictionary', async (req, res) => {
         const dict = await redis.get('custom_dictionary');
         if (dict) return res.json(JSON.parse(dict));
-        // Fallback default
         res.json(["apple", "banana", "car", "dog", "house", "sun", "moon", "tree"]);
     });
 
     // 5. Secure Admin REST Router
     const adminRouter = express.Router();
 
-    // STRICT AUTHENTICATION MIDDLEWARE
     adminRouter.use(async (req, res, next) => {
         const initData = req.headers['x-init-data'];
         if (!initData) return res.status(401).json({ error: 'Missing initData' });
@@ -123,7 +108,15 @@ async function setupAdminPanel(app, io) {
 
     // --- MODERATION ---
     adminRouter.get('/reports', async (req, res) => {
-        const [rows] = await db.query('SELECT * FROM reports ORDER BY created_at DESC LIMIT 100');
+        const [rows] = await db.query(`
+            SELECT r.*, u.status, u.ban_until, u.mute_until, u.name, u.avatar_url, u.gender 
+            FROM reports r 
+            LEFT JOIN users u ON r.reported_id = u.tg_id 
+            ORDER BY r.created_at DESC LIMIT 100
+        `);
+        for (let r of rows) {
+            r.username = await redis.hget('user_usernames', r.reported_id) || 'unset';
+        }
         res.json(rows);
     });
 
@@ -173,59 +166,52 @@ async function setupAdminPanel(app, io) {
 
     adminRouter.get('/config', async (req, res) => {
         const maintenance = await redis.get('maintenance_mode');
+        const maintEndTime = await redis.get('maintenance_end_time');
         const dictionary = await redis.get('custom_dictionary');
+        const creditsPerGem = await redis.get('config_credits_per_gem') || 5;
         res.json({
             maintenance: maintenance === '1',
+            maintenanceEndTime: maintEndTime,
             creditsPerStar: config.CREDITS_PER_STAR,
+            creditsPerGem: parseInt(creditsPerGem),
             dictionary: dictionary ? JSON.parse(dictionary) : []
         });
     });
 
     adminRouter.post('/config/economy', async (req, res) => {
-        const { creditsPerStar } = req.body;
-        await redis.set('config_credits_per_star', creditsPerStar);
-        config.CREDITS_PER_STAR = parseInt(creditsPerStar); // Modify running process directly
-        await logAdminAction(req.adminId, 'UPDATE_EXCHANGE_RATE', { creditsPerStar });
-        res.json({ success: true });
-    });
-
-    // --- SHOP MANAGEMENT ---
-    adminRouter.get('/shop', async (req, res) => {
-        const [rows] = await db.query('SELECT * FROM shop_items ORDER BY created_at DESC');
-        res.json(rows);
-    });
-
-    adminRouter.post('/shop', async (req, res) => {
-        const { name, type, price_credits, price_gems } = req.body;
-        await db.query(`INSERT INTO shop_items (name, type, price_credits, price_gems) VALUES (?, ?, ?, ?)`, 
-            [name, type, price_credits, price_gems]);
-        await logAdminAction(req.adminId, 'ADD_SHOP_ITEM', { name, type });
-        res.json({ success: true });
-    });
-
-    adminRouter.post('/shop/toggle', async (req, res) => {
-        const { id, is_active } = req.body;
-        await db.query(`UPDATE shop_items SET is_active = ? WHERE id = ?`, [is_active, id]);
-        await logAdminAction(req.adminId, 'TOGGLE_SHOP_ITEM', { id, is_active });
+        const { creditsPerStar, creditsPerGem } = req.body;
+        if (creditsPerStar) {
+            await redis.set('config_credits_per_star', creditsPerStar);
+            config.CREDITS_PER_STAR = parseInt(creditsPerStar);
+        }
+        if (creditsPerGem) {
+            await redis.set('config_credits_per_gem', creditsPerGem);
+        }
+        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_RATES', { creditsPerStar, creditsPerGem });
         res.json({ success: true });
     });
 
     // --- SERVER CONTROL & MAINTENANCE ---
     adminRouter.post('/config/maintenance', async (req, res) => {
-        const { maintenance } = req.body;
+        const { maintenance, duration_hours } = req.body;
         if (maintenance) {
+            const duration = duration_hours ? parseFloat(duration_hours) : 1;
+            const end_time = Date.now() + (duration * 3600000);
             await redis.set('maintenance_mode', '1');
-            io.emit('system_broadcast', { type: 'warning', message: 'Server entering maintenance mode. Lobbies frozen.' });
+            await redis.set('maintenance_end_time', end_time.toString());
+            io.emit('maintenance_update', { active: true, end_time: end_time.toString() });
+            io.emit('system_broadcast', { type: 'warning', message: `Server entering maintenance mode for ~${duration} hour(s). Lobbies frozen.` });
         } else {
             await redis.del('maintenance_mode');
+            await redis.del('maintenance_end_time');
+            io.emit('maintenance_update', { active: false });
         }
-        await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance });
+        await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance, duration_hours });
         res.json({ success: true });
     });
 
     adminRouter.post('/broadcast', async (req, res) => {
         const { message } = req.body;
-        // Broadcast as a system chat message directly into all active rooms!
         const activeIds = await redis.smembers('active_rooms');
         const cId = await redis.incr('global_chat_id');
         const sysChat = { id: cId, room_id: 'global', user_id: 'System', message: `📢 [ADMIN]: ${message}`, created_at: new Date() };
@@ -270,7 +256,6 @@ async function setupAdminPanel(app, io) {
         res.json({ success: true });
     });
 
-    // --- DICTIONARY ---
     adminRouter.post('/dictionary/update', async (req, res) => {
         const { words } = req.body; 
         await redis.set('custom_dictionary', JSON.stringify(words));
@@ -292,10 +277,10 @@ async function handleAdminWebhook(update) {
             sendMsg(update.message.chat.id, "🔐 Secure Admin Login Link generated.", {
                 inline_keyboard: [[{ text: '🛡️ Open Admin Panel', web_app: { url: webAppUrl } }]]
             });
-            return true; // Command handled
+            return true; 
         }
     }
-    return false; // Let normal bot commands proceed
+    return false;
 }
 
 module.exports = { setupAdminPanel, handleAdminWebhook };
