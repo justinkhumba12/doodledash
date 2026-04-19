@@ -206,31 +206,38 @@ async function setupAdminPanel(app, io) {
             { id: 4, gems: 10, credits: 50 }
         ];
 
-        const ratesRaw = await redis.get('config_star_rates');
-        const rates = ratesRaw ? JSON.parse(ratesRaw) : { creditsPerStar: 1, gemsPerStar: 1 };
+        const starPackagesRaw = await redis.get('config_star_packages');
+        const starPackages = starPackagesRaw ? JSON.parse(starPackagesRaw) : [
+            { id: 1, stars: 20, gems: 20 },
+            { id: 2, stars: 50, gems: 50 },
+            { id: 3, stars: 100, gems: 100 },
+            { id: 4, stars: 500, gems: 500 }
+        ];
         
         const unbanCost = await redis.get('config_unban_cost') || 50;
         const unmuteCost = await redis.get('config_unmute_cost') || 25;
+        const maxRooms = await redis.get('config_max_rooms') || 1250;
 
         res.json({
             maintenance: maintenance === '1',
             maintenanceEndTime: maintEndTime,
             gemPackages,
+            starPackages,
             dictionary: dictionary ? JSON.parse(dictionary) : [],
-            rates,
             unbanCost: parseInt(unbanCost),
-            unmuteCost: parseInt(unmuteCost)
+            unmuteCost: parseInt(unmuteCost),
+            maxRooms: parseInt(maxRooms)
         });
     });
 
     adminRouter.post('/config/economy', async (req, res) => {
-        const { gemPackages, rates, unbanCost, unmuteCost } = req.body;
+        const { gemPackages, starPackages, unbanCost, unmuteCost } = req.body;
         if (gemPackages) await redis.set('config_gem_packages', JSON.stringify(gemPackages));
-        if (rates) await redis.set('config_star_rates', JSON.stringify(rates));
+        if (starPackages) await redis.set('config_star_packages', JSON.stringify(starPackages));
         if (unbanCost) await redis.set('config_unban_cost', unbanCost.toString());
         if (unmuteCost) await redis.set('config_unmute_cost', unmuteCost.toString());
         
-        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_CONFIG', { rates, unbanCost, unmuteCost });
+        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_CONFIG', { unbanCost, unmuteCost });
         res.json({ success: true });
     });
 
@@ -250,6 +257,13 @@ async function setupAdminPanel(app, io) {
             io.emit('maintenance_update', { active: false });
         }
         await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance, duration_hours });
+        res.json({ success: true });
+    });
+
+    adminRouter.post('/config/server_limits', async (req, res) => {
+        const { maxRooms } = req.body;
+        if (maxRooms) await redis.set('config_max_rooms', maxRooms.toString());
+        await logAdminAction(req.adminId, 'UPDATE_SERVER_LIMITS', { maxRooms });
         res.json({ success: true });
     });
 
