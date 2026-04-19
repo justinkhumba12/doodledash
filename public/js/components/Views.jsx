@@ -53,6 +53,7 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                                     </div>
                                 </div>
                             ))}
+                            {starPackages.length === 0 && <span className="text-muted small w-100 text-center py-4">No gem packages configured.</span>}
                         </div>
                     </div>
                 </div>
@@ -80,7 +81,7 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                                     </div>
                                 );
                             })}
-                            {gemPackages.length === 0 && <span className="text-muted small w-100 text-center py-4">No packages available.</span>}
+                            {gemPackages.length === 0 && <span className="text-muted small w-100 text-center py-4">No exchange packages available.</span>}
                         </div>
                     </div>
                 </div>
@@ -408,6 +409,28 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
     const [donators, setDonators] = useState([]);
     const [loading, setLoading] = useState(true);
 
+    const [touchStartPos, setTouchStartPos] = useState(null);
+    const handleTouchStart = (e) => setTouchStartPos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+    const handleTouchEnd = (e) => {
+        if (!touchStartPos) return;
+        const diffX = touchStartPos.x - e.changedTouches[0].clientX;
+        const diffY = touchStartPos.y - e.changedTouches[0].clientY;
+
+        if (Math.abs(diffY) > Math.abs(diffX)) {
+            setTouchStartPos(null);
+            return;
+        }
+
+        if (diffX > 50) {
+            if (activeTab === 'inviters') setActiveTab('guessers');
+            else if (activeTab === 'guessers') setActiveTab('donators');
+        } else if (diffX < -50) {
+            if (activeTab === 'donators') setActiveTab('guessers');
+            else if (activeTab === 'guessers') setActiveTab('inviters');
+        }
+        setTouchStartPos(null);
+    };
+
     useEffect(() => {
         if (socket) {
             setLoading(true);
@@ -486,7 +509,7 @@ const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
     };
 
     return (
-        <div className="container mt-4 pb-5">
+        <div className="container mt-4 pb-5" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} style={{ minHeight: '80vh' }}>
             <div className="text-center mb-4">
                 <i className="fas fa-trophy text-warning mb-2" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}></i>
                 <h3 className="fw-bold m-0">Leaderboard</h3>
