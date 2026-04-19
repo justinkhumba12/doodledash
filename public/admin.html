@@ -369,17 +369,20 @@
             
             const [gemPackages, setGemPackages] = useState([]);
             const [starPackages, setStarPackages] = useState([]);
+            const [inkConfig, setInkConfig] = useState({ free: 2500, extra: 2500, cost: 0.5, max_buys: 1 });
             const [unbanCost, setUnbanCost] = useState(50);
             const [unmuteCost, setUnmuteCost] = useState(25);
             
             // Accordion states
             const [showStarPkgs, setShowStarPkgs] = useState(false);
             const [showGemPkgs, setShowGemPkgs] = useState(false);
+            const [showInkCfg, setShowInkCfg] = useState(false);
 
             const loadSettings = () => {
                 apiFetch('/config').then(c => {
                     setGemPackages(c.gemPackages || []);
                     setStarPackages(c.starPackages || []);
+                    if (c.inkConfig) setInkConfig(c.inkConfig);
                     if (c.unbanCost) setUnbanCost(c.unbanCost);
                     if (c.unmuteCost) setUnmuteCost(c.unmuteCost);
                 });
@@ -412,7 +415,7 @@
             const removeStarPackage = (id) => setStarPackages(starPackages.filter(p => p.id !== id));
 
             const saveEconomy = async () => {
-                await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, unbanCost, unmuteCost });
+                await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, inkConfig, unbanCost, unmuteCost });
                 alert('Economy Configuration Saved. Modifications reflected globally.');
             };
 
@@ -451,6 +454,37 @@
                             </div>
                         </div>
                         
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-dark fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowInkCfg(!showInkCfg)}>
+                                    <span><i className="fas fa-tint me-2 text-dark"></i>Ink Configuration</span>
+                                    <i className={`fas fa-chevron-${showInkCfg ? 'up' : 'down'} text-muted`}></i>
+                                </div>
+                                {showInkCfg && (
+                                    <div className="card-body bg-light border-top">
+                                        <div className="row g-2 mb-2">
+                                            <div className="col-6">
+                                                <label className="small fw-bold text-muted">Free Ink Level</label>
+                                                <input type="number" className="form-control form-control-sm" value={inkConfig.free} onChange={e => setInkConfig({...inkConfig, free: Number(e.target.value)})} />
+                                            </div>
+                                            <div className="col-6">
+                                                <label className="small fw-bold text-muted">Extra Ink Level</label>
+                                                <input type="number" className="form-control form-control-sm" value={inkConfig.extra} onChange={e => setInkConfig({...inkConfig, extra: Number(e.target.value)})} />
+                                            </div>
+                                            <div className="col-6">
+                                                <label className="small fw-bold text-muted">Cost (Credits)</label>
+                                                <input type="number" step="0.1" className="form-control form-control-sm" value={inkConfig.cost} onChange={e => setInkConfig({...inkConfig, cost: Number(e.target.value)})} />
+                                            </div>
+                                            <div className="col-6">
+                                                <label className="small fw-bold text-muted">Max Buys</label>
+                                                <input type="number" className="form-control form-control-sm" value={inkConfig.max_buys} onChange={e => setInkConfig({...inkConfig, max_buys: Number(e.target.value)})} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
                         <div className="col-12 col-md-6">
                             <div className="card h-100 border-0 shadow-sm">
                                 <div className="card-header bg-white text-info fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowStarPkgs(!showStarPkgs)}>
