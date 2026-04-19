@@ -1,343 +1,678 @@
-const express = require('express');
-const { db, redis } = require('./database');
-const { validateInitData, sendMsg } = require('./utils');
-const config = require('./config');
-const { getRoom, deleteRoomData, syncRoom, broadcastRooms } = require('./roomManager');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Admin - DoodleDash</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-// Helper for securely logging all admin actions
-const logAdminAction = async (adminId, action, details) => {
-    try {
-        await db.query(
-            `INSERT INTO admin_audit_logs (admin_id, action, details) VALUES (?, ?, ?)`,
-            [adminId, action, JSON.stringify(details)]
-        );
-    } catch (e) {
-        console.error('[Admin Log Error]', e);
-    }
-};
-
-async function setupAdminPanel(app, io) {
-    try {
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS admin_audit_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                admin_id VARCHAR(50),
-                action VARCHAR(100),
-                details TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-    } catch (err) {
-        console.error('[Admin DB Init Error]', err);
-    }
-
-    // Socket.io Interceptor for Maintenance Mode
-    io.on('connection', (socket) => {
-        socket.use(async ([event, ...args], next) => {
-            if (event === 'create_room') {
-                const maint = await redis.get('maintenance_mode');
-                if (maint === '1') {
-                    return socket.emit('create_error', 'Server is in Maintenance Mode. Room creation is temporarily disabled.');
-                }
-            }
-            next();
-        });
-    });
-
-    app.get('/api/public/dictionary', async (req, res) => {
-        const dict = await redis.get('custom_dictionary');
-        if (dict) return res.json(JSON.parse(dict));
-        res.json(["apple", "banana", "car", "dog", "house", "sun", "moon", "tree"]);
-    });
-
-    const adminRouter = express.Router();
-
-    adminRouter.use(async (req, res, next) => {
-        const initData = req.headers['x-init-data'];
-        if (!initData) return res.status(401).json({ error: 'Missing initData' });
-
-        const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
+    <style>
+        body { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; }
+        .sidebar { background: #0f172a; color: #cbd5e1; box-shadow: 2px 0 10px rgba(0,0,0,0.1); flex-shrink: 0; }
+        .nav-item { cursor: pointer; transition: 0.2s; font-weight: 500; border-radius: 8px; }
+        .nav-item:hover { background: #1e293b; color: white; }
+        .nav-item.active { background: #3b82f6; color: white; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
+        .card { border: none; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 20px; overflow: hidden; }
+        .card-header { background: white; border-bottom: 1px solid #e2e8f0; font-weight: bold; padding: 15px 20px; }
+        .stat-card { transition: transform 0.2s; }
+        .stat-card:hover { transform: translateY(-3px); }
+        .main-content { flex-grow: 1; height: 100vh; overflow-y: auto; }
         
-        if (!isMock && config.BOT_TOKEN && !validateInitData(initData, config.BOT_TOKEN)) {
-            return res.status(403).json({ error: 'Invalid authentication signature.' });
+        @media (min-width: 769px) {
+            .app-container { flex-direction: row !important; }
+            .sidebar { width: 250px; min-height: 100vh; padding-top: 2rem; flex-direction: column; }
+            .nav-item { padding: 12px 20px; margin: 0 10px 5px 10px; }
+            .sidebar-header { margin-bottom: 2rem; }
+            .sidebar-footer { margin-top: auto; padding: 1rem; }
         }
+        @media (max-width: 768px) {
+            .app-container { flex-direction: column-reverse !important; height: 100vh; }
+            .sidebar { width: 100% !important; min-height: auto !important; flex-direction: row !important; flex-wrap: nowrap; overflow-x: auto; padding: 10px 5px !important; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 100; justify-content: space-around; }
+            .nav-item { flex: 1; text-align: center; padding: 8px 2px; margin: 0 2px; font-size: 0.75rem; white-space: nowrap; }
+            .nav-item i { display: block; font-size: 1.2rem; margin-bottom: 4px; margin-right: 0 !important; width: 100%; }
+            .sidebar-header, .sidebar-footer { display: none !important; }
+            .main-content { height: calc(100vh - 60px) !important; flex-grow: 1; overflow-y: auto; }
+            .card-header { padding: 10px; font-size: 0.95rem; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-        try {
-            const urlParams = new URLSearchParams(initData);
-            const userObj = JSON.parse(urlParams.get('user'));
-            const tgId = userObj.id.toString();
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const Dashboard = ({ apiFetch }) => {
+            const [stats, setStats] = useState(null);
+            const [logs, setLogs] = useState([]);
+
+            useEffect(() => {
+                apiFetch('/stats').then(setStats);
+                apiFetch('/audit').then(setLogs);
+            }, []);
+
+            if (!stats) return <div className="p-5 text-center"><div className="spinner-border text-primary"></div></div>;
+
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">System Overview</h3>
+                    <div className="row g-3 mb-4">
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-primary text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Total Users</h6><h3 className="mb-0 fw-bold">{stats.totalUsers.toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-success text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Daily Active (DAU)</h6><h3 className="mb-0 fw-bold">{stats.dau.toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-warning text-dark p-3 p-md-4 h-100"><h6 className="opacity-75 small">Credits Circ.</h6><h3 className="mb-0 fw-bold">{Number(stats.totalCredits).toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-danger text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Star Donations</h6><h3 className="mb-0 fw-bold">{stats.totalDonated.toLocaleString()} <i className="fas fa-star ms-1"></i></h3></div></div>
+                    </div>
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6"><div className="card stat-card bg-info text-dark p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Active Game Rooms</h6><h2 className="mb-0 fw-bold">{stats.activeRooms}</h2></div><i className="fas fa-gamepad fs-1 opacity-50"></i></div></div>
+                        <div className="col-12 col-md-6"><div className="card stat-card bg-dark text-white p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Connected Sockets</h6><h2 className="mb-0 fw-bold">{stats.activeSockets}</h2></div><i className="fas fa-plug fs-1 opacity-50"></i></div></div>
+                    </div>
+                    
+                    <div className="card">
+                        <div className="card-header"><i className="fas fa-list me-2"></i>Admin Audit Log</div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle mb-0" style={{minWidth: '500px'}}>
+                                <thead className="table-light"><tr><th>Timestamp</th><th>Admin ID</th><th>Action</th><th>Details</th></tr></thead>
+                                <tbody>
+                                    {logs.map(l => (
+                                        <tr key={l.id}>
+                                            <td className="text-muted small">{new Date(l.created_at).toLocaleString()}</td>
+                                            <td className="fw-bold">{l.admin_id}</td>
+                                            <td><span className="badge bg-secondary">{l.action}</span></td>
+                                            <td className="small font-monospace text-truncate" style={{maxWidth:'150px'}}>{l.details}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Moderation = ({ apiFetch }) => {
+            const [search, setSearch] = useState('');
+            const [users, setUsers] = useState([]);
+            const [reports, setReports] = useState([]);
+            const [proofModal, setProofModal] = useState(null);
+            const [reportModalTab, setReportModalTab] = useState('reason');
+            const [actionModal, setActionModal] = useState(null);
             
-            const adminIds = (process.env.ADMIN_IDS || '').split(',');
-            if (!isMock && !adminIds.includes(tgId)) {
-                return res.status(403).json({ error: 'Unauthorized: You are not listed in ADMIN_IDS.' });
-            }
-            
-            req.adminId = tgId;
-            next();
-        } catch (e) {
-            return res.status(400).json({ error: 'Malformed initData payload.' });
-        }
-    });
+            const [reportFilter, setReportFilter] = useState('all');
+            const [selectedProfile, setSelectedProfile] = useState(null);
 
-    // --- DASHBOARD ANALYTICS ---
-    adminRouter.get('/stats', async (req, res) => {
-        try {
-            const [[{ c: totalUsers }]] = await db.query('SELECT COUNT(*) as c FROM users');
-            const [[{ c: dau }]] = await db.query(`SELECT COUNT(*) as c FROM users WHERE DATE(last_active) = UTC_DATE()`);
-            const [[{ s: totalCredits }]] = await db.query('SELECT SUM(credits) as s FROM users');
-            const [[{ s: totalDonated }]] = await db.query('SELECT SUM(total_donated) as s FROM donations');
-            
-            const activeRooms = await redis.smembers('active_rooms');
-            const activeSockets = io.engine.clientsCount;
-            
-            res.json({ totalUsers, dau, totalCredits: totalCredits || 0, totalDonated: totalDonated || 0, activeRooms: activeRooms.length, activeSockets });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
+            useEffect(() => { apiFetch('/reports').then(setReports); }, []);
 
-    adminRouter.get('/audit', async (req, res) => {
-        const [rows] = await db.query('SELECT * FROM admin_audit_logs ORDER BY created_at DESC LIMIT 50');
-        res.json(rows);
-    });
+            const doSearch = async () => {
+                if(!search) return;
+                const res = await apiFetch('/users/search', 'POST', { query: search });
+                setUsers(res);
+            };
 
-    // --- MODERATION ---
-    adminRouter.get('/reports', async (req, res) => {
-        const [rows] = await db.query(`
-            SELECT r.*, u.status, u.ban_until, u.mute_until, u.name, u.avatar_url, u.gender 
-            FROM reports r 
-            LEFT JOIN users u ON r.reported_id = u.tg_id 
-            ORDER BY r.created_at DESC LIMIT 100
-        `);
-        for (let r of rows) {
-            r.username = await redis.hget('user_usernames', r.reported_id) || 'unset';
-            r.status = r.status || 'active'; // fallback for filter logic
-        }
-        res.json(rows);
-    });
-
-    adminRouter.post('/reports/delete', async (req, res) => {
-        const { id } = req.body;
-        await db.query('DELETE FROM reports WHERE id = ?', [id]);
-        res.json({ success: true });
-    });
-
-    adminRouter.post('/users/search', async (req, res) => {
-        const { query } = req.body;
-        const search = `%${query}%`;
-        const [rows] = await db.query('SELECT tg_id, name, credits, gems, status, ban_until, mute_until, avatar_url, gender, ban_count FROM users WHERE tg_id = ? OR name LIKE ? LIMIT 20', [query, search]);
-        
-        for (let r of rows) {
-            r.username = await redis.hget('user_usernames', r.tg_id) || 'unset';
-            r.status = r.status || 'active';
-        }
-        res.json(rows);
-    });
-
-    adminRouter.post('/users/action', async (req, res) => {
-        const { tgId, action, days, message, reporterId, reportId } = req.body;
-        try {
-            let untilDate = null;
-            if (days && days !== 'perm') {
-                const d = new Date();
-                d.setDate(d.getDate() + parseInt(days));
-                untilDate = d.toISOString().split('T')[0];
-            }
-
-            if (action === 'ban') {
-                await db.query(`UPDATE users SET status = 'ban', ban_until = ?, ban_count = ban_count + 1 WHERE tg_id = ?`, [untilDate || '2099-12-31', tgId]);
-                io.to(`user_${tgId}`).emit('create_error', 'Your account has been banned by an administrator.');
-                if (message) {
-                    const formattedMsg = `🛑 *ADMIN ACTION:* ${message}\n\n_If you think this action was made by mistake, please contact an admin._`;
-                    sendMsg(tgId, formattedMsg, null, { parse_mode: 'Markdown' });
+            const fetchProfile = async (tgId, reportData = null) => {
+                const res = await apiFetch('/users/search', 'POST', { query: tgId });
+                if (res && res.length > 0) {
+                    setSelectedProfile({ ...res[0], reportData });
+                } else {
+                    alert('User not found.');
                 }
-                
-                if (reporterId) {
-                    await db.query('UPDATE users SET credits = credits + 5 WHERE tg_id = ?', [reporterId]);
-                    await redis.hincrbyfloat('user_credits', reporterId, 5);
-                    sendMsg(reporterId, "Thank you for your report! The user has been banned and you've been rewarded 5 Credits.");
-                }
-            } else if (action === 'mute') {
-                await db.query(`UPDATE users SET status = 'mute', mute_until = ? WHERE tg_id = ?`, [untilDate || '2099-12-31', tgId]);
-                if (message) {
-                    const formattedMsg = `🔇 *ADMIN ACTION:* ${message}\n\n_If you think this action was made by mistake, please contact an admin._`;
-                    sendMsg(tgId, formattedMsg, null, { parse_mode: 'Markdown' });
-                }
-                
-                if (reporterId) {
-                    await db.query('UPDATE users SET credits = credits + 3 WHERE tg_id = ?', [reporterId]);
-                    await redis.hincrbyfloat('user_credits', reporterId, 3);
-                    sendMsg(reporterId, "Thank you for your report! The user has been muted and you've been rewarded 3 Credits.");
-                }
-            } else if (action === 'unban' || action === 'unmute') {
-                await db.query(`UPDATE users SET status = 'active', ban_until = NULL, mute_until = NULL WHERE tg_id = ?`, [tgId]);
-                if (message) {
-                    sendMsg(tgId, `✅ *ADMIN ACTION:* ${message}`, null, { parse_mode: 'Markdown' });
-                }
-            }
-            
-            // Delete report if action resolved it
-            if (reportId) {
-                await db.query('DELETE FROM reports WHERE id = ?', [reportId]);
-            }
-            
-            await logAdminAction(req.adminId, `USER_${action.toUpperCase()}`, { tgId, days, untilDate });
-            res.json({ success: true });
-        } catch(e) { res.status(500).json({ error: e.message }); }
-    });
+            };
 
-    // --- ECONOMY & CONFIG ---
-    adminRouter.post('/economy/modify', async (req, res) => {
-        const { tgId, credits, gems } = req.body;
-        await db.query(`UPDATE users SET credits = credits + ?, gems = gems + ? WHERE tg_id = ?`, [credits || 0, gems || 0, tgId]);
-        if (credits) await redis.hincrbyfloat('user_credits', tgId, credits);
-        await logAdminAction(req.adminId, 'MODIFY_ECONOMY', { tgId, credits, gems });
-        res.json({ success: true });
-    });
+            const openActionModal = (tgId, action, days, reportData = null) => {
+                let defMsg = "";
+                if (action === 'ban') defMsg = `You have been banned for ${days === 'perm' ? 'life' : days + ' days'} due to violations of our rules.`;
+                if (action === 'mute') defMsg = `You have been muted for ${days} day(s) due to chat violations.`;
+                if (action === 'unban' || action === 'unmute') defMsg = `Your restriction has been lifted.`;
 
-    adminRouter.get('/config', async (req, res) => {
-        const maintenance = await redis.get('maintenance_mode');
-        const maintEndTime = await redis.get('maintenance_end_time');
-        const dictionary = await redis.get('custom_dictionary');
-        
-        const packagesRaw = await redis.get('config_gem_packages');
-        const gemPackages = packagesRaw ? JSON.parse(packagesRaw) : [
-            { id: 1, gems: 1, credits: 5 },
-            { id: 2, gems: 3, credits: 15 },
-            { id: 3, gems: 5, credits: 25 },
-            { id: 4, gems: 10, credits: 50 }
-        ];
+                setActionModal({
+                    tgId, action, days,
+                    reporterId: reportData?.reporter_id,
+                    reportId: reportData?.id,
+                    message: defMsg
+                });
+            };
 
-        const starPackagesRaw = await redis.get('config_star_packages');
-        const starPackages = starPackagesRaw ? JSON.parse(starPackagesRaw) : [
-            { id: 1, stars: 20, gems: 20 },
-            { id: 2, stars: 50, gems: 50 },
-            { id: 3, stars: 100, gems: 100 },
-            { id: 4, stars: 500, gems: 500 }
-        ];
-        
-        const unbanCost = await redis.get('config_unban_cost') || 50;
-        const unmuteCost = await redis.get('config_unmute_cost') || 25;
-        const maxRooms = await redis.get('config_max_rooms') || 1250;
+            const takeAction = async (data) => {
+                await apiFetch('/users/action', 'POST', {
+                    tgId: data.tgId,
+                    action: data.action,
+                    days: data.days,
+                    message: data.message,
+                    reporterId: data.reporterId,
+                    reportId: data.reportId
+                });
+                setActionModal(null);
+                setSelectedProfile(null);
+                setProofModal(null);
+                doSearch();
+                apiFetch('/reports').then(setReports);
+            };
 
-        res.json({
-            maintenance: maintenance === '1',
-            maintenanceEndTime: maintEndTime,
-            gemPackages,
-            starPackages,
-            dictionary: dictionary ? JSON.parse(dictionary) : [],
-            unbanCost: parseInt(unbanCost),
-            unmuteCost: parseInt(unmuteCost),
-            maxRooms: parseInt(maxRooms)
-        });
-    });
+            const deleteReport = async (id) => {
+                if (!window.confirm('Are you sure you want to delete this unsolved report?')) return;
+                await apiFetch('/reports/delete', 'POST', { id });
+                apiFetch('/reports').then(setReports);
+            };
 
-    adminRouter.post('/config/economy', async (req, res) => {
-        const { gemPackages, starPackages, unbanCost, unmuteCost } = req.body;
-        if (gemPackages) await redis.set('config_gem_packages', JSON.stringify(gemPackages));
-        if (starPackages) await redis.set('config_star_packages', JSON.stringify(starPackages));
-        if (unbanCost) await redis.set('config_unban_cost', unbanCost.toString());
-        if (unmuteCost) await redis.set('config_unmute_cost', unmuteCost.toString());
-        
-        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_CONFIG', { unbanCost, unmuteCost });
-        res.json({ success: true });
-    });
-
-    // --- SERVER CONTROL & MAINTENANCE ---
-    adminRouter.post('/config/maintenance', async (req, res) => {
-        const { maintenance, duration_hours } = req.body;
-        if (maintenance) {
-            const duration = duration_hours ? parseFloat(duration_hours) : 1;
-            const end_time = Date.now() + (duration * 3600000);
-            await redis.set('maintenance_mode', '1');
-            await redis.set('maintenance_end_time', end_time.toString());
-            io.emit('maintenance_update', { active: true, end_time: end_time.toString() });
-            io.emit('system_broadcast', { type: 'warning', message: `Server entering maintenance mode for ~${duration} hour(s). Lobbies frozen.` });
-        } else {
-            await redis.del('maintenance_mode');
-            await redis.del('maintenance_end_time');
-            io.emit('maintenance_update', { active: false });
-        }
-        await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance, duration_hours });
-        res.json({ success: true });
-    });
-
-    adminRouter.post('/config/server_limits', async (req, res) => {
-        const { maxRooms } = req.body;
-        if (maxRooms) await redis.set('config_max_rooms', maxRooms.toString());
-        await logAdminAction(req.adminId, 'UPDATE_SERVER_LIMITS', { maxRooms });
-        res.json({ success: true });
-    });
-
-    adminRouter.post('/broadcast', async (req, res) => {
-        const { message } = req.body;
-        const activeIds = await redis.smembers('active_rooms');
-        const cId = await redis.incr('global_chat_id');
-        const sysChat = { id: cId, room_id: 'global', user_id: 'System', message: `📢 [ADMIN]: ${message}`, created_at: new Date() };
-        
-        for (const id of activeIds) {
-            await redis.rpush(`room:${id}:chats`, JSON.stringify(sysChat));
-            await redis.ltrim(`room:${id}:chats`, -30, -1);
-            io.to(`room_${id}`).emit('new_chat', sysChat);
-        }
-        
-        await logAdminAction(req.adminId, 'GLOBAL_BROADCAST', { message });
-        res.json({ success: true });
-    });
-
-    adminRouter.get('/rooms', async (req, res) => {
-        const activeIds = await redis.smembers('active_rooms');
-        const rooms = [];
-        for (const id of activeIds) {
-             const r = await getRoom(id);
-             if (r) rooms.push({ id: r.id, status: r.status, is_private: r.is_private, members: r.members.length });
-        }
-        res.json(rooms);
-    });
-
-    adminRouter.post('/rooms/action', async (req, res) => {
-        const { roomId, action } = req.body;
-        if (action === 'close') {
-            io.to(`room_${roomId}`).emit('room_expired');
-            await deleteRoomData(roomId);
-            const sockets = await io.in(`room_${roomId}`).fetchSockets();
-            sockets.forEach(s => {
-                s.leave(`room_${roomId}`);
-                s.join('lobby');
-                s.data.currentRoom = null;
+            const filteredReports = reports.filter(r => {
+                if (reportFilter === 'all') return true;
+                const status = r.status || 'active';
+                if (reportFilter === 'active') return status === 'active';
+                if (reportFilter === 'ban') return status === 'ban';
+                if (reportFilter === 'mute') return status === 'mute';
+                return true;
             });
-            await broadcastRooms(io);
-        } else if (action === 'wipe_chat') {
-            await redis.del(`room:${roomId}:chats`);
-            await syncRoom(roomId, io);
-        }
-        await logAdminAction(req.adminId, `ROOM_FORCE_${action.toUpperCase()}`, { roomId });
-        res.json({ success: true });
-    });
 
-    adminRouter.post('/dictionary/update', async (req, res) => {
-        const { words } = req.body; 
-        await redis.set('custom_dictionary', JSON.stringify(words));
-        await logAdminAction(req.adminId, 'UPDATE_DICTIONARY', { count: words.length });
-        res.json({ success: true });
-    });
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">Trust & Safety</h3>
+                    
+                    <div className="card mb-4">
+                        <div className="card-header text-primary"><i className="fas fa-search me-2"></i>User Lookup</div>
+                        <div className="card-body">
+                            <div className="input-group mb-4">
+                                <input type="text" className="form-control" placeholder="Search Telegram ID or Name..." value={search} onChange={e=>setSearch(e.target.value)} onKeyPress={e=>e.key==='Enter' && doSearch()} />
+                                <button className="btn btn-primary" onClick={doSearch}>Search</button>
+                            </div>
+                            
+                            {users.length > 0 && (
+                                <div className="table-responsive">
+                                    <table className="table table-bordered align-middle text-center" style={{minWidth: '600px'}}>
+                                        <thead className="table-light"><tr><th>ID / Name</th><th>Status</th><th>Sanctions</th></tr></thead>
+                                        <tbody>
+                                            {users.map(u => (
+                                                <tr key={u.tg_id}>
+                                                    <td>
+                                                        <b className="font-monospace fw-bold text-primary cursor-pointer text-decoration-underline" onClick={() => fetchProfile(u.tg_id)}>{u.tg_id}</b>
+                                                        <br/>{u.name || 'Unset'} <small className="text-muted">@{u.username}</small>
+                                                    </td>
+                                                    <td>
+                                                        {u.status === 'active' ? <span className="badge bg-success">Active</span> : 
+                                                         u.status === 'mute' ? <span className="badge bg-warning text-dark">Muted</span> : 
+                                                         <span className="badge bg-danger">Banned</span>}<br/>
+                                                        <span className="small text-muted">{u.ban_until ? `Ban: ${u.ban_until.split('T')[0]}` : ''} {u.mute_until ? `Mute: ${u.mute_until.split('T')[0]}` : ''}</span>
+                                                    </td>
+                                                    <td>
+                                                        <div className="btn-group btn-group-sm flex-wrap">
+                                                            {u.status === 'ban' && (
+                                                                <button className="btn btn-success" onClick={() => openActionModal(u.tg_id, 'unban', null, null)}>Unban</button>
+                                                            )}
+                                                            {u.status === 'mute' && (
+                                                                <>
+                                                                    <button className="btn btn-success" onClick={() => openActionModal(u.tg_id, 'unmute', null, null)}>Unmute</button>
+                                                                    <button className="btn btn-outline-danger" onClick={() => openActionModal(u.tg_id, 'ban', 7, null)}>Ban 7d</button>
+                                                                    <button className="btn btn-danger" onClick={() => openActionModal(u.tg_id, 'ban', 'perm', null)}>Permaban</button>
+                                                                </>
+                                                            )}
+                                                            {u.status === 'active' && (
+                                                                <>
+                                                                    <button className="btn btn-outline-warning" onClick={() => openActionModal(u.tg_id, 'mute', 1, null)}>Mute 24h</button>
+                                                                    <button className="btn btn-outline-danger" onClick={() => openActionModal(u.tg_id, 'ban', 7, null)}>Ban 7d</button>
+                                                                    <button className="btn btn-danger" onClick={() => openActionModal(u.tg_id, 'ban', 'perm', null)}>Permaban</button>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
-    app.use('/api/admin', adminRouter);
-    console.log('[Admin Panel] Secure routes and interceptors mounted.');
-}
+                    <div className="card">
+                        <div className="card-header text-danger d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <span><i className="fas fa-flag me-2"></i>Player Reports</span>
+                            <select className="form-select form-select-sm w-auto" value={reportFilter} onChange={e=>setReportFilter(e.target.value)}>
+                                <option value="all">All Users</option>
+                                <option value="active">Active Only</option>
+                                <option value="ban">Banned Only</option>
+                                <option value="mute">Muted Only</option>
+                            </select>
+                        </div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle" style={{minWidth: '600px'}}>
+                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Details</th><th>Action</th></tr></thead>
+                                <tbody>
+                                    {filteredReports.map(r => (
+                                        <tr key={r.id}>
+                                            <td className="small">{new Date(r.created_at).toLocaleString()}</td>
+                                            <td className="font-monospace small fw-bold text-primary text-decoration-underline cursor-pointer" onClick={() => fetchProfile(r.reporter_id)}>
+                                                {r.reporter_id}
+                                            </td>
+                                            <td className="font-monospace small fw-bold text-danger text-decoration-underline cursor-pointer" onClick={() => fetchProfile(r.reported_id, r)}>
+                                                {r.reported_id}
+                                            </td>
+                                            <td><span className="badge bg-info text-dark me-1">{r.context}</span></td>
+                                            <td className="text-end">
+                                                <button className="btn btn-sm btn-dark me-1" onClick={() => { setProofModal(r); setReportModalTab('reason'); }}>Details</button>
+                                                <button className="btn btn-sm btn-outline-danger" title="Delete Unsolved Report" onClick={() => deleteReport(r.id)}><i className="fas fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {filteredReports.length === 0 && <tr><td colSpan="5" className="text-center p-4 text-muted">No reports found matching criteria.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
 
-async function handleAdminWebhook(update) {
-    if (update?.message?.text === '/adminpanel') {
-        const tgId = update.message.from.id.toString();
-        const adminIds = (process.env.ADMIN_IDS || '').split(',');
-        
-        if (adminIds.includes(tgId)) {
-            const webAppUrl = process.env.ADMIN_WEBAPP_URL || `${process.env.WEBAPP_URL}/admin.html`;
-            sendMsg(update.message.chat.id, "🔐 Secure Admin Login Link generated.", {
-                inline_keyboard: [[{ text: '🛡️ Open Admin Panel', web_app: { url: webAppUrl } }]]
-            });
-            return true; 
-        }
-    }
-    return false;
-}
+                    {selectedProfile && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
+                            <div className="modal-dialog modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">User Profile</h5>
+                                        <button className="btn-close btn-close-white" onClick={()=>setSelectedProfile(null)}></button>
+                                    </div>
+                                    <div className="modal-body text-center bg-light p-4">
+                                        {selectedProfile.avatar_url ? <img src={selectedProfile.avatar_url} className="rounded-circle mb-3 shadow" width="80" height="80" style={{objectFit:'cover'}} /> : <i className="fas fa-user-circle fs-1 mb-3 text-secondary"></i>}
+                                        <h5 className="fw-bold mb-1">{selectedProfile.name || selectedProfile.reported_id || selectedProfile.tg_id}</h5>
+                                        <p className="text-muted small mb-2">@{selectedProfile.username} • {selectedProfile.gender || 'Unset'}</p>
+                                        <p className="mb-0">Status: <span className={`badge ${selectedProfile.status==='active'?'bg-success':(selectedProfile.status==='mute'?'bg-warning text-dark':'bg-danger')}`}>{selectedProfile.status}</span></p>
+                                        {selectedProfile.ban_count > 0 && <p className="mb-0 mt-1 small text-danger fw-bold"><i className="fas fa-exclamation-triangle"></i> Banned {selectedProfile.ban_count} times</p>}
+                                        
+                                        <div className="d-flex flex-wrap gap-2 justify-content-center mt-3 pt-3 border-top">
+                                            {selectedProfile.status === 'ban' && (
+                                                <button className="btn btn-sm btn-success" onClick={() => openActionModal(selectedProfile.tg_id, 'unban', null, selectedProfile.reportData)}>Unban</button>
+                                            )}
+                                            {selectedProfile.status === 'mute' && (
+                                                <>
+                                                    <button className="btn btn-sm btn-success" onClick={() => openActionModal(selectedProfile.tg_id, 'unmute', null, selectedProfile.reportData)}>Unmute</button>
+                                                    <button className="btn btn-sm btn-outline-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 7, selectedProfile.reportData)}>Ban 7d</button>
+                                                    <button className="btn btn-sm btn-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 'perm', selectedProfile.reportData)}>Permaban</button>
+                                                </>
+                                            )}
+                                            {selectedProfile.status === 'active' && (
+                                                <>
+                                                    <button className="btn btn-sm btn-outline-warning" onClick={() => openActionModal(selectedProfile.tg_id, 'mute', 1, selectedProfile.reportData)}>Mute 24h</button>
+                                                    <button className="btn btn-sm btn-outline-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 7, selectedProfile.reportData)}>Ban 7d</button>
+                                                    <button className="btn btn-sm btn-danger" onClick={() => openActionModal(selectedProfile.tg_id, 'ban', 'perm', selectedProfile.reportData)}>Permaban</button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
-module.exports = { setupAdminPanel, handleAdminWebhook };
+                    {proofModal && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
+                            <div className="modal-dialog modal-lg modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">Report Details</h5>
+                                        <button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button>
+                                    </div>
+                                    <div className="modal-body bg-light">
+                                        <ul className="nav nav-tabs mb-3 border-bottom-0">
+                                            <li className="nav-item cursor-pointer">
+                                                <a className={`nav-link text-dark ${reportModalTab === 'reason' ? 'active fw-bold border-bottom-0 shadow-sm' : ''}`} onClick={() => setReportModalTab('reason')}>Reason</a>
+                                            </li>
+                                            <li className="nav-item cursor-pointer">
+                                                <a className={`nav-link text-dark ${reportModalTab === 'proof' ? 'active fw-bold border-bottom-0 shadow-sm' : ''}`} onClick={() => setReportModalTab('proof')}>Evidence</a>
+                                            </li>
+                                        </ul>
+                                        {reportModalTab === 'reason' && (
+                                            <div className="bg-white p-3 border rounded shadow-sm">
+                                                <h6 className="fw-bold">Context: <span className="badge bg-info text-dark fw-normal">{proofModal.context}</span></h6>
+                                                <hr className="my-2"/>
+                                                <p className="mb-0">{proofModal.reason}</p>
+                                            </div>
+                                        )}
+                                        {reportModalTab === 'proof' && (
+                                            <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {actionModal && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1060}}>
+                            <div className="modal-dialog modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">Confirm Action: {actionModal.action.toUpperCase()}</h5>
+                                        <button className="btn-close btn-close-white" onClick={() => setActionModal(null)}></button>
+                                    </div>
+                                    <div className="modal-body p-4 text-start">
+                                        <label className="form-label small fw-bold">Message to User (Bot will notify them):</label>
+                                        <textarea className="form-control mb-3" rows="3" value={actionModal.message} onChange={(e) => setActionModal({...actionModal, message: e.target.value})}></textarea>
+                                        <div className="alert alert-info py-2 small fw-bold"><i className="fas fa-info-circle me-1"></i> A 'contact admin for mistakes' note will be automatically appended to this message.</div>
+                                        
+                                        <div className="d-flex gap-2">
+                                            <button className="btn btn-secondary w-50 fw-bold" onClick={() => setActionModal(null)}>Cancel</button>
+                                            <button className="btn btn-primary w-50 fw-bold" onClick={() => takeAction(actionModal)}>Execute Action</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const Economy = ({ apiFetch }) => {
+            const [targetUser, setTargetUser] = useState('');
+            const [credits, setCredits] = useState(0);
+            const [gems, setGems] = useState(0);
+            
+            const [gemPackages, setGemPackages] = useState([]);
+            const [starPackages, setStarPackages] = useState([]);
+            const [unbanCost, setUnbanCost] = useState(50);
+            const [unmuteCost, setUnmuteCost] = useState(25);
+            
+            // Accordion states
+            const [showStarPkgs, setShowStarPkgs] = useState(false);
+            const [showGemPkgs, setShowGemPkgs] = useState(false);
+
+            const loadSettings = () => {
+                apiFetch('/config').then(c => {
+                    setGemPackages(c.gemPackages || []);
+                    setStarPackages(c.starPackages || []);
+                    if (c.unbanCost) setUnbanCost(c.unbanCost);
+                    if (c.unmuteCost) setUnmuteCost(c.unmuteCost);
+                });
+            };
+            useEffect(() => { loadSettings(); }, []);
+
+            const applyFunds = async () => {
+                if(!targetUser) return;
+                await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems) });
+                alert('Funds successfully applied!');
+                setCredits(0); setGems(0); setTargetUser('');
+            };
+
+            const addGemPackage = () => {
+                const maxId = gemPackages.length > 0 ? Math.max(...gemPackages.map(p => p.id)) : 0;
+                setGemPackages([...gemPackages, { id: maxId + 1, gems: 1, credits: 5 }]);
+            };
+            const updateGemPackage = (id, field, value) => {
+                setGemPackages(gemPackages.map(p => p.id === id ? { ...p, [field]: Number(value) } : p));
+            };
+            const removeGemPackage = (id) => setGemPackages(gemPackages.filter(p => p.id !== id));
+
+            const addStarPackage = () => {
+                const maxId = starPackages.length > 0 ? Math.max(...starPackages.map(p => p.id)) : 0;
+                setStarPackages([...starPackages, { id: maxId + 1, stars: 20, gems: 20 }]);
+            };
+            const updateStarPackage = (id, field, value) => {
+                setStarPackages(starPackages.map(p => p.id === id ? { ...p, [field]: Number(value) } : p));
+            };
+            const removeStarPackage = (id) => setStarPackages(starPackages.filter(p => p.id !== id));
+
+            const saveEconomy = async () => {
+                await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, unbanCost, unmuteCost });
+                alert('Economy Configuration Saved. Modifications reflected globally.');
+            };
+
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">Economy & Monetization</h3>
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-success fw-bold"><i className="fas fa-hand-holding-usd me-2"></i>Manual Currency Grant</div>
+                                <div className="card-body bg-light d-flex flex-column gap-3">
+                                    <div><label className="form-label small fw-bold">Target Telegram ID</label><input className="form-control" placeholder="12345678" value={targetUser} onChange={e=>setTargetUser(e.target.value)} /></div>
+                                    <div className="row g-2">
+                                        <div className="col"><label className="form-label small fw-bold text-warning">Credits (+/-)</label><input className="form-control" type="number" value={credits} onChange={e=>setCredits(e.target.value)} /></div>
+                                        <div className="col"><label className="form-label small fw-bold text-info">Gems (+/-)</label><input className="form-control" type="number" value={gems} onChange={e=>setGems(e.target.value)} /></div>
+                                    </div>
+                                    <button className="btn btn-success mt-auto" onClick={applyFunds} disabled={!targetUser}>Execute Transaction</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-primary fw-bold"><i className="fas fa-chart-line me-2"></i>Global Penalty Costs</div>
+                                <div className="card-body bg-light">
+                                    <div className="row g-3 mb-3">
+                                        <div className="col-6">
+                                            <label className="form-label small fw-bold">Unban Cost (⭐️)</label>
+                                            <input type="number" className="form-control" value={unbanCost} onChange={e => setUnbanCost(Number(e.target.value))} />
+                                        </div>
+                                        <div className="col-6">
+                                            <label className="form-label small fw-bold">Unmute Cost (⭐️)</label>
+                                            <input type="number" className="form-control" value={unmuteCost} onChange={e => setUnmuteCost(Number(e.target.value))} />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-info fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowStarPkgs(!showStarPkgs)}>
+                                    <span><i className="fas fa-star me-2"></i>Star Purchase Packages</span>
+                                    <i className={`fas fa-chevron-${showStarPkgs ? 'up' : 'down'} text-muted`}></i>
+                                </div>
+                                {showStarPkgs && (
+                                    <div className="card-body bg-light border-top">
+                                        <div className="alert alert-info small py-2 mb-3">Configure packages users buy with Telegram Stars to get Gems.</div>
+                                        
+                                        {starPackages.map(pkg => (
+                                            <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.stars} onChange={e => updateStarPackage(pkg.id, 'stars', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Stars =</span>
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateStarPackage(pkg.id, 'gems', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Gems</span>
+                                                <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeStarPackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                            </div>
+                                        ))}
+                                        <button className="btn btn-sm btn-outline-info mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addStarPackage}>+ Add New Star Package</button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100 border-0 shadow-sm">
+                                <div className="card-header bg-white text-warning fw-bold d-flex justify-content-between align-items-center" style={{cursor: 'pointer'}} onClick={() => setShowGemPkgs(!showGemPkgs)}>
+                                    <span><i className="fas fa-exchange-alt me-2 text-warning"></i>Gem Exchange Packages</span>
+                                    <i className={`fas fa-chevron-${showGemPkgs ? 'up' : 'down'} text-muted`}></i>
+                                </div>
+                                {showGemPkgs && (
+                                    <div className="card-body bg-light border-top">
+                                        <div className="alert alert-warning small py-2 mb-3 text-dark">Configure packages users can buy credits with using gems.</div>
+                                        
+                                        {gemPackages.map(pkg => (
+                                            <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateGemPackage(pkg.id, 'gems', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Gems =</span>
+                                                <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updateGemPackage(pkg.id, 'credits', e.target.value)} /> 
+                                                <span className="small fw-bold text-muted">Credits</span>
+                                                <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeGemPackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                            </div>
+                                        ))}
+                                        <button className="btn btn-sm btn-outline-warning mt-2 mb-4 w-100 fw-bold border-dashed text-dark" onClick={addGemPackage}>+ Add New Exchange Package</button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="col-12">
+                            <button className="btn btn-primary w-100 fw-bold shadow-sm p-3 mt-3" onClick={saveEconomy}><i className="fas fa-save me-2"></i> Save Economy Configuration Globally</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ServerControl = ({ apiFetch }) => {
+            const [maint, setMaint] = useState(false);
+            const [maintDuration, setMaintDuration] = useState(1);
+            const [dict, setDict] = useState('');
+            const [msg, setMsg] = useState('');
+            const [rooms, setRooms] = useState([]);
+            const [maxRooms, setMaxRooms] = useState(1250);
+
+            const load = () => {
+                apiFetch('/config').then(c => { 
+                    setMaint(c.maintenance); 
+                    setDict(c.dictionary.join(', ')); 
+                    if(c.maxRooms) setMaxRooms(c.maxRooms);
+                });
+                apiFetch('/rooms').then(setRooms);
+            };
+            useEffect(() => { load(); }, []);
+
+            const actionRoom = async (roomId, action) => {
+                if(!window.confirm(`${action.toUpperCase()} Room ${roomId}?`)) return;
+                await apiFetch('/rooms/action', 'POST', { roomId, action });
+                load();
+            };
+
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">Server Architecture & Intervention</h3>
+                    
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6">
+                            <div className={`card h-100 border-2 ${maint ? 'border-danger' : 'border-success'}`}>
+                                <div className="card-body text-center p-4 p-md-5 d-flex flex-column justify-content-center">
+                                    <i className={`fas ${maint ? 'fa-tools text-danger' : 'fa-server text-success'} fs-1 mb-3`}></i>
+                                    <h4>{maint ? 'Maintenance is ACTIVE' : 'Server is LIVE'}</h4>
+                                    <p className="text-muted small mb-3">When active, users see a countdown modal and cannot play.</p>
+                                    
+                                    {!maint && (
+                                        <div className="mb-3 w-75 mx-auto">
+                                            <label className="form-label small fw-bold">Duration (Hours)</label>
+                                            <input type="number" step="0.5" className="form-control text-center" value={maintDuration} onChange={e=>setMaintDuration(e.target.value)} />
+                                        </div>
+                                    )}
+
+                                    <button className={`btn rounded-pill px-4 fw-bold mt-auto ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { await apiFetch('/config/maintenance', 'POST', { maintenance: !maint, duration_hours: maintDuration }); load(); }}>
+                                        {maint ? 'Disable Maintenance' : 'Activate Maintenance Mode'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100">
+                                <div className="card-header bg-dark text-white"><i className="fas fa-sliders-h me-2"></i>Limits & Announcements</div>
+                                <div className="card-body d-flex flex-column">
+                                    <div className="mb-3 border-bottom pb-3">
+                                        <label className="form-label small fw-bold">Max Active Rooms Capacity</label>
+                                        <div className="d-flex gap-2">
+                                            <input type="number" className="form-control" value={maxRooms} onChange={e=>setMaxRooms(e.target.value)} />
+                                            <button className="btn btn-primary fw-bold" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms }); alert('Server capacity updated!'); }}>Save</button>
+                                        </div>
+                                        <small className="text-muted" style={{fontSize: '0.75rem'}}>Prevents new rooms if this limit is reached to save server resources.</small>
+                                    </div>
+                                    <div className="mt-auto">
+                                        <label className="form-label small fw-bold">Global PA System</label>
+                                        <textarea className="form-control mb-2" placeholder="Attention all players..." value={msg} onChange={e=>setMsg(e.target.value)} rows="2"></textarea>
+                                        <button className="btn btn-dark w-100 fw-bold" onClick={async () => { await apiFetch('/broadcast', 'POST', { message: msg }); setMsg(''); alert('Broadcast deployed!'); }} disabled={!msg}>Send Red Alert</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="card mb-4">
+                        <div className="card-header text-info"><i className="fas fa-book me-2"></i>Word Dictionary Manager</div>
+                        <div className="card-body">
+                            <p className="small text-muted">Comma-separated list of words used for prompts.</p>
+                            <textarea className="form-control mb-3" rows="3" value={dict} onChange={e=>setDict(e.target.value)}></textarea>
+                            <button className="btn btn-info text-white fw-bold w-100" onClick={async () => { 
+                                const arr = dict.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length >= 3);
+                                await apiFetch('/dictionary/update', 'POST', { words: arr });
+                                alert('Dictionary Saved!'); 
+                            }}>Sync Dictionary to Redis</button>
+                        </div>
+                    </div>
+
+                    <div className="card">
+                        <div className="card-header text-danger"><i className="fas fa-hammer me-2"></i>Active Room Intervention</div>
+                        <div className="table-responsive p-3">
+                            <table className="table table-hover align-middle text-center" style={{minWidth: '500px'}}>
+                                <thead className="table-light"><tr><th>Room ID</th><th>Visibility</th><th>Players</th><th>Phase</th><th>Emergency Actions</th></tr></thead>
+                                <tbody>
+                                    {rooms.map(r => (
+                                        <tr key={r.id}>
+                                            <td className="fw-bold">{r.id}</td>
+                                            <td>{r.is_private ? <span className="badge bg-danger">Private</span> : <span className="badge bg-success">Public</span>}</td>
+                                            <td>{r.members}</td>
+                                            <td>{r.status}</td>
+                                            <td>
+                                                <button className="btn btn-sm btn-outline-warning me-2" onClick={()=>actionRoom(r.id, 'wipe_chat')}><i className="fas fa-eraser"></i></button>
+                                                <button className="btn btn-sm btn-danger" onClick={()=>actionRoom(r.id, 'close')}><i className="fas fa-skull"></i> Close</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {rooms.length === 0 && <tr><td colSpan="5" className="text-muted p-4">No active rooms found.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AdminApp = () => {
+            const [initData, setInitData] = useState('');
+            const [error, setError] = useState('');
+            const [tab, setTab] = useState('dashboard');
+
+            useEffect(() => {
+                if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+                    window.Telegram.WebApp.expand();
+                    setInitData(window.Telegram.WebApp.initData);
+                } else {
+                    setInitData("mock_web_auth=true&user=%7B%22id%22%3A123456789%7D");
+                }
+            }, []);
+
+            const apiFetch = async (path, method = 'GET', body = null) => {
+                const options = { method, headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData } };
+                if (body) options.body = JSON.stringify(body);
+                const res = await fetch(`/api/admin${path}`, options);
+                if (res.status === 403 || res.status === 401) { setError('Access Denied: You are not authorized.'); throw new Error('Auth'); }
+                return res.json();
+            };
+
+            if (error) return <div className="container mt-5"><div className="alert alert-danger shadow-lg p-5 text-center"><i className="fas fa-shield-alt fs-1 mb-3"></i><h4>{error}</h4><p className="mb-0">Please access this panel through the official Telegram Bot.</p></div></div>;
+            if (!initData) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
+
+            return (
+                <div className="d-flex app-container w-100">
+                    <div className="sidebar d-flex flex-column">
+                        <div className="sidebar-header text-center mt-2">
+                            <i className="fas fa-cogs fs-2 text-primary mb-2"></i>
+                            <h5 className="fw-bold text-white m-0">Admin Center</h5>
+                        </div>
+                        <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-2 w-15"></i> Dashboard</div>
+                        <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-2 w-15"></i> Moderation</div>
+                        <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-2 w-15"></i> Economy</div>
+                        <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-2 w-15"></i> Settings</div>
+                        
+                        <div className="sidebar-footer text-center opacity-50 small mt-auto">
+                            DoodleDash OS v1.0
+                        </div>
+                    </div>
+                    <div className="main-content">
+                        {tab === 'dashboard' && <Dashboard apiFetch={apiFetch} />}
+                        {tab === 'moderation' && <Moderation apiFetch={apiFetch} />}
+                        {tab === 'economy' && <Economy apiFetch={apiFetch} />}
+                        {tab === 'server' && <ServerControl apiFetch={apiFetch} />}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<AdminApp />);
+    </script>
+</body>
+</html>
