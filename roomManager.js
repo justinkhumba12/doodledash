@@ -118,6 +118,9 @@ async function syncRoom(roomId, io) {
         }
     }
 
+    const drawingsLen = await redis.llen(`room:${roomId}:drawings`);
+    const redoLen = await redis.llen(`room:${roomId}:redo`);
+
     const roomSockets = await io.in(`room_${roomId}`).fetchSockets();
     if (roomSockets) {
         for (const s of roomSockets) {
@@ -156,7 +159,9 @@ async function syncRoom(roomId, io) {
                     expire_at: room.expire_at ? room.expire_at.toISOString() : null,
                     break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
                     round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null,
-                    has_been_extended: room.has_been_extended || false
+                    has_been_extended: room.has_been_extended || false,
+                    undo_steps: drawingsLen,
+                    redo_steps: redoLen
                 },
                 members,
                 chats, 
