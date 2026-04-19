@@ -39,7 +39,8 @@ if (cluster.isPrimary) {
                     mute_until DATE DEFAULT NULL,
                     gender VARCHAR(10) DEFAULT NULL,
                     name VARCHAR(50) DEFAULT NULL,
-                    avatar_url VARCHAR(255) DEFAULT NULL
+                    avatar_url VARCHAR(255) DEFAULT NULL,
+                    ban_count INT DEFAULT 0
                 )
             `);
 
