@@ -37,8 +37,8 @@ const tgApiCall = (method, data) => {
     request.end();
 };
 
-const sendMsg = (chatId, text, replyMarkup) => {
-    tgApiCall('sendMessage', { chat_id: chatId, text, reply_markup: replyMarkup });
+const sendMsg = (chatId, text, replyMarkup, options = {}) => {
+    tgApiCall('sendMessage', { chat_id: chatId, text, reply_markup: replyMarkup, ...options });
 };
 
 // Get current ISO year-week format (e.g., "2024-W12")
