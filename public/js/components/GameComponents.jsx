@@ -38,9 +38,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const inkConfig = systemConfig?.inkConfig || { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 };
     const currentMaxInk = inkConfig.free + (drawerInkExtraObj['black'] || 0);
 
-    const currentMaxInkRef = useRef(currentMaxInk);
-    useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
-
     const maintActive = systemConfig?.maintenance?.active;
     const maintEndTime = systemConfig?.maintenance?.end_time;
 
@@ -88,6 +85,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
     const updateInkUIRef = useRef(updateInkUI);
     useEffect(() => { updateInkUIRef.current = updateInkUI; });
+
+    const currentMaxInkRef = useRef(currentMaxInk);
+    useEffect(() => { 
+        currentMaxInkRef.current = currentMaxInk; 
+        if (updateInkUIRef.current) updateInkUIRef.current();
+    }, [currentMaxInk]);
 
     useEffect(() => {
         if (room.status !== 'DRAWING') {
