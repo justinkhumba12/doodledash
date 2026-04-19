@@ -63,6 +63,7 @@ module.exports = (io) => {
                                 room.break_end_time = new Date(now + 5000); 
                                 room.word_to_draw = null;
                                 room.round_end_time = null;
+                                room.members.forEach(m => { m.is_ready = 0; });
                                 
                                 const cId = await redis.incr('global_chat_id');
                                 const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() };
@@ -95,6 +96,7 @@ module.exports = (io) => {
                     room.break_end_time = new Date(now + 5000); 
                     room.word_to_draw = null;
                     room.round_end_time = null;
+                    room.members.forEach(m => { m.is_ready = 0; });
                     
                     const cId = await redis.incr('global_chat_id');
                     const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() };
@@ -103,10 +105,27 @@ module.exports = (io) => {
                     needsSync = true;
                 }
 
+                if (room.status === 'DRAWING' && room.round_end_time && now >= room.round_end_time.getTime()) {
+                    room.status = 'REVEAL';
+                    room.end_reason = 'nobody_guessed';
+                    room.break_end_time = new Date(now + 5000); 
+                    room.round_end_time = null;
+                    room.members.forEach(m => { m.is_ready = 0; });
+                    needsSync = true;
+                }
+
                 if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                     room.status = 'BREAK';
                     room.break_end_time = new Date(now + 10000); 
                     room.members.forEach(m => m.has_given_up = 0);
+                    needsSync = true;
+                }
+
+                if (room.status === 'BREAK' && room.break_end_time && now >= room.break_end_time.getTime()) {
+                    room.status = 'WAITING';
+                    room.break_end_time = null;
+                    room.round_end_time = null;
+                    room.members.forEach(m => { m.is_ready = 0; m.has_given_up = 0; });
                     needsSync = true;
                 }
 
@@ -153,6 +172,7 @@ module.exports = (io) => {
                                 room.break_end_time = new Date(now + 5000); 
                                 room.word_to_draw = null;
                                 room.round_end_time = null;
+                                room.members.forEach(m => { m.is_ready = 0; });
                             }
 
                             room.members = room.members.filter(m => m.user_id !== s.data.currentUser);
