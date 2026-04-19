@@ -413,17 +413,19 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     }
 
     return (
-        <div className="wb-overlay" style={{ zIndex: 1050, background: 'rgba(0,0,0,0.6)' }} onClick={(e) => { if (e.target.classList.contains('wb-overlay') && modal.type !== 'maintenance' && modal.type !== 'idle_warning' && modal.type !== 'sound_policy') close(); }}>
-            <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: '400px', width: '95%', margin: '0 auto' }}>
-                <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden" style={{ animation: 'slideUp 0.3s ease-out' }}>
-                    {modal.type !== 'maintenance' && modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && (
-                        <div className="modal-header border-0 pb-0 d-flex justify-content-between align-items-center p-3">
-                            <h5 className="modal-title fw-bold text-dark m-0">{title}</h5>
-                            <button type="button" className="btn-close shadow-none" onClick={close}></button>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1050, background: 'rgba(0,0,0,0.6)', overflowY: 'auto' }} onPointerDown={(e) => { if(e.target === e.currentTarget && modal.type !== 'maintenance' && modal.type !== 'idle_warning' && modal.type !== 'sound_policy') close(); }}>
+            <div style={{ display: 'flex', minHeight: '100%', padding: '2rem 1rem', alignItems: 'center', justifyContent: 'center' }} onPointerDown={(e) => { if(e.target === e.currentTarget && modal.type !== 'maintenance' && modal.type !== 'idle_warning' && modal.type !== 'sound_policy') close(); }}>
+                <div className="modal-dialog m-0 w-100" style={{ maxWidth: '400px' }} onPointerDown={(e) => e.stopPropagation()}>
+                    <div className="modal-content border-0 shadow-lg rounded-4 overflow-hidden w-100 bg-white" style={{ animation: 'slideUp 0.3s ease-out' }}>
+                        {modal.type !== 'maintenance' && modal.type !== 'idle_warning' && modal.type !== 'sound_policy' && (
+                            <div className="modal-header border-0 pb-0 d-flex justify-content-between align-items-center p-3">
+                                <h5 className="modal-title fw-bold text-dark m-0">{title}</h5>
+                                <button type="button" className="btn-close shadow-none" onClick={close}></button>
+                            </div>
+                        )}
+                        <div className="modal-body p-4 bg-white">
+                            {content}
                         </div>
-                    )}
-                    <div className="modal-body p-4 bg-white">
-                        {content}
                     </div>
                 </div>
             </div>
