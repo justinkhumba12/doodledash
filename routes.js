@@ -165,19 +165,24 @@ module.exports = (app, io) => {
                 const buyerId = payload.tgId;
                 const type = payload.type || 'credits'; 
                 
-                const ratesRaw = await redis.get('config_star_rates');
-                const rates = ratesRaw ? JSON.parse(ratesRaw) : { creditsPerStar: config.CREDITS_PER_STAR || 1, gemsPerStar: 1 };
-                const creditsPerStar = rates.creditsPerStar;
-                const gemsPerStar = rates.gemsPerStar;
-
                 if (type === 'gems') {
-                    const addedGems = payload.amount * gemsPerStar;
+                    const starPackagesRaw = await redis.get('config_star_packages');
+                    const starPackages = starPackagesRaw ? JSON.parse(starPackagesRaw) : [
+                        { id: 1, stars: 20, gems: 20 },
+                        { id: 2, stars: 50, gems: 50 },
+                        { id: 3, stars: 100, gems: 100 },
+                        { id: 4, stars: 500, gems: 500 }
+                    ];
+                    
+                    const pkg = starPackages.find(p => p.stars === payload.amount);
+                    const addedGems = pkg ? pkg.gems : payload.amount;
+
                     await db.query('UPDATE users SET gems = gems + ? WHERE tg_id = ?', [addedGems, buyerId]);
                     sendMsg(update.message.chat.id, `✅ *Successfully purchased ${addedGems} Gems!*`, null, { parse_mode: 'Markdown' });
                     const userState = await getUserState(buyerId);
                     if (userState) io.to(`user_${buyerId}`).emit('user_update', userState);
                 } else if (type === 'credits') {
-                    const addedCredits = payload.amount * creditsPerStar;
+                    const addedCredits = payload.amount;
                     const currentCredits = parseFloat(await redis.hget('user_credits', buyerId)) || 0;
                     await redis.hset('user_credits', buyerId, currentCredits + addedCredits);
                     
@@ -197,7 +202,7 @@ module.exports = (app, io) => {
 
                     if (alreadyActive) {
                         const unbanCostStr = await redis.get('config_unban_cost') || '50';
-                        const refundCredits = parseInt(unbanCostStr) * creditsPerStar;
+                        const refundCredits = parseInt(unbanCostStr); // Base 1-to-1 fallback refund rate
                         await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [refundCredits, buyerId]);
                         await redis.hincrbyfloat('user_credits', buyerId, refundCredits);
                         sendMsg(update.message.chat.id, `✅ *You were already unbanned!* Your payment of ${unbanCostStr} stars has been converted to ${refundCredits} Credits.`, null, { parse_mode: 'Markdown' });
@@ -216,7 +221,7 @@ module.exports = (app, io) => {
 
                     if (alreadyActive) {
                         const unmuteCostStr = await redis.get('config_unmute_cost') || '25';
-                        const refundCredits = parseInt(unmuteCostStr) * creditsPerStar;
+                        const refundCredits = parseInt(unmuteCostStr);
                         await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [refundCredits, buyerId]);
                         await redis.hincrbyfloat('user_credits', buyerId, refundCredits);
                         sendMsg(update.message.chat.id, `✅ *You were already unmuted!* Your payment of ${unmuteCostStr} stars has been converted to ${refundCredits} Credits.`, null, { parse_mode: 'Markdown' });
@@ -267,9 +272,16 @@ module.exports = (app, io) => {
                 if (text.startsWith('/start buygems_')) {
                     const starsCost = parseInt(text.split('_')[1]);
                     if (!isNaN(starsCost) && starsCost > 0) {
-                        const ratesRaw = await redis.get('config_star_rates');
-                        const rates = ratesRaw ? JSON.parse(ratesRaw) : { gemsPerStar: 1 };
-                        const gemsToGet = starsCost * rates.gemsPerStar;
+                        const starPackagesRaw = await redis.get('config_star_packages');
+                        const starPackages = starPackagesRaw ? JSON.parse(starPackagesRaw) : [
+                            { id: 1, stars: 20, gems: 20 },
+                            { id: 2, stars: 50, gems: 50 },
+                            { id: 3, stars: 100, gems: 100 },
+                            { id: 4, stars: 500, gems: 500 }
+                        ];
+                        
+                        const pkg = starPackages.find(p => p.stars === starsCost);
+                        const gemsToGet = pkg ? pkg.gems : starsCost;
                         
                         const payload = JSON.stringify({ tgId, type: 'gems', amount: starsCost });
                         tgApiCall('sendInvoice', {
@@ -397,38 +409,4 @@ module.exports = (app, io) => {
                     payload: payload,
                     provider_token: "",
                     currency: "XTR",
-                    prices: [{ label: `Donation`, amount: amount }]
-                });
-                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
-            } else if (query.data === 'unban_action') {
-                const costStr = await redis.get('config_unban_cost') || '50';
-                const cost = parseInt(costStr);
-                const payload = JSON.stringify({ tgId: tgId.toString(), type: 'unban' });
-                tgApiCall('sendInvoice', {
-                    chat_id: chatId,
-                    title: `Unban Account`,
-                    description: `Lift your ban immediately and regain access to DoodleDash.`,
-                    payload: payload,
-                    provider_token: "",
-                    currency: "XTR",
-                    prices: [{ label: `Unban Fee`, amount: cost }]
-                });
-                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
-            } else if (query.data === 'unmute_action') {
-                const costStr = await redis.get('config_unmute_cost') || '25';
-                const cost = parseInt(costStr);
-                const payload = JSON.stringify({ tgId: tgId.toString(), type: 'unmute' });
-                tgApiCall('sendInvoice', {
-                    chat_id: chatId,
-                    title: `Unmute Account`,
-                    description: `Lift your chat mute immediately and regain chatting privileges.`,
-                    payload: payload,
-                    provider_token: "",
-                    currency: "XTR",
-                    prices: [{ label: `Unmute Fee`, amount: cost }]
-                });
-                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
-            }
-        }
-    });
-};
+                    prices
