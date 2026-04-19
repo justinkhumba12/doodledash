@@ -409,4 +409,11 @@ module.exports = (app, io) => {
                     payload: payload,
                     provider_token: "",
                     currency: "XTR",
-                    prices
+                    prices: [{ label: `${amount} Stars`, amount: amount }]
+                });
+                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
+                return;
+            }
+        }
+    });
+};
