@@ -14,14 +14,32 @@
 
     <style>
         body { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; }
-        .sidebar { background: #0f172a; min-height: 100vh; padding-top: 2rem; color: #cbd5e1; box-shadow: 2px 0 10px rgba(0,0,0,0.1); }
-        .nav-item { padding: 12px 20px; margin: 0 10px 5px 10px; border-radius: 8px; cursor: pointer; transition: 0.2s; font-weight: 500; }
+        .sidebar { background: #0f172a; color: #cbd5e1; box-shadow: 2px 0 10px rgba(0,0,0,0.1); flex-shrink: 0; }
+        .nav-item { cursor: pointer; transition: 0.2s; font-weight: 500; border-radius: 8px; }
         .nav-item:hover { background: #1e293b; color: white; }
         .nav-item.active { background: #3b82f6; color: white; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
         .card { border: none; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 20px; overflow: hidden; }
         .card-header { background: white; border-bottom: 1px solid #e2e8f0; font-weight: bold; padding: 15px 20px; }
         .stat-card { transition: transform 0.2s; }
         .stat-card:hover { transform: translateY(-3px); }
+        .main-content { flex-grow: 1; height: 100vh; overflow-y: auto; }
+        
+        @media (min-width: 769px) {
+            .app-container { flex-direction: row !important; }
+            .sidebar { width: 250px; min-height: 100vh; padding-top: 2rem; flex-direction: column; }
+            .nav-item { padding: 12px 20px; margin: 0 10px 5px 10px; }
+            .sidebar-header { margin-bottom: 2rem; }
+            .sidebar-footer { margin-top: auto; padding: 1rem; }
+        }
+        @media (max-width: 768px) {
+            .app-container { flex-direction: column-reverse !important; height: 100vh; }
+            .sidebar { width: 100% !important; min-height: auto !important; flex-direction: row !important; flex-wrap: nowrap; overflow-x: auto; padding: 10px 5px !important; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 100; justify-content: space-around; }
+            .nav-item { flex: 1; text-align: center; padding: 8px 2px; margin: 0 2px; font-size: 0.75rem; white-space: nowrap; }
+            .nav-item i { display: block; font-size: 1.2rem; margin-bottom: 4px; margin-right: 0 !important; width: 100%; }
+            .sidebar-header, .sidebar-footer { display: none !important; }
+            .main-content { height: calc(100vh - 60px) !important; flex-grow: 1; overflow-y: auto; }
+            .card-header { padding: 10px; font-size: 0.95rem; }
+        }
     </style>
 </head>
 <body>
@@ -42,31 +60,31 @@
             if (!stats) return <div className="p-5 text-center"><div className="spinner-border text-primary"></div></div>;
 
             return (
-                <div className="p-4">
+                <div className="p-3 p-md-4">
                     <h3 className="fw-bold mb-4">System Overview</h3>
-                    <div className="row g-4 mb-4">
-                        <div className="col-md-3"><div className="card stat-card bg-primary text-white p-4 h-100"><h6 className="opacity-75">Total Users</h6><h2 className="mb-0 fw-bold">{stats.totalUsers.toLocaleString()}</h2></div></div>
-                        <div className="col-md-3"><div className="card stat-card bg-success text-white p-4 h-100"><h6 className="opacity-75">Daily Active (DAU)</h6><h2 className="mb-0 fw-bold">{stats.dau.toLocaleString()}</h2></div></div>
-                        <div className="col-md-3"><div className="card stat-card bg-warning text-dark p-4 h-100"><h6 className="opacity-75">Credits in Circulation</h6><h2 className="mb-0 fw-bold">{Number(stats.totalCredits).toLocaleString()}</h2></div></div>
-                        <div className="col-md-3"><div className="card stat-card bg-danger text-white p-4 h-100"><h6 className="opacity-75">Total Star Donations</h6><h2 className="mb-0 fw-bold">{stats.totalDonated.toLocaleString()} <i className="fas fa-star ms-1 fs-5"></i></h2></div></div>
+                    <div className="row g-3 mb-4">
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-primary text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Total Users</h6><h3 className="mb-0 fw-bold">{stats.totalUsers.toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-success text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Daily Active (DAU)</h6><h3 className="mb-0 fw-bold">{stats.dau.toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-warning text-dark p-3 p-md-4 h-100"><h6 className="opacity-75 small">Credits Circ.</h6><h3 className="mb-0 fw-bold">{Number(stats.totalCredits).toLocaleString()}</h3></div></div>
+                        <div className="col-6 col-md-3"><div className="card stat-card bg-danger text-white p-3 p-md-4 h-100"><h6 className="opacity-75 small">Star Donations</h6><h3 className="mb-0 fw-bold">{stats.totalDonated.toLocaleString()} <i className="fas fa-star ms-1"></i></h3></div></div>
                     </div>
-                    <div className="row g-4 mb-4">
-                        <div className="col-md-6"><div className="card stat-card bg-info text-dark p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Active Game Rooms</h6><h2 className="mb-0 fw-bold">{stats.activeRooms}</h2></div><i className="fas fa-gamepad fs-1 opacity-50"></i></div></div>
-                        <div className="col-md-6"><div className="card stat-card bg-dark text-white p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Connected Sockets</h6><h2 className="mb-0 fw-bold">{stats.activeSockets}</h2></div><i className="fas fa-plug fs-1 opacity-50"></i></div></div>
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6"><div className="card stat-card bg-info text-dark p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Active Game Rooms</h6><h2 className="mb-0 fw-bold">{stats.activeRooms}</h2></div><i className="fas fa-gamepad fs-1 opacity-50"></i></div></div>
+                        <div className="col-12 col-md-6"><div className="card stat-card bg-dark text-white p-4 h-100 d-flex flex-row justify-content-between align-items-center"><div><h6 className="opacity-75">Connected Sockets</h6><h2 className="mb-0 fw-bold">{stats.activeSockets}</h2></div><i className="fas fa-plug fs-1 opacity-50"></i></div></div>
                     </div>
                     
                     <div className="card">
                         <div className="card-header"><i className="fas fa-list me-2"></i>Admin Audit Log</div>
                         <div className="table-responsive p-3">
-                            <table className="table table-hover align-middle mb-0">
-                                <thead className="table-light"><tr><th>Timestamp</th><th>Admin ID</th><th>Action Taken</th><th>Details</th></tr></thead>
+                            <table className="table table-hover align-middle mb-0" style={{minWidth: '500px'}}>
+                                <thead className="table-light"><tr><th>Timestamp</th><th>Admin ID</th><th>Action</th><th>Details</th></tr></thead>
                                 <tbody>
                                     {logs.map(l => (
                                         <tr key={l.id}>
                                             <td className="text-muted small">{new Date(l.created_at).toLocaleString()}</td>
                                             <td className="fw-bold">{l.admin_id}</td>
                                             <td><span className="badge bg-secondary">{l.action}</span></td>
-                                            <td className="small font-monospace">{l.details}</td>
+                                            <td className="small font-monospace text-truncate" style={{maxWidth:'150px'}}>{l.details}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -82,6 +100,9 @@
             const [users, setUsers] = useState([]);
             const [reports, setReports] = useState([]);
             const [proofModal, setProofModal] = useState(null);
+            
+            const [reportFilter, setReportFilter] = useState('all');
+            const [selectedProfile, setSelectedProfile] = useState(null);
 
             useEffect(() => { apiFetch('/reports').then(setReports); }, []);
 
@@ -95,78 +116,123 @@
                 if(!window.confirm(`Apply ${action} to user ${tgId}?`)) return;
                 await apiFetch('/users/action', 'POST', { tgId, action, days });
                 doSearch(); 
+                apiFetch('/reports').then(setReports);
+                setSelectedProfile(null);
             };
 
+            const filteredReports = reports.filter(r => {
+                if (reportFilter === 'all') return true;
+                if (reportFilter === 'active') return r.status === 'active';
+                if (reportFilter === 'ban') return r.status === 'ban';
+                if (reportFilter === 'mute') return r.status === 'mute';
+                return true;
+            });
+
             return (
-                <div className="p-4">
+                <div className="p-3 p-md-4">
                     <h3 className="fw-bold mb-4">Trust & Safety</h3>
                     
                     <div className="card mb-4">
-                        <div className="card-header text-primary"><i className="fas fa-search me-2"></i>User Lookup & Actions</div>
+                        <div className="card-header text-primary"><i className="fas fa-search me-2"></i>User Lookup</div>
                         <div className="card-body">
-                            <div className="input-group mb-4 w-50">
+                            <div className="input-group mb-4">
                                 <input type="text" className="form-control" placeholder="Search Telegram ID or Name..." value={search} onChange={e=>setSearch(e.target.value)} onKeyPress={e=>e.key==='Enter' && doSearch()} />
                                 <button className="btn btn-primary" onClick={doSearch}>Search</button>
                             </div>
                             
                             {users.length > 0 && (
-                                <table className="table table-bordered align-middle text-center">
-                                    <thead className="table-light"><tr><th>ID</th><th>Name (@User)</th><th>Status</th><th>Ban/Mute Until</th><th>Sanctions</th></tr></thead>
-                                    <tbody>
-                                        {users.map(u => (
-                                            <tr key={u.tg_id}>
-                                                <td className="font-monospace">{u.tg_id}</td>
-                                                <td><b>{u.name || 'Unset'}</b> <br/><small className="text-muted">@{u.username}</small></td>
-                                                <td>
-                                                    {u.status === 'active' ? <span className="badge bg-success">Active</span> : 
-                                                     u.status === 'mute' ? <span className="badge bg-warning text-dark">Muted</span> : 
-                                                     <span className="badge bg-danger">Banned</span>}
-                                                </td>
-                                                <td className="small">{u.ban_until ? `Ban: ${u.ban_until.split('T')[0]}` : ''} {u.mute_until ? `Mute: ${u.mute_until.split('T')[0]}` : ''}</td>
-                                                <td>
-                                                    <div className="btn-group btn-group-sm">
-                                                        <button className="btn btn-outline-warning" onClick={()=>takeAction(u.tg_id, 'mute', 1)}>Mute 24h</button>
-                                                        <button className="btn btn-outline-danger" onClick={()=>takeAction(u.tg_id, 'ban', 7)}>Ban 7d</button>
-                                                        <button className="btn btn-danger" onClick={()=>takeAction(u.tg_id, 'ban', 'perm')}>Permaban</button>
-                                                        {(u.status === 'ban' || u.status === 'mute') && <button className="btn btn-success" onClick={()=>takeAction(u.tg_id, 'unban', null)}>Pardon (Reset)</button>}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                <div className="table-responsive">
+                                    <table className="table table-bordered align-middle text-center" style={{minWidth: '600px'}}>
+                                        <thead className="table-light"><tr><th>ID / Name</th><th>Status</th><th>Sanctions</th></tr></thead>
+                                        <tbody>
+                                            {users.map(u => (
+                                                <tr key={u.tg_id}>
+                                                    <td><b className="font-monospace">{u.tg_id}</b><br/>{u.name || 'Unset'} <small className="text-muted">@{u.username}</small></td>
+                                                    <td>
+                                                        {u.status === 'active' ? <span className="badge bg-success">Active</span> : 
+                                                         u.status === 'mute' ? <span className="badge bg-warning text-dark">Muted</span> : 
+                                                         <span className="badge bg-danger">Banned</span>}<br/>
+                                                        <span className="small text-muted">{u.ban_until ? `Ban: ${u.ban_until.split('T')[0]}` : ''} {u.mute_until ? `Mute: ${u.mute_until.split('T')[0]}` : ''}</span>
+                                                    </td>
+                                                    <td>
+                                                        <div className="btn-group btn-group-sm flex-wrap">
+                                                            <button className="btn btn-outline-warning" onClick={()=>takeAction(u.tg_id, 'mute', 1)}>Mute 24h</button>
+                                                            <button className="btn btn-outline-danger" onClick={()=>takeAction(u.tg_id, 'ban', 7)}>Ban 7d</button>
+                                                            <button className="btn btn-danger" onClick={()=>takeAction(u.tg_id, 'ban', 'perm')}>Permaban</button>
+                                                            {(u.status === 'ban' || u.status === 'mute') && <button className="btn btn-success" onClick={()=>takeAction(u.tg_id, 'unban', null)}>Pardon</button>}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             )}
                         </div>
                     </div>
 
                     <div className="card">
-                        <div className="card-header text-danger"><i className="fas fa-flag me-2"></i>Player Reports</div>
+                        <div className="card-header text-danger d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <span><i className="fas fa-flag me-2"></i>Player Reports</span>
+                            <select className="form-select form-select-sm w-auto" value={reportFilter} onChange={e=>setReportFilter(e.target.value)}>
+                                <option value="all">All Users</option>
+                                <option value="active">Active Only</option>
+                                <option value="ban">Banned Only</option>
+                                <option value="mute">Muted Only</option>
+                            </select>
+                        </div>
                         <div className="table-responsive p-3">
-                            <table className="table table-hover align-middle">
-                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Context</th><th>Reason</th><th>Proof</th></tr></thead>
+                            <table className="table table-hover align-middle" style={{minWidth: '600px'}}>
+                                <thead className="table-light"><tr><th>Date</th><th>Reporter</th><th>Reported ID</th><th>Reason</th><th>Proof</th></tr></thead>
                                 <tbody>
-                                    {reports.map(r => (
+                                    {filteredReports.map(r => (
                                         <tr key={r.id}>
                                             <td className="small">{new Date(r.created_at).toLocaleString()}</td>
                                             <td className="font-monospace small">{r.reporter_id}</td>
-                                            <td className="font-monospace small fw-bold text-danger">{r.reported_id}</td>
-                                            <td><span className="badge bg-info text-dark">{r.context}</span></td>
-                                            <td>{r.reason}</td>
+                                            <td className="font-monospace small fw-bold text-danger text-decoration-underline cursor-pointer" onClick={() => setSelectedProfile(r)}>{r.reported_id}</td>
+                                            <td><span className="badge bg-info text-dark me-1">{r.context}</span> {r.reason}</td>
                                             <td><button className="btn btn-sm btn-dark" onClick={()=>setProofModal(r)}>View Proof</button></td>
                                         </tr>
                                     ))}
+                                    {filteredReports.length === 0 && <tr><td colSpan="5" className="text-center p-4 text-muted">No reports found matching criteria.</td></tr>}
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
+                    {selectedProfile && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
+                            <div className="modal-dialog modal-dialog-centered">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6">User Profile</h5>
+                                        <button className="btn-close btn-close-white" onClick={()=>setSelectedProfile(null)}></button>
+                                    </div>
+                                    <div className="modal-body text-center bg-light p-4">
+                                        {selectedProfile.avatar_url ? <img src={selectedProfile.avatar_url} className="rounded-circle mb-3 shadow" width="80" height="80" style={{objectFit:'cover'}} /> : <i className="fas fa-user-circle fs-1 mb-3 text-secondary"></i>}
+                                        <h5 className="fw-bold mb-1">{selectedProfile.name || selectedProfile.reported_id}</h5>
+                                        <p className="text-muted small mb-2">@{selectedProfile.username} • {selectedProfile.gender || 'Unset'}</p>
+                                        <p className="mb-0">Status: <span className={`badge ${selectedProfile.status==='active'?'bg-success':(selectedProfile.status==='mute'?'bg-warning text-dark':'bg-danger')}`}>{selectedProfile.status}</span></p>
+                                        
+                                        <div className="d-flex flex-wrap gap-2 justify-content-center mt-3 pt-3 border-top">
+                                            <button className="btn btn-sm btn-outline-warning" onClick={()=>takeAction(selectedProfile.reported_id, 'mute', 1)}>Mute 24h</button>
+                                            <button className="btn btn-sm btn-outline-danger" onClick={()=>takeAction(selectedProfile.reported_id, 'ban', 7)}>Ban 7d</button>
+                                            <button className="btn btn-sm btn-danger" onClick={()=>takeAction(selectedProfile.reported_id, 'ban', 'perm')}>Permaban</button>
+                                            {(selectedProfile.status === 'ban' || selectedProfile.status === 'mute') && <button className="btn btn-sm btn-success" onClick={()=>takeAction(selectedProfile.reported_id, 'unban', null)}>Pardon (Reset)</button>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {proofModal && (
-                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)'}}>
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
                             <div className="modal-dialog modal-lg modal-dialog-centered">
                                 <div className="modal-content border-0 shadow-lg rounded-4">
-                                    <div className="modal-header bg-dark text-white"><h5 className="modal-title">Evidence Snapshot ({proofModal.context})</h5><button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button></div>
+                                    <div className="modal-header bg-dark text-white p-3"><h5 className="modal-title fs-6">Evidence Snapshot ({proofModal.context})</h5><button className="btn-close btn-close-white" onClick={()=>setProofModal(null)}></button></div>
                                     <div className="modal-body bg-light">
-                                        <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap'}}>{proofModal.snapshot_data}</pre>
+                                        <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
                                     </div>
                                 </div>
                             </div>
@@ -182,12 +248,13 @@
             const [gems, setGems] = useState(0);
             
             const [rate, setRate] = useState(1);
-            const [shopItems, setShopItems] = useState([]);
-            const [newItem, setNewItem] = useState({ name: '', type: 'avatar', price_credits: 0, price_gems: 0 });
+            const [gemRate, setGemRate] = useState(5);
 
             const loadSettings = () => {
-                apiFetch('/config').then(c => setRate(c.creditsPerStar));
-                apiFetch('/shop').then(setShopItems);
+                apiFetch('/config').then(c => {
+                    setRate(c.creditsPerStar);
+                    setGemRate(c.creditsPerGem || 5);
+                });
             };
             useEffect(() => { loadSettings(); }, []);
 
@@ -199,15 +266,15 @@
             };
 
             return (
-                <div className="p-4">
+                <div className="p-3 p-md-4">
                     <h3 className="fw-bold mb-4">Economy & Monetization</h3>
-                    <div className="row g-4 mb-4">
-                        <div className="col-md-6">
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6">
                             <div className="card h-100">
                                 <div className="card-header text-success"><i className="fas fa-hand-holding-usd me-2"></i>Manual Currency Grant</div>
                                 <div className="card-body d-flex flex-column gap-3">
                                     <div><label className="form-label small fw-bold">Target Telegram ID</label><input className="form-control" placeholder="12345678" value={targetUser} onChange={e=>setTargetUser(e.target.value)} /></div>
-                                    <div className="row">
+                                    <div className="row g-2">
                                         <div className="col"><label className="form-label small fw-bold text-warning">Credits (+/-)</label><input className="form-control" type="number" value={credits} onChange={e=>setCredits(e.target.value)} /></div>
                                         <div className="col"><label className="form-label small fw-bold text-info">Gems (+/-)</label><input className="form-control" type="number" value={gems} onChange={e=>setGems(e.target.value)} /></div>
                                     </div>
@@ -215,46 +282,29 @@
                                 </div>
                             </div>
                         </div>
-                        <div className="col-md-6">
+                        <div className="col-12 col-md-6">
                             <div className="card h-100">
-                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Exchange Rate Config</div>
+                                <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Global Exchange Rates</div>
                                 <div className="card-body">
-                                    <div className="alert alert-warning small">Changes reflect instantly for all new Star purchases without restarting the server.</div>
-                                    <label className="form-label fw-bold">1 Telegram Star = ? Credits</label>
-                                    <div className="input-group mb-3">
-                                        <input className="form-control form-control-lg" type="number" value={rate} onChange={e=>setRate(e.target.value)} />
+                                    <div className="alert alert-warning small py-2 mb-3">Changes reflect instantly for all users.</div>
+                                    
+                                    <label className="form-label fw-bold small">1 Telegram Star = ? Credits</label>
+                                    <div className="input-group mb-3 input-group-sm">
+                                        <input className="form-control form-control-lg text-center" type="number" value={rate} onChange={e=>setRate(e.target.value)} />
                                         <span className="input-group-text bg-light">Credits</span>
                                     </div>
-                                    <button className="btn btn-warning w-100 fw-bold" onClick={async () => { await apiFetch('/config/economy', 'POST', { creditsPerStar: rate }); alert('Exchange rate updated globally.'); }}>Save New Rate</button>
+
+                                    <label className="form-label fw-bold small">1 Gem = ? Credits</label>
+                                    <select className="form-select form-select-sm mb-4" value={gemRate} onChange={e=>setGemRate(e.target.value)}>
+                                        <option value="2">2 Credits</option>
+                                        <option value="5">5 Credits</option>
+                                        <option value="10">10 Credits</option>
+                                        <option value="20">20 Credits</option>
+                                    </select>
+                                    
+                                    <button className="btn btn-warning w-100 fw-bold" onClick={async () => { await apiFetch('/config/economy', 'POST', { creditsPerStar: rate, creditsPerGem: gemRate }); alert('Rates updated globally.'); }}>Save New Rates</button>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="card">
-                        <div className="card-header text-primary"><i className="fas fa-store me-2"></i>Dynamic Shop Inventory</div>
-                        <div className="card-body">
-                            <div className="row g-2 mb-4 p-3 bg-light rounded border align-items-end">
-                                <div className="col-md-3"><label className="small fw-bold">Item Name</label><input className="form-control form-control-sm" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} /></div>
-                                <div className="col-md-2"><label className="small fw-bold">Type</label><select className="form-select form-select-sm" value={newItem.type} onChange={e=>setNewItem({...newItem, type: e.target.value})}><option value="avatar">Avatar</option><option value="color">Color</option><option value="boost">Boost</option></select></div>
-                                <div className="col-md-2"><label className="small fw-bold">Price (Credits)</label><input className="form-control form-control-sm" type="number" value={newItem.price_credits} onChange={e=>setNewItem({...newItem, price_credits: e.target.value})} /></div>
-                                <div className="col-md-2"><label className="small fw-bold">Price (Gems)</label><input className="form-control form-control-sm" type="number" value={newItem.price_gems} onChange={e=>setNewItem({...newItem, price_gems: e.target.value})} /></div>
-                                <div className="col-md-3"><button className="btn btn-sm btn-primary w-100" onClick={async () => { await apiFetch('/shop', 'POST', newItem); loadSettings(); }}><i className="fas fa-plus"></i> Add to Store</button></div>
-                            </div>
-                            <table className="table table-sm align-middle text-center">
-                                <thead className="table-light"><tr><th>Name</th><th>Type</th><th>Cost</th><th>Status</th><th>Action</th></tr></thead>
-                                <tbody>
-                                    {shopItems.map(item => (
-                                        <tr key={item.id}>
-                                            <td className="fw-bold">{item.name}</td>
-                                            <td><span className="badge bg-secondary">{item.type}</span></td>
-                                            <td>{item.price_credits > 0 && <span className="text-warning fw-bold">{item.price_credits}C </span>} {item.price_gems > 0 && <span className="text-info fw-bold">{item.price_gems}G</span>}</td>
-                                            <td>{item.is_active ? <span className="badge bg-success">Available</span> : <span className="badge bg-danger">Archived</span>}</td>
-                                            <td><button className={`btn btn-sm ${item.is_active ? 'btn-outline-danger' : 'btn-outline-success'}`} onClick={async () => { await apiFetch('/shop/toggle', 'POST', { id: item.id, is_active: !item.is_active }); loadSettings(); }}>{item.is_active ? 'Remove' : 'Restore'}</button></td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
                         </div>
                     </div>
                 </div>
@@ -263,6 +313,7 @@
 
         const ServerControl = ({ apiFetch }) => {
             const [maint, setMaint] = useState(false);
+            const [maintDuration, setMaintDuration] = useState(1);
             const [dict, setDict] = useState('');
             const [msg, setMsg] = useState('');
             const [rooms, setRooms] = useState([]);
@@ -280,23 +331,31 @@
             };
 
             return (
-                <div className="p-4">
+                <div className="p-3 p-md-4">
                     <h3 className="fw-bold mb-4">Server Architecture & Intervention</h3>
                     
-                    <div className="row g-4 mb-4">
-                        <div className="col-md-6">
+                    <div className="row g-3 mb-4">
+                        <div className="col-12 col-md-6">
                             <div className={`card h-100 border-2 ${maint ? 'border-danger' : 'border-success'}`}>
-                                <div className="card-body text-center p-5">
+                                <div className="card-body text-center p-4 p-md-5 d-flex flex-column justify-content-center">
                                     <i className={`fas ${maint ? 'fa-tools text-danger' : 'fa-server text-success'} fs-1 mb-3`}></i>
                                     <h4>{maint ? 'Maintenance is ACTIVE' : 'Server is LIVE'}</h4>
-                                    <p className="text-muted small">When active, users cannot create new public or private lobbies.</p>
-                                    <button className={`btn rounded-pill px-5 fw-bold ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { await apiFetch('/config/maintenance', 'POST', { maintenance: !maint }); load(); }}>
+                                    <p className="text-muted small mb-3">When active, users see a countdown modal and cannot play.</p>
+                                    
+                                    {!maint && (
+                                        <div className="mb-3 w-75 mx-auto">
+                                            <label className="form-label small fw-bold">Duration (Hours)</label>
+                                            <input type="number" step="0.5" className="form-control text-center" value={maintDuration} onChange={e=>setMaintDuration(e.target.value)} />
+                                        </div>
+                                    )}
+
+                                    <button className={`btn rounded-pill px-4 fw-bold mt-auto ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { await apiFetch('/config/maintenance', 'POST', { maintenance: !maint, duration_hours: maintDuration }); load(); }}>
                                         {maint ? 'Disable Maintenance' : 'Activate Maintenance Mode'}
                                     </button>
                                 </div>
                             </div>
                         </div>
-                        <div className="col-md-6">
+                        <div className="col-12 col-md-6">
                             <div className="card h-100">
                                 <div className="card-header bg-dark text-white"><i className="fas fa-bullhorn me-2"></i>Global PA System</div>
                                 <div className="card-body d-flex flex-column">
@@ -313,7 +372,7 @@
                         <div className="card-body">
                             <p className="small text-muted">Comma-separated list of words used for prompts.</p>
                             <textarea className="form-control mb-3" rows="3" value={dict} onChange={e=>setDict(e.target.value)}></textarea>
-                            <button className="btn btn-info text-white fw-bold" onClick={async () => { 
+                            <button className="btn btn-info text-white fw-bold w-100" onClick={async () => { 
                                 const arr = dict.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length >= 3);
                                 await apiFetch('/dictionary/update', 'POST', { words: arr });
                                 alert('Dictionary Saved!'); 
@@ -324,7 +383,7 @@
                     <div className="card">
                         <div className="card-header text-danger"><i className="fas fa-hammer me-2"></i>Active Room Intervention</div>
                         <div className="table-responsive p-3">
-                            <table className="table table-hover align-middle text-center">
+                            <table className="table table-hover align-middle text-center" style={{minWidth: '500px'}}>
                                 <thead className="table-light"><tr><th>Room ID</th><th>Visibility</th><th>Players</th><th>Phase</th><th>Emergency Actions</th></tr></thead>
                                 <tbody>
                                     {rooms.map(r => (
@@ -334,8 +393,8 @@
                                             <td>{r.members}</td>
                                             <td>{r.status}</td>
                                             <td>
-                                                <button className="btn btn-sm btn-outline-warning me-2" onClick={()=>actionRoom(r.id, 'wipe_chat')}><i className="fas fa-eraser"></i> Wipe Chat</button>
-                                                <button className="btn btn-sm btn-danger" onClick={()=>actionRoom(r.id, 'close')}><i className="fas fa-skull"></i> Force Close</button>
+                                                <button className="btn btn-sm btn-outline-warning me-2" onClick={()=>actionRoom(r.id, 'wipe_chat')}><i className="fas fa-eraser"></i></button>
+                                                <button className="btn btn-sm btn-danger" onClick={()=>actionRoom(r.id, 'close')}><i className="fas fa-skull"></i> Close</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -358,7 +417,6 @@
                     window.Telegram.WebApp.expand();
                     setInitData(window.Telegram.WebApp.initData);
                 } else {
-                    // For browser canvas preview / local testing
                     setInitData("mock_web_auth=true&user=%7B%22id%22%3A123456789%7D");
                 }
             }, []);
@@ -375,22 +433,22 @@
             if (!initData) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
 
             return (
-                <div className="d-flex">
-                    <div className="sidebar d-flex flex-column" style={{ width: '250px' }}>
-                        <div className="text-center mb-4 mt-2">
+                <div className="d-flex app-container w-100">
+                    <div className="sidebar d-flex flex-column">
+                        <div className="sidebar-header text-center mt-2">
                             <i className="fas fa-cogs fs-2 text-primary mb-2"></i>
                             <h5 className="fw-bold text-white m-0">Admin Center</h5>
                         </div>
-                        <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-3 w-15"></i> Dashboard</div>
-                        <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-3 w-15"></i> Moderation</div>
-                        <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-3 w-15"></i> Economy & Shop</div>
-                        <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-3 w-15"></i> Server Control</div>
+                        <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-2 w-15"></i> Dashboard</div>
+                        <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-2 w-15"></i> Moderation</div>
+                        <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-2 w-15"></i> Economy</div>
+                        <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-2 w-15"></i> Settings</div>
                         
-                        <div className="mt-auto p-3 text-center opacity-50 small">
+                        <div className="sidebar-footer text-center opacity-50 small mt-auto">
                             DoodleDash OS v1.0
                         </div>
                     </div>
-                    <div className="flex-grow-1" style={{ height: '100vh', overflowY: 'auto' }}>
+                    <div className="main-content">
                         {tab === 'dashboard' && <Dashboard apiFetch={apiFetch} />}
                         {tab === 'moderation' && <Moderation apiFetch={apiFetch} />}
                         {tab === 'economy' && <Economy apiFetch={apiFetch} />}
