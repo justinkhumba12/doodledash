@@ -159,6 +159,7 @@ module.exports = (io) => {
                 const starPackagesRaw = await redis.get('config_star_packages');
                 const inkConfigRaw = await redis.get('config_ink');
                 const maxRoomsRaw = await redis.get('config_max_rooms');
+                const roomLimitsRaw = await redis.get('config_room_limits');
                 
                 const systemConfig = {
                     maintenance: { active: maint === '1', end_time: maintEndTime },
@@ -175,7 +176,8 @@ module.exports = (io) => {
                         { id: 4, stars: 500, gems: 500 }
                     ],
                     inkConfig: inkConfigRaw ? JSON.parse(inkConfigRaw) : { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 },
-                    maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250
+                    maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250,
+                    roomLimits: roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 }
                 };
 
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom, systemConfig });
@@ -518,14 +520,25 @@ module.exports = (io) => {
                     return socket.emit('create_error', 'Server is at maximum room capacity. Please join an existing room or try again later.');
                 }
 
+                const roomLimitsRaw = await redis.get('config_room_limits');
+                const roomLimits = roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+
                 const isPriv = Boolean(data.is_private);
                 const pwd = data.password || '';
-                const maxMem = parseInt(data.max_members) || 6;
+                let maxMem = parseInt(data.max_members) || 6;
                 const expireHours = parseFloat(data.expire_hours) || 0.5;
+
+                // Adjust based on limits
+                if (!isPriv) {
+                    maxMem = roomLimits.publicMax; // Force fixed size for public
+                } else {
+                    maxMem = Math.min(maxMem, roomLimits.privateMax); // Cap private
+                }
 
                 let cost = 0;
                 if (isPriv) {
-                    cost = maxMem + (expireHours === 1 ? 2 : 1);
+                    const extraUsers = Math.max(0, maxMem - roomLimits.privateFree);
+                    cost = (extraUsers * roomLimits.privateExtraCost) + (expireHours === 1 ? 2 : 1);
                 }
 
                 if (cost > 0) {
