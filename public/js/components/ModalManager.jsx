@@ -1,15 +1,16 @@
 const { useState } = React;
 
 const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted }) => {
-    if (!modal) return null;
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
     const [maxMembers, setMaxMembers] = useState(6);
     const [expireHours, setExpireHours] = useState(0.5);
-    
     const [adLoading, setAdLoading] = useState(false);
+    const [reason, setReason] = useState('');
+    
+    if (!modal) return null;
 
-    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); };
+    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
 
     const triggerHintAd = (index) => {
         setAdLoading(true);
@@ -354,12 +355,12 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'report_input') {
-        const [reason, setReason] = useState('');
         title = 'Report User';
         content = (
             <>
                 <p className="text-muted small mb-2">Please describe why you are reporting this user.</p>
-                <textarea className="form-control mb-3" rows="3" placeholder="Reason..." value={reason} onChange={e => setReason(e.target.value)}></textarea>
+                <textarea className="form-control mb-1" rows="3" maxLength={250} placeholder="Reason..." value={reason} onChange={e => setReason(e.target.value)}></textarea>
+                <div className="text-end small text-muted mb-3">{250 - reason.length} characters left</div>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-danger w-50 rounded-pill" disabled={!reason.trim()} onClick={() => { 
