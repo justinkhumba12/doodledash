@@ -31,8 +31,6 @@ async function setupAdminPanel(app, io) {
         console.error('[Admin DB Init Error]', err);
     }
 
-    // Load dynamic config overrides from Redis (no longer loading credits_per_star)
-    
     // Socket.io Interceptor for Maintenance Mode
     io.on('connection', (socket) => {
         socket.use(async ([event, ...args], next) => {
@@ -111,6 +109,7 @@ async function setupAdminPanel(app, io) {
         `);
         for (let r of rows) {
             r.username = await redis.hget('user_usernames', r.reported_id) || 'unset';
+            r.status = r.status || 'active'; // fallback for filter logic
         }
         res.json(rows);
     });
@@ -124,10 +123,11 @@ async function setupAdminPanel(app, io) {
     adminRouter.post('/users/search', async (req, res) => {
         const { query } = req.body;
         const search = `%${query}%`;
-        const [rows] = await db.query('SELECT tg_id, name, credits, gems, status, ban_until, mute_until, avatar_url, gender FROM users WHERE tg_id = ? OR name LIKE ? LIMIT 20', [query, search]);
+        const [rows] = await db.query('SELECT tg_id, name, credits, gems, status, ban_until, mute_until, avatar_url, gender, ban_count FROM users WHERE tg_id = ? OR name LIKE ? LIMIT 20', [query, search]);
         
         for (let r of rows) {
             r.username = await redis.hget('user_usernames', r.tg_id) || 'unset';
+            r.status = r.status || 'active';
         }
         res.json(rows);
     });
@@ -143,9 +143,12 @@ async function setupAdminPanel(app, io) {
             }
 
             if (action === 'ban') {
-                await db.query(`UPDATE users SET status = 'ban', ban_until = ? WHERE tg_id = ?`, [untilDate || '2099-12-31', tgId]);
+                await db.query(`UPDATE users SET status = 'ban', ban_until = ?, ban_count = ban_count + 1 WHERE tg_id = ?`, [untilDate || '2099-12-31', tgId]);
                 io.to(`user_${tgId}`).emit('create_error', 'Your account has been banned by an administrator.');
-                if (message) sendMsg(tgId, `🛑 ADMIN ACTION: ${message}`);
+                if (message) {
+                    const formattedMsg = `🛑 *ADMIN ACTION:* ${message}\n\n_If you think this action was made by mistake, please contact an admin._`;
+                    sendMsg(tgId, formattedMsg, null, { parse_mode: 'Markdown' });
+                }
                 
                 if (reporterId) {
                     await db.query('UPDATE users SET credits = credits + 5 WHERE tg_id = ?', [reporterId]);
@@ -154,7 +157,10 @@ async function setupAdminPanel(app, io) {
                 }
             } else if (action === 'mute') {
                 await db.query(`UPDATE users SET status = 'mute', mute_until = ? WHERE tg_id = ?`, [untilDate || '2099-12-31', tgId]);
-                if (message) sendMsg(tgId, `🔇 ADMIN ACTION: ${message}`);
+                if (message) {
+                    const formattedMsg = `🔇 *ADMIN ACTION:* ${message}\n\n_If you think this action was made by mistake, please contact an admin._`;
+                    sendMsg(tgId, formattedMsg, null, { parse_mode: 'Markdown' });
+                }
                 
                 if (reporterId) {
                     await db.query('UPDATE users SET credits = credits + 3 WHERE tg_id = ?', [reporterId]);
@@ -163,7 +169,9 @@ async function setupAdminPanel(app, io) {
                 }
             } else if (action === 'unban' || action === 'unmute') {
                 await db.query(`UPDATE users SET status = 'active', ban_until = NULL, mute_until = NULL WHERE tg_id = ?`, [tgId]);
-                if (message) sendMsg(tgId, `✅ ADMIN ACTION: ${message}`);
+                if (message) {
+                    sendMsg(tgId, `✅ *ADMIN ACTION:* ${message}`, null, { parse_mode: 'Markdown' });
+                }
             }
             
             // Delete report if action resolved it
@@ -198,20 +206,31 @@ async function setupAdminPanel(app, io) {
             { id: 4, gems: 10, credits: 50 }
         ];
 
+        const ratesRaw = await redis.get('config_star_rates');
+        const rates = ratesRaw ? JSON.parse(ratesRaw) : { creditsPerStar: 1, gemsPerStar: 1 };
+        
+        const unbanCost = await redis.get('config_unban_cost') || 50;
+        const unmuteCost = await redis.get('config_unmute_cost') || 25;
+
         res.json({
             maintenance: maintenance === '1',
             maintenanceEndTime: maintEndTime,
             gemPackages,
-            dictionary: dictionary ? JSON.parse(dictionary) : []
+            dictionary: dictionary ? JSON.parse(dictionary) : [],
+            rates,
+            unbanCost: parseInt(unbanCost),
+            unmuteCost: parseInt(unmuteCost)
         });
     });
 
     adminRouter.post('/config/economy', async (req, res) => {
-        const { gemPackages } = req.body;
-        if (gemPackages) {
-            await redis.set('config_gem_packages', JSON.stringify(gemPackages));
-        }
-        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_PACKAGES', { gemPackages });
+        const { gemPackages, rates, unbanCost, unmuteCost } = req.body;
+        if (gemPackages) await redis.set('config_gem_packages', JSON.stringify(gemPackages));
+        if (rates) await redis.set('config_star_rates', JSON.stringify(rates));
+        if (unbanCost) await redis.set('config_unban_cost', unbanCost.toString());
+        if (unmuteCost) await redis.set('config_unmute_cost', unmuteCost.toString());
+        
+        await logAdminAction(req.adminId, 'UPDATE_ECONOMY_CONFIG', { rates, unbanCost, unmuteCost });
         res.json({ success: true });
     });
 
