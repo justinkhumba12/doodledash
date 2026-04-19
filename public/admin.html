@@ -368,14 +368,14 @@
             const [gems, setGems] = useState(0);
             
             const [gemPackages, setGemPackages] = useState([]);
-            const [rates, setRates] = useState({ creditsPerStar: 1, gemsPerStar: 1 });
+            const [starPackages, setStarPackages] = useState([]);
             const [unbanCost, setUnbanCost] = useState(50);
             const [unmuteCost, setUnmuteCost] = useState(25);
 
             const loadSettings = () => {
                 apiFetch('/config').then(c => {
                     setGemPackages(c.gemPackages || []);
-                    if (c.rates) setRates(c.rates);
+                    setStarPackages(c.starPackages || []);
                     if (c.unbanCost) setUnbanCost(c.unbanCost);
                     if (c.unmuteCost) setUnmuteCost(c.unmuteCost);
                 });
@@ -389,21 +389,26 @@
                 setCredits(0); setGems(0); setTargetUser('');
             };
 
-            const addPackage = () => {
+            const addGemPackage = () => {
                 const maxId = gemPackages.length > 0 ? Math.max(...gemPackages.map(p => p.id)) : 0;
                 setGemPackages([...gemPackages, { id: maxId + 1, gems: 1, credits: 5 }]);
             };
-
-            const updatePackage = (id, field, value) => {
+            const updateGemPackage = (id, field, value) => {
                 setGemPackages(gemPackages.map(p => p.id === id ? { ...p, [field]: Number(value) } : p));
             };
+            const removeGemPackage = (id) => setGemPackages(gemPackages.filter(p => p.id !== id));
 
-            const removePackage = (id) => {
-                setGemPackages(gemPackages.filter(p => p.id !== id));
+            const addStarPackage = () => {
+                const maxId = starPackages.length > 0 ? Math.max(...starPackages.map(p => p.id)) : 0;
+                setStarPackages([...starPackages, { id: maxId + 1, stars: 20, gems: 20 }]);
             };
+            const updateStarPackage = (id, field, value) => {
+                setStarPackages(starPackages.map(p => p.id === id ? { ...p, [field]: Number(value) } : p));
+            };
+            const removeStarPackage = (id) => setStarPackages(starPackages.filter(p => p.id !== id));
 
             const saveEconomy = async () => {
-                await apiFetch('/config/economy', 'POST', { gemPackages, rates, unbanCost, unmuteCost });
+                await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, unbanCost, unmuteCost });
                 alert('Economy Configuration Saved. Modifications reflected globally.');
             };
 
@@ -426,17 +431,9 @@
                         </div>
                         <div className="col-12 col-md-6">
                             <div className="card h-100">
-                                <div className="card-header text-primary"><i className="fas fa-chart-line me-2"></i>Global Economy Config</div>
+                                <div className="card-header text-primary"><i className="fas fa-chart-line me-2"></i>Global Penalty Costs</div>
                                 <div className="card-body">
                                     <div className="row g-3 mb-3">
-                                        <div className="col-6">
-                                            <label className="form-label small fw-bold">Credits / 1 ⭐️</label>
-                                            <input type="number" className="form-control" value={rates.creditsPerStar} onChange={e => setRates({...rates, creditsPerStar: Number(e.target.value)})} />
-                                        </div>
-                                        <div className="col-6">
-                                            <label className="form-label small fw-bold">Gems / 1 ⭐️</label>
-                                            <input type="number" className="form-control" value={rates.gemsPerStar} onChange={e => setRates({...rates, gemsPerStar: Number(e.target.value)})} />
-                                        </div>
                                         <div className="col-6">
                                             <label className="form-label small fw-bold">Unban Cost (⭐️)</label>
                                             <input type="number" className="form-control" value={unbanCost} onChange={e => setUnbanCost(Number(e.target.value))} />
@@ -449,26 +446,49 @@
                                 </div>
                             </div>
                         </div>
-                        <div className="col-12">
-                            <div className="card">
+                        
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100">
+                                <div className="card-header text-info"><i className="fas fa-star me-2"></i>Star Purchase Packages</div>
+                                <div className="card-body">
+                                    <div className="alert alert-info small py-2 mb-3">Configure packages users buy with Telegram Stars to get Gems.</div>
+                                    
+                                    {starPackages.map(pkg => (
+                                        <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.stars} onChange={e => updateStarPackage(pkg.id, 'stars', e.target.value)} /> 
+                                            <span className="small fw-bold text-muted">Stars =</span>
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateStarPackage(pkg.id, 'gems', e.target.value)} /> 
+                                            <span className="small fw-bold text-muted">Gems</span>
+                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeStarPackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                        </div>
+                                    ))}
+                                    <button className="btn btn-sm btn-outline-info mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addStarPackage}>+ Add New Star Package</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="col-12 col-md-6">
+                            <div className="card h-100">
                                 <div className="card-header text-warning"><i className="fas fa-exchange-alt me-2"></i>Gem Exchange Packages</div>
                                 <div className="card-body">
-                                    <div className="alert alert-warning small py-2 mb-3">Configure packages users can buy credits with using gems. Changes reflect instantly.</div>
+                                    <div className="alert alert-warning small py-2 mb-3">Configure packages users can buy credits with using gems.</div>
                                     
                                     {gemPackages.map(pkg => (
                                         <div key={pkg.id} className="d-flex gap-2 mb-2 align-items-center">
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updatePackage(pkg.id, 'gems', e.target.value)} /> 
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.gems} onChange={e => updateGemPackage(pkg.id, 'gems', e.target.value)} /> 
                                             <span className="small fw-bold text-muted">Gems =</span>
-                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updatePackage(pkg.id, 'credits', e.target.value)} /> 
+                                            <input type="number" className="form-control form-control-sm text-center fw-bold" value={pkg.credits} onChange={e => updateGemPackage(pkg.id, 'credits', e.target.value)} /> 
                                             <span className="small fw-bold text-muted">Credits</span>
-                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removePackage(pkg.id)}><i className="fas fa-times"></i></button>
+                                            <button className="btn btn-sm btn-danger shadow-sm" onClick={() => removeGemPackage(pkg.id)}><i className="fas fa-times"></i></button>
                                         </div>
                                     ))}
-                                    <button className="btn btn-sm btn-outline-primary mt-2 mb-4 w-100 fw-bold border-dashed" onClick={addPackage}>+ Add New Package</button>
-                                    
-                                    <button className="btn btn-primary w-100 fw-bold mt-auto" onClick={saveEconomy}>Save Exchange Rates & Global Config</button>
+                                    <button className="btn btn-sm btn-outline-warning mt-2 mb-4 w-100 fw-bold border-dashed text-dark" onClick={addGemPackage}>+ Add New Exchange Package</button>
                                 </div>
                             </div>
+                        </div>
+
+                        <div className="col-12">
+                            <button className="btn btn-primary w-100 fw-bold shadow-sm p-3" onClick={saveEconomy}><i className="fas fa-save me-2"></i> Save Economy Configuration Globally</button>
                         </div>
                     </div>
                 </div>
@@ -481,9 +501,14 @@
             const [dict, setDict] = useState('');
             const [msg, setMsg] = useState('');
             const [rooms, setRooms] = useState([]);
+            const [maxRooms, setMaxRooms] = useState(1250);
 
             const load = () => {
-                apiFetch('/config').then(c => { setMaint(c.maintenance); setDict(c.dictionary.join(', ')); });
+                apiFetch('/config').then(c => { 
+                    setMaint(c.maintenance); 
+                    setDict(c.dictionary.join(', ')); 
+                    if(c.maxRooms) setMaxRooms(c.maxRooms);
+                });
                 apiFetch('/rooms').then(setRooms);
             };
             useEffect(() => { load(); }, []);
@@ -521,11 +546,21 @@
                         </div>
                         <div className="col-12 col-md-6">
                             <div className="card h-100">
-                                <div className="card-header bg-dark text-white"><i className="fas fa-bullhorn me-2"></i>Global PA System</div>
+                                <div className="card-header bg-dark text-white"><i className="fas fa-sliders-h me-2"></i>Limits & Announcements</div>
                                 <div className="card-body d-flex flex-column">
-                                    <p className="text-muted small">Send a red alert message that appears in the chat box of every active game room instantly.</p>
-                                    <textarea className="form-control mb-3 flex-grow-1" placeholder="Attention all players..." value={msg} onChange={e=>setMsg(e.target.value)}></textarea>
-                                    <button className="btn btn-dark w-100 fw-bold" onClick={async () => { await apiFetch('/broadcast', 'POST', { message: msg }); setMsg(''); alert('Broadcast deployed!'); }} disabled={!msg}>Send Broadcast</button>
+                                    <div className="mb-3 border-bottom pb-3">
+                                        <label className="form-label small fw-bold">Max Active Rooms Capacity</label>
+                                        <div className="d-flex gap-2">
+                                            <input type="number" className="form-control" value={maxRooms} onChange={e=>setMaxRooms(e.target.value)} />
+                                            <button className="btn btn-primary fw-bold" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms }); alert('Server capacity updated!'); }}>Save</button>
+                                        </div>
+                                        <small className="text-muted" style={{fontSize: '0.75rem'}}>Prevents new rooms if this limit is reached to save server resources.</small>
+                                    </div>
+                                    <div className="mt-auto">
+                                        <label className="form-label small fw-bold">Global PA System</label>
+                                        <textarea className="form-control mb-2" placeholder="Attention all players..." value={msg} onChange={e=>setMsg(e.target.value)} rows="2"></textarea>
+                                        <button className="btn btn-dark w-100 fw-bold" onClick={async () => { await apiFetch('/broadcast', 'POST', { message: msg }); setMsg(''); alert('Broadcast deployed!'); }} disabled={!msg}>Send Red Alert</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
