@@ -163,7 +163,12 @@ module.exports = (app, io) => {
                 const buyerId = payload.tgId;
                 const type = payload.type || 'credits'; 
                 
-                if (type === 'credits') {
+                if (type === 'gems') {
+                    await db.query('UPDATE users SET gems = gems + ? WHERE tg_id = ?', [payload.amount, buyerId]);
+                    sendMsg(update.message.chat.id, `✅ Successfully purchased ${payload.amount} Gems!`);
+                    const userState = await getUserState(buyerId);
+                    if (userState) io.to(`user_${buyerId}`).emit('user_update', userState);
+                } else if (type === 'credits') {
                     const addedCredits = payload.amount * config.CREDITS_PER_STAR;
                     const currentCredits = parseFloat(await redis.hget('user_credits', buyerId)) || 0;
                     await redis.hset('user_credits', buyerId, currentCredits + addedCredits);
@@ -247,19 +252,20 @@ module.exports = (app, io) => {
                     return;
                 }
 
-                const [userRows] = await db.query('SELECT accepted_policy FROM users WHERE tg_id = ?', [tgId]);
-                const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
-
-                if (text === '/start load_balance') {
-                    sendMsg(chatId, `💎 Select a package to top up your credits:\n\n*Rate: 1 Telegram Star = ${config.CREDITS_PER_STAR} Credit(s)*`, {
-                        inline_keyboard: [
-                            [{ text: `${1 * config.CREDITS_PER_STAR} Credit(s) (1 ⭐️)`, callback_data: 'buy_1' }, { text: `${10 * config.CREDITS_PER_STAR} Credits (10 ⭐️)`, callback_data: 'buy_10' }],
-                            [{ text: `${20 * config.CREDITS_PER_STAR} Credits (20 ⭐️)`, callback_data: 'buy_20' }, { text: `${50 * config.CREDITS_PER_STAR} Credits (50 ⭐️)`, callback_data: 'buy_50' }],
-                            [{ text: `${100 * config.CREDITS_PER_STAR} Credits (100 ⭐️)`, callback_data: 'buy_100' }],
-                            [{ text: `${500 * config.CREDITS_PER_STAR} Credits (500 ⭐️)`, callback_data: 'buy_500' }],
-                            [{ text: `${1000 * config.CREDITS_PER_STAR} Credits (1000 ⭐️)`, callback_data: 'buy_1000' }]
-                        ]
-                    });
+                if (text.startsWith('/start buygems_')) {
+                    const gems = parseInt(text.split('_')[1]);
+                    if (!isNaN(gems)) {
+                        const payload = JSON.stringify({ tgId, type: 'gems', amount: gems });
+                        tgApiCall('sendInvoice', {
+                            chat_id: chatId,
+                            title: `${gems} Gems`,
+                            description: `Purchase ${gems} Gems to exchange for credits.`,
+                            payload: payload,
+                            provider_token: "", 
+                            currency: "XTR",
+                            prices: [{ label: `${gems} Gems`, amount: gems }] // Simple scaling assuming 1 gem = 1 star
+                        });
+                    }
                     return;
                 }
                 
@@ -273,6 +279,9 @@ module.exports = (app, io) => {
                     });
                     return;
                 }
+
+                const [userRows] = await db.query('SELECT accepted_policy FROM users WHERE tg_id = ?', [tgId]);
+                const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
 
                 if (!hasAccepted) {
                     let inviterId = 'none';
@@ -362,24 +371,7 @@ module.exports = (app, io) => {
                 return;
             }
 
-            if (query.data.startsWith('buy_')) {
-                const amount = parseInt(query.data.split('_')[1]); // stars
-                const credits = amount * config.CREDITS_PER_STAR;
-                
-                const payload = JSON.stringify({ tgId: tgId.toString(), type: 'credits', amount: amount });
-                
-                tgApiCall('sendInvoice', {
-                    chat_id: chatId,
-                    title: `${credits} DoodleDash Credits`,
-                    description: `Top up your account with ${credits} credits.`,
-                    payload: payload,
-                    provider_token: "", 
-                    currency: "XTR",
-                    prices: [{ label: `${credits} Credits`, amount: amount }]
-                });
-                
-                tgApiCall('answerCallbackQuery', { callback_query_id: query.id });
-            } else if (query.data.startsWith('donate_')) {
+            if (query.data.startsWith('donate_')) {
                 const amount = parseInt(query.data.split('_')[1]);
                 const payload = JSON.stringify({ tgId: tgId.toString(), type: 'donate', amount: amount });
                 tgApiCall('sendInvoice', {
