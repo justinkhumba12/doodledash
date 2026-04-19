@@ -52,4 +52,8 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .nav-item i { font-size: 1.25rem; margin-bottom: 4px; transition: transform 0.2s; }
 .nav-item.active i { transform: scale(1.15); }
 
+/* Utility Ext. */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
