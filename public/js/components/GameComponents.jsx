@@ -35,7 +35,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const drawerMember = members.find(m => m.user_id === room.current_drawer_id) || {};
     const drawerInkExtraObj = drawerMember.ink_extra || {};
     
-    const currentMaxInk = window.INK_CONFIG.black.free + (drawerInkExtraObj['black'] || 0);
+    const inkConfig = systemConfig?.inkConfig || { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 };
+    const currentMaxInk = inkConfig.free + (drawerInkExtraObj['black'] || 0);
 
     const currentMaxInkRef = useRef(currentMaxInk);
     useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
@@ -78,11 +79,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             text.innerText = `${Math.floor(inkLeft)} / ${max}`;
         }
         
-        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
+        const buysMade = (drawerInkExtraObj['black'] || 0) / inkConfig.extra;
+        const hasMaxInk = buysMade >= inkConfig.max_buys;
         if (buyBtn) {
             buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
         }
-    }, [isDrawer, isDrawingPhase, drawerInkExtraObj]);
+    }, [isDrawer, isDrawingPhase, drawerInkExtraObj, inkConfig]);
 
     const updateInkUIRef = useRef(updateInkUI);
     useEffect(() => { updateInkUIRef.current = updateInkUI; });
@@ -279,12 +281,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
         if (dist < 1) return; 
         
-        const hasMaxInk = (drawerInkExtraObj['black'] || 0) >= 2500;
+        const buysMade = (drawerInkExtraObj['black'] || 0) / inkConfig.extra;
+        const hasMaxInk = buysMade >= inkConfig.max_buys;
         
         if (inkUsedRef.current + dist > currentMaxInkRef.current) {
             stopDraw(e); 
             if (!hasMaxInk) {
-                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
             }
             return;
         }
@@ -346,9 +349,9 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                     </div>
                     <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
                         <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: 0.5, color: 'black' });
+                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
                         }}>
-                            <i className="fas fa-plus-circle"></i> Refill Ink (0.5 Cred)
+                            <i className="fas fa-plus-circle"></i> Refill Ink ({inkConfig.cost} Cred)
                         </button>
                     </div>
                 </div>
