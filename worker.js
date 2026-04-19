@@ -34,6 +34,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 require('./routes')(app, io);
 require('./sockets')(io);
 require('./gameLoop')(io);
+require('./adminBackend').setupAdminPanel(app, io);
 
 const initWorkerDB = async () => {
     try {
