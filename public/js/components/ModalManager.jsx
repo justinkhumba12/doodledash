@@ -136,7 +136,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'create_room') {
-        let baseRoomCost = isPriv ? maxMembers : 0; 
+        let baseRoomCost = isPriv ? (maxMembers + (expireHours === 1 ? 2 : 1)) : 0; 
         content = (
             <>
                 <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
@@ -149,50 +149,41 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     </div>
                 </div>
 
+                {isPriv && (
+                    <input type="text" className="form-control mb-3" placeholder="Set Password (6-10 chars)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                )}
+
+                <div className="mb-3">
+                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players {isPriv ? '(1 Cred / Player)' : ''}</label>
+                    <div className="d-flex gap-1 flex-wrap">
+                        {[2, 3, 4, 5, 6, 8, 10].map(num => (
+                            <div key={num}
+                                 className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                 onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '40px'}}>
+                                <div className="fw-bold fs-6">{num}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
                 {isPriv ? (
-                    <>
-                        <input type="text" className="form-control mb-3" placeholder="Set Password (6-10 chars)..." value={pwd} onChange={e => setPwd(e.target.value)} />
-                        
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players (1 Cred / Player)</label>
-                            <div className="d-flex gap-1 flex-wrap">
-                                {[2, 3, 4, 5, 6].map(num => (
-                                    <div key={num}
-                                         className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '45px'}}>
-                                        <div className="fw-bold fs-6">{num}</div>
-                                    </div>
-                                ))}
-                            </div>
+                    <div className="mb-3">
+                        <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration (Time Cost)</label>
+                        <div className="d-flex gap-2">
+                            {[0.5, 1].map(hours => (
+                                <div key={hours}
+                                     className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                     onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
+                                    <div className="fw-bold fs-6">{hours === 0.5 ? '30' : '1'} <span style={{fontSize:'0.7rem'}}>{hours === 0.5 ? 'mins (1 Cred)' : 'hr (2 Cred)'}</span></div>
+                                </div>
+                            ))}
                         </div>
-                        
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
-                            <div className="d-flex gap-2">
-                                {[0.5, 1].map(hours => (
-                                    <div key={hours}
-                                         className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                        <div className="fw-bold fs-6">{hours === 0.5 ? '30' : '1'} <span style={{fontSize:'0.7rem'}}>{hours === 0.5 ? 'mins' : 'hr'}</span></div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </>
+                    </div>
                 ) : (
-                    <>
-                        <div className="mb-3">
-                            <label className="form-label text-muted small mb-1 fw-bold">Max Players</label>
-                            <div className="w-100 text-center border rounded-3 py-2 bg-light text-muted">
-                                <div className="fw-bold fs-5">6</div>
-                                <div style={{fontSize: '0.65rem'}}>Players (Fixed)</div>
-                            </div>
-                        </div>
-                        <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
-                            <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
-                            <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
-                        </div>
-                    </>
+                    <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
+                        <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
+                        <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
+                    </div>
                 )}
 
                 {(isPriv) && (
@@ -208,7 +199,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         socket.emit('create_room', { 
                             is_private: isPriv, 
                             password: pwd, 
-                            max_members: isPriv ? maxMembers : 6, 
+                            max_members: maxMembers, 
                             expire_hours: expireHours, 
                             auto_join: true 
                         }); 
@@ -277,7 +268,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'confirm_buy_ink') {
         content = (
             <>
-                <p className="text-center text-muted mb-4">Refill your black ink by 2500 units for <b>{modal.cost} Credits</b>?</p>
+                <p className="text-center text-muted mb-4">Refill your black ink for <b>{modal.cost} Credits</b>?</p>
                 <div className="d-flex gap-2">
                     <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                     <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('buy_ink', { color: modal.color }); close(); }}>Buy</button>
