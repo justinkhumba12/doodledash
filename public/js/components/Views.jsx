@@ -26,6 +26,11 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                 .scrollable-row { -ms-overflow-style: none; scrollbar-width: none; scroll-snap-type: x mandatory; }
                 .shop-pkg-card { min-width: 140px; transition: transform 0.2s; scroll-snap-align: center; }
                 .shop-pkg-card:active { transform: scale(0.95); }
+                .btn-vibrant-gradient { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; border: none; transition: all 0.3s ease; box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); }
+                .btn-vibrant-gradient:hover { background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%); transform: translateY(-2px); box-shadow: 0 6px 15px rgba(99, 102, 241, 0.4); }
+                .btn-success-gradient { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; transition: all 0.3s ease; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3); }
+                .btn-success-gradient:hover { background: linear-gradient(135deg, #059669 0%, #047857 100%); transform: translateY(-2px); box-shadow: 0 6px 15px rgba(16, 185, 129, 0.4); }
+                .btn-disabled-style { background: #cbd5e1; color: #64748b; border: none; cursor: not-allowed; }
             `}} />
 
             <i className="fas fa-store text-primary mb-3" style={{fontSize: '4rem'}}></i>
@@ -38,17 +43,17 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                         <h5 className="fw-bold mb-1"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
                         <p className="small text-muted mb-3">Purchase Gems securely using Telegram Stars.</p>
                         
-                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1">
+                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1 pt-2">
                             {starPackages.map(pkg => (
-                                <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow-sm border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => handleBuyGems(pkg.stars)} style={{ width: '150px' }}>
+                                <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => handleBuyGems(pkg.stars)} style={{ width: '150px' }}>
                                     <div className="card-body p-3 d-flex flex-column align-items-center justify-content-center h-100">
                                         <div className="bg-info bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2" style={{width:'60px', height:'60px'}}>
                                             <i className="fas fa-gem text-info" style={{fontSize: '2rem'}}></i>
                                         </div>
                                         <h4 className="fw-bold mb-0 text-dark">{pkg.gems}</h4>
                                         <small className="text-muted mb-3 fw-bold">Gems</small>
-                                        <button className="btn btn-primary btn-sm rounded-pill w-100 fw-bold mt-auto shadow-sm d-flex justify-content-center align-items-center gap-2">
-                                            <i className="fas fa-star text-warning"></i> {pkg.stars}
+                                        <button className="btn btn-vibrant-gradient rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-2" style={{padding: '10px 0'}}>
+                                            <i className="fas fa-star" style={{color: '#fef08a'}}></i> Buy for {pkg.stars}
                                         </button>
                                     </div>
                                 </div>
@@ -63,19 +68,19 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                         <h5 className="fw-bold mb-1"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
                         <p className="small text-muted mb-3">Convert your Gems into Credits instantly!</p>
                         
-                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1">
+                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1 pt-2">
                             {gemPackages.map(pkg => {
                                 const canAfford = user?.gems >= pkg.gems;
                                 return (
-                                    <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow-sm border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => canAfford && handleExchange(pkg.id, pkg.gems)} style={{ width: '150px' }}>
+                                    <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => canAfford && handleExchange(pkg.id, pkg.gems)} style={{ width: '150px' }}>
                                         <div className="card-body p-3 d-flex flex-column align-items-center justify-content-center h-100">
                                             <div className="bg-warning bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2" style={{width:'60px', height:'60px'}}>
                                                 <i className="fas fa-coins text-warning" style={{fontSize: '2rem'}}></i>
                                             </div>
                                             <h4 className="fw-bold mb-0 text-dark">{pkg.credits}</h4>
                                             <small className="text-muted mb-3 fw-bold">Credits</small>
-                                            <button className={`btn btn-sm rounded-pill w-100 fw-bold mt-auto shadow-sm d-flex justify-content-center align-items-center gap-2 ${canAfford ? 'btn-success' : 'btn-secondary'}`} disabled={!canAfford}>
-                                                <i className="fas fa-gem text-info"></i> {pkg.gems}
+                                            <button className={`btn rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-2 ${canAfford ? 'btn-success-gradient' : 'btn-disabled-style opacity-50'}`} style={{padding: '10px 0'}} disabled={!canAfford}>
+                                                <i className="fas fa-gem" style={{color: canAfford ? '#cffafe' : '#94a3b8'}}></i> Exchange {pkg.gems}
                                             </button>
                                         </div>
                                     </div>
@@ -631,7 +636,7 @@ const LobbyView = ({ user, rooms, setModal, socket, systemConfig }) => {
     });
 
     const totalRooms = rooms.length;
-    const isRoomLimitReached = totalRooms >= 1250;
+    const isRoomLimitReached = totalRooms >= (systemConfig?.maxRooms || 1250);
 
     if (searchId) {
         const searchNum = searchId.replace(/\D/g, '');
@@ -664,7 +669,7 @@ const LobbyView = ({ user, rooms, setModal, socket, systemConfig }) => {
                     </button>
                 ) : (
                     <div className="text-muted small fw-bold text-end">
-                        <i className="fas fa-ban text-danger"></i> Room limit (1250) reached.
+                        <i className="fas fa-ban text-danger"></i> Server Full.
                     </div>
                 )}
             </div>
