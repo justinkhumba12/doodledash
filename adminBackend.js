@@ -2,7 +2,7 @@ const express = require('express');
 const { db, redis } = require('./database');
 const { validateInitData, sendMsg } = require('./utils');
 const config = require('./config');
-const { getRoom, deleteRoomData, syncRoom, broadcastRooms } = require('./roomManager');
+const { getRoom, deleteRoomData, syncRoom, broadcastRooms, saveRoom } = require('./roomManager');
 
 // Helper for securely logging all admin actions
 const logAdminAction = async (adminId, action, details) => {
@@ -259,17 +259,60 @@ async function setupAdminPanel(app, io) {
     // --- SERVER CONTROL & MAINTENANCE ---
     adminRouter.post('/config/maintenance', async (req, res) => {
         const { maintenance, duration_hours } = req.body;
+        
+        const notifyAllUsers = async (msg) => {
+            try {
+                const [users] = await db.query('SELECT tg_id FROM users');
+                let i = 0;
+                const interval = setInterval(() => {
+                    const batch = users.slice(i, i + 30);
+                    if (batch.length === 0) {
+                        clearInterval(interval);
+                        return;
+                    }
+                    batch.forEach(u => {
+                        sendMsg(u.tg_id, msg, null, { parse_mode: 'Markdown' });
+                    });
+                    i += 30;
+                }, 1000);
+            } catch (e) {
+                console.error('[Admin] Broadcast error:', e);
+            }
+        };
+
         if (maintenance) {
             const duration = duration_hours ? parseFloat(duration_hours) : 1;
             const end_time = Date.now() + (duration * 3600000);
             await redis.set('maintenance_mode', '1');
             await redis.set('maintenance_end_time', end_time.toString());
+            await redis.set('maintenance_start_time', Date.now().toString());
+
             io.emit('maintenance_update', { active: true, end_time: end_time.toString() });
             io.emit('system_broadcast', { type: 'warning', message: `Server entering maintenance mode for ~${duration} hour(s). Lobbies frozen.` });
+            
+            notifyAllUsers(`⚠️ *Server Maintenance Alert*\n\nThe DoodleDash server is entering maintenance mode for approximately ${duration} hour(s).\n\nPlease come back later!`);
         } else {
+            const startTimeStr = await redis.get('maintenance_start_time');
+            const startTime = startTimeStr ? parseInt(startTimeStr) : Date.now();
+            const durationMs = Date.now() - startTime;
+
             await redis.del('maintenance_mode');
             await redis.del('maintenance_end_time');
+            await redis.del('maintenance_start_time');
+
+            // Add duration to all active private rooms
+            const activeIds = await redis.smembers('active_rooms');
+            for (const id of activeIds) {
+                const r = await getRoom(id);
+                if (r && r.is_private && r.expire_at) {
+                    r.expire_at = new Date(new Date(r.expire_at).getTime() + durationMs);
+                    await saveRoom(r);
+                    await syncRoom(id, io);
+                }
+            }
+
             io.emit('maintenance_update', { active: false });
+            notifyAllUsers(`✅ *Server is Live!*\n\nThe maintenance is complete. Private rooms have been extended by the downtime duration.\n\nJump back in and start drawing!`);
         }
         await logAdminAction(req.adminId, 'TOGGLE_MAINTENANCE', { maintenance, duration_hours });
         res.json({ success: true });
