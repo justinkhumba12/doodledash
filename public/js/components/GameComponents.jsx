@@ -2,14 +2,12 @@ const { useState, useEffect, useRef, useCallback } = React;
 
 let RANDOM_WORDS = ["bell","belt","bench","berry","bib","bike","bin","bird","blanket","block","blue","board","boat","bolt","bomb","bone","book","boot","bottle","bow","bowl","box","branch","bread","brick","broom","brush","bubble","bucket","bud","bug","bulb","bun","bunny","bus","bush","button","cabin","cactus","cage","cake","camel","camera","camp","can","candy","cane","canoe","cap","cape","card","carrot","cart","castle","cat","cave","chain","chair","chalk","cheese","chest","chin","chip","circle","city","claw","clay","clip","clock","cloud","club","coat","coin","comb","cone","coral","cord","cork","corn","couch","cow","crab","crown","cube","cup","curtain","cushion","dart","deer","desk","dice","dish","dock","dog","doll","door","donut","dot","dove","dragon","mat","medal","melon","mic","milk","mint","mirror","mitt","mole","money","mop","motor","mug","nail","napkin","net","nose","nut","oar","onion","orange","owl","paint","pan","panda","pants","paper","park","parrot","pasta","paw","pea","peach","pear","pen","pencil","pepper","piano","pig","pillow","pin","pine","pipe","pizza","plane","plate","plum","pocket","pond","pony","popcorn","pot","potato","pumpkin","purse","puzzle","quill","rabbit","rake","rat","ribbon","rice","ring","river","robot","rock","rocket","roller","rope","rose","ruler","saddle","salt","sand","saw","scarf","scissors","screw","seed","sheep","shell","shield","ship","shirt","shoe","shovel","sink","skate","skirt","skull","sled","slide","slime","snail","snake","sock","sofa","soil","spear","spider","spoon","spring","square","squid","star","stick","stone","stool","straw","string","stump","sugar","sun","surf","swan","swing","sword","taco","tail","tape","teapot","teddy","tent","tie","tiger","tile","tire","toast","toe","tomato","tooth","top","torch","towel","tower","toy","train","tray","tree","truck","tube","tulip","turtle","tv","umbrella","vase","vest","vine","violin","wagon","wall","wand","watch","wave","web","whale","wheat","wheel","whip","whistle","wig","wind","window","wing","wire","wolf","worm","yarn","yoyo","zebra","zipper","zombie","acorn","airplane","almond","anchor","angel","ant","apron","arm","arrow","ash","axe","badge","bag","bait","ball","bamboo","band","bank","banner","barn","barrel","basket","bat","battery","beach","bean","beard","bee","bagel","bakery","balcony","balloon","bandana","bar","bark","bath","beanbag","beehive","bicycle","blender","bonnet","bracelet","bridge","buckle","buffalo","calendar","campfire","candle","capsule","carpet","catfish","cloth","cobra","collar","compass","cookie","crate","dome","drill","drum","duck","dust","eagle","ear","egg","elbow","elk","engine","envelope","eye","fan","fang","farm","feather","fence","fern","ferry","fig","fin","fire","fish","flag","flame","flute","fly","fog","fork","fox","frame","frog","fruit","gate","gear","gem","gift","glass","glove","glue","goat","goblet","goggles","gold","goose","grape","grass","grill","guitar","hair","hammer","hand","hanger","hat","heart","hive","hook","horn","horse","hose","house","ice","ink","iron","island","jacket","jam","jar","jaw","jeep","jelly","jet","jewel","key","kite","knee","knife","ladder","lake","lamp","land","leaf","leg","lemon","letter","lid","light","lily","lime","line","lock","log","lollipop","loop","magnet","mailbox","map","mask","match","mail","dune","food","foot","girl","gun","hill","lantern","leash","ankle","anvil","applepie","armor","astronaut","avocado","bandage","banjo","beaver","blueberry","broomstick","building","calculator","calf","cherry","chimney","cloak","clover","coconut","comet","cotton","cutlass","dagger","daisy","diamond","eraser","fountain","funnel","galaxy","gamepad","ginger","goldfish","golf","grid","gum","hamster","helmet","icecream","moon","table","bed","car","rain","snow","flower","apple","banana","mango","burger","phone","marker","radio","lion","mouse","shark","penguin","squirrel","mountain","road","garden","ghost","smile","baby","bear","beetle","dolphin","donkey","elephant","flamingo","giraffe","hawk","hippo","iguana","kitten","koala","lizard","llama","monkey","moose","otter","peacock","seal","slug","turkey", "yak","arch","chess","flash","glasses","ladle","needle","nest","ocean","paddle","poster","quilt","sail","scale","spark","tank","ticket","tractor","wallet"];
 
-// --- Admin Panel Dynamic Dictionary Integration ---
 fetch('/api/public/dictionary')
     .then(r => r.json())
     .then(words => { if (words && words.length > 0) RANDOM_WORDS = words; })
     .catch(e => console.error("Could not fetch custom dictionary"));
-// --------------------------------------------------
 
-const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
+const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const canvasRef = useRef(null);
     const [localTimeLeft, setLocalTimeLeft] = useState(0);
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
@@ -42,9 +40,17 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
     const currentMaxInkRef = useRef(currentMaxInk);
     useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
 
+    const maintActive = systemConfig?.maintenance?.active;
+    const maintEndTime = systemConfig?.maintenance?.end_time;
+
+    useEffect(() => {
+        if (maintActive && !isMeReady && (room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL')) {
+            setModal({ type: 'maintenance', end_time: maintEndTime });
+        }
+    }, [maintActive, isMeReady, room.status, maintEndTime, setModal]);
+
     const [userReactions, setUserReactions] = useState({});
     
-    // Expanded, engaging reaction emojis!
     const emojis = ['😂', '😍', '😋', '💦', '🍑', '🍆', '🔥', '💀', '💯', '🤔', '😡', '👀', '🎉', '💩', '🤡', '😭'];
 
     const updateInkUI = useCallback(() => {
@@ -323,7 +329,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
         }
     };
 
-    // Derived reaction conditions to simplify UI clutter
     const activeReactionCount = Object.values(userReactions).length;
     const shouldHideReactions = isDrawer && activeReactionCount === 0;
 
@@ -360,7 +365,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                     onPointerCancel={stopDraw}
                 />
                 
-                {/* Community reporting flag added for players viewing drawing */}
                 {room.status === 'DRAWING' && !isDrawer && (
                     <button 
                         className="btn btn-light text-danger shadow-sm rounded-circle position-absolute" 
@@ -433,6 +437,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                             <h5 className="mt-4 text-muted fw-bold">
                                 {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
                             </h5>
+                        ) : maintActive ? (
+                            <button className="btn btn-secondary rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => setModal({ type: 'maintenance', end_time: maintEndTime })}><i className="fas fa-tools"></i> Server Maintenance</button>
                         ) : (
                             <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
                         )}
@@ -462,7 +468,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal }) => {
                 </div>
             )}
             
-            {/* Cleaner Emojis Section: Dynamic and expanded list */}
             {isDrawingPhase && !shouldHideReactions && (
                 <div className="d-flex justify-content-center mt-3 w-100 px-3">
                     <div className="bg-white rounded-4 shadow-sm border p-2 d-flex flex-wrap gap-2 justify-content-center" style={{ maxWidth: '100%' }}>
@@ -537,7 +542,6 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
                                  cursor: (c.user_id !== 'System' && !isDeleted) ? 'pointer' : 'default' 
                              }}
                              onClick={() => {
-                                 // New Message Action Menus mapping deletion / reporting safely
                                  if (c.user_id === 'System' || isDeleted) return;
                                  if (setModal) {
                                      if (c.user_id !== tgId || isCreator) {
@@ -798,7 +802,7 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
     );
 };
 
-const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
+const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemConfig }) => {
     const { room, members } = roomData;
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
@@ -827,7 +831,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal }) => {
                     </div>
                 ) : null}
 
-                <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} />
+                <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} systemConfig={systemConfig} />
 
                     <div className="mt-4 w-100">
                         <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
