@@ -2,7 +2,7 @@ const { useState, useEffect } = React;
 
 const ShopView = ({ user, socket, setModal, systemConfig }) => {
     const gemPackages = systemConfig?.gemPackages || [];
-    const buyPackages = [20, 50, 100, 500];
+    const starPackages = systemConfig?.starPackages || [];
 
     const handleBuyGems = (amount) => {
         const botLink = `https://t.me/doodledashbot?start=buygems_${amount}`;
@@ -20,39 +20,67 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
 
     return (
         <div className="container mt-4 pb-5 text-center">
+            {/* Inline styles for horizontal scrollable UI */}
+            <style dangerouslySetInnerHTML={{__html: `
+                .scrollable-row::-webkit-scrollbar { display: none; }
+                .scrollable-row { -ms-overflow-style: none; scrollbar-width: none; scroll-snap-type: x mandatory; }
+                .shop-pkg-card { min-width: 140px; transition: transform 0.2s; scroll-snap-align: center; }
+                .shop-pkg-card:active { transform: scale(0.95); }
+            `}} />
+
             <i className="fas fa-store text-primary mb-3" style={{fontSize: '4rem'}}></i>
             <h3 className="fw-bold mb-2">Item Shop</h3>
             <p className="text-muted">Get Gems and exchange them for Credits!</p>
             
-            <div className="row g-3 mt-3">
-                <div className="col-12 col-md-6">
-                    <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
-                        <h5 className="fw-bold"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
-                        <p className="small text-muted mb-4">Purchase Gems securely using Telegram Stars. Instant delivery.</p>
-                        <div className="d-flex flex-column gap-2 mt-auto">
-                            {buyPackages.map(amt => (
-                                <button key={amt} className="btn btn-outline-info fw-bold w-100 py-2 shadow-sm" onClick={() => handleBuyGems(amt)}>
-                                    Buy Gems with {amt} ⭐️
-                                </button>
+            <div className="row g-3 mt-3 text-start">
+                <div className="col-12">
+                    <div className="card bg-white rounded-4 border shadow-sm p-3 p-md-4 h-100">
+                        <h5 className="fw-bold mb-1"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
+                        <p className="small text-muted mb-3">Purchase Gems securely using Telegram Stars.</p>
+                        
+                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1">
+                            {starPackages.map(pkg => (
+                                <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow-sm border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => handleBuyGems(pkg.stars)} style={{ width: '150px' }}>
+                                    <div className="card-body p-3 d-flex flex-column align-items-center justify-content-center h-100">
+                                        <div className="bg-info bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2" style={{width:'60px', height:'60px'}}>
+                                            <i className="fas fa-gem text-info" style={{fontSize: '2rem'}}></i>
+                                        </div>
+                                        <h4 className="fw-bold mb-0 text-dark">{pkg.gems}</h4>
+                                        <small className="text-muted mb-3 fw-bold">Gems</small>
+                                        <button className="btn btn-primary btn-sm rounded-pill w-100 fw-bold mt-auto shadow-sm d-flex justify-content-center align-items-center gap-2">
+                                            <i className="fas fa-star text-warning"></i> {pkg.stars}
+                                        </button>
+                                    </div>
+                                </div>
                             ))}
                         </div>
                     </div>
                 </div>
                 
-                <div className="col-12 col-md-6">
-                    <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
-                        <h5 className="fw-bold"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
+                <div className="col-12">
+                    <div className="card bg-white rounded-4 border shadow-sm p-3 p-md-4 h-100 mt-2">
+                        <h5 className="fw-bold mb-1"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
                         <p className="small text-muted mb-3">Convert your Gems into Credits instantly!</p>
                         
-                        <div className="d-flex flex-column gap-2 mt-auto">
-                            {gemPackages.map(pkg => (
-                                <button key={pkg.id} className="btn btn-warning fw-bold w-100 py-2 shadow-sm text-dark d-flex justify-content-between px-3" disabled={!user || user.gems < pkg.gems} onClick={() => handleExchange(pkg.id, pkg.gems)}>
-                                    <span>{pkg.gems} <i className="fas fa-gem fs-6"></i></span>
-                                    <i className="fas fa-arrow-right opacity-50"></i>
-                                    <span>{pkg.credits} <i className="fas fa-coins fs-6"></i></span>
-                                </button>
-                            ))}
-                            {gemPackages.length === 0 && <span className="text-muted small">No packages available.</span>}
+                        <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1">
+                            {gemPackages.map(pkg => {
+                                const canAfford = user?.gems >= pkg.gems;
+                                return (
+                                    <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow-sm border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => canAfford && handleExchange(pkg.id, pkg.gems)} style={{ width: '150px' }}>
+                                        <div className="card-body p-3 d-flex flex-column align-items-center justify-content-center h-100">
+                                            <div className="bg-warning bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2" style={{width:'60px', height:'60px'}}>
+                                                <i className="fas fa-coins text-warning" style={{fontSize: '2rem'}}></i>
+                                            </div>
+                                            <h4 className="fw-bold mb-0 text-dark">{pkg.credits}</h4>
+                                            <small className="text-muted mb-3 fw-bold">Credits</small>
+                                            <button className={`btn btn-sm rounded-pill w-100 fw-bold mt-auto shadow-sm d-flex justify-content-center align-items-center gap-2 ${canAfford ? 'btn-success' : 'btn-secondary'}`} disabled={!canAfford}>
+                                                <i className="fas fa-gem text-info"></i> {pkg.gems}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {gemPackages.length === 0 && <span className="text-muted small w-100 text-center py-4">No packages available.</span>}
                         </div>
                     </div>
                 </div>
