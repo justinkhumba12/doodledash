@@ -135,7 +135,6 @@ module.exports = (app, io) => {
             return res.status(403).send('Unauthorized');
         }
 
-
         const update = req.body;
         res.sendStatus(200); 
 
@@ -157,8 +156,7 @@ module.exports = (app, io) => {
             tgApiCall('answerPreCheckoutQuery', { pre_checkout_query_id: update.pre_checkout_query.id, ok: true });
             return;
         }
-const adminModule = require('./adminBackend');
-if (await adminModule.handleAdminWebhook(update)) return;
+
         if (update?.message?.successful_payment) {
             try {
                 const payload = JSON.parse(update.message.successful_payment.invoice_payload);
@@ -220,6 +218,11 @@ if (await adminModule.handleAdminWebhook(update)) return;
             } catch(e) { console.error('Payment processing error:', e); }
             return;
         }
+
+        // --- ADMIN PANEL WEBHOOK INTEGRATION ---
+        const adminModule = require('./adminBackend');
+        if (await adminModule.handleAdminWebhook(update)) return;
+        // ---------------------------------------
 
         if (update?.message?.text && update.message.text.startsWith('/start')) {
             const chatId = update.message.chat.id;
