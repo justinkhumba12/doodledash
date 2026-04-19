@@ -499,26 +499,15 @@ const App = () => {
         }
     }
 
-    const handleLoadBalance = () => {
-        const link = 'https://t.me/doodledashbot?start=load_balance';
-        if (window.tg && window.tg.openTelegramLink) {
-            try { window.tg.openTelegramLink(link); } catch (e) { window.open(link, '_blank'); }
-            setTimeout(() => window.tg.close(), 300);
-        } else { window.open(link, '_blank'); }
-    };
-
     return (
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
-                <div className="d-flex align-items-center bg-light rounded-pill shadow-sm border border-secondary border-opacity-25" style={{ padding: '2px 6px' }}>
-                    <i className="fas fa-gem text-info me-1" style={{ fontSize: '0.75rem' }}></i>
-                    <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.75rem' }}>{user.gems || 0}</span>
-                    <i className="fas fa-coins text-warning me-1" style={{ fontSize: '0.75rem' }}></i>
-                    <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.75rem' }}>{user.credits}</span>
-                    <button className="btn btn-primary rounded-circle d-flex align-items-center justify-content-center p-0 shadow-sm" onClick={handleLoadBalance} title="Load Balance" style={{ width: '18px', height: '18px' }}>
-                        <i className="fas fa-plus text-white" style={{ fontSize: '0.55rem' }}></i>
-                    </button>
+                <div className="d-flex align-items-center bg-light rounded-pill shadow-sm border border-secondary border-opacity-25" style={{ padding: '2px 8px' }}>
+                    <i className="fas fa-gem text-info me-1" style={{ fontSize: '0.8rem' }}></i>
+                    <span className="fw-bold me-2" style={{ color: '#334155', fontSize: '0.8rem' }}>{user.gems || 0}</span>
+                    <i className="fas fa-coins text-warning me-1" style={{ fontSize: '0.8rem' }}></i>
+                    <span className="fw-bold" style={{ color: '#334155', fontSize: '0.8rem' }}>{user.credits}</span>
                 </div>
             </div>
 
