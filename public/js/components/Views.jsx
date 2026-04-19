@@ -1,23 +1,21 @@
 const { useState, useEffect } = React;
 
 const ShopView = ({ user, socket, setModal, systemConfig }) => {
-    const [exchangeAmount, setExchangeAmount] = useState(1);
-    const rate = systemConfig?.creditsPerGem || 5;
+    const gemPackages = systemConfig?.gemPackages || [];
+    const buyPackages = [20, 30, 40, 50];
 
-    const handleBuyGems = () => {
-        const botLink = 'https://t.me/doodledashbot?start=buy_gems';
+    const handleBuyGems = (amount) => {
+        const botLink = `https://t.me/doodledashbot?start=buygems_${amount}`;
         if (window.tg && window.tg.openTelegramLink) {
             try { window.tg.openTelegramLink(botLink); } catch (e) { window.open(botLink, '_blank'); }
-            setTimeout(() => window.tg.close(), 300);
         } else {
             window.open(botLink, '_blank');
         }
     };
 
-    const handleExchange = () => {
-        if (user?.gems < exchangeAmount) return setModal({ type: 'error', title: 'Error', content: 'Not enough gems.' });
-        socket.emit('exchange_gems', { gems_to_spend: exchangeAmount });
-        setExchangeAmount(1);
+    const handleExchange = (package_id, cost) => {
+        if (user?.gems < cost) return setModal({ type: 'error', title: 'Error', content: 'Not enough gems.' });
+        socket.emit('exchange_gems', { package_id });
     };
 
     return (
@@ -31,31 +29,31 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                     <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
                         <h5 className="fw-bold"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
                         <p className="small text-muted mb-4">Purchase Gems securely using Telegram Stars. Instant delivery.</p>
-                        <button className="btn btn-info text-white fw-bold rounded-pill mt-auto w-100 py-2 shadow-sm" onClick={handleBuyGems}>
-                            Buy Gems via Bot
-                        </button>
+                        <div className="d-flex flex-column gap-2 mt-auto">
+                            {buyPackages.map(amt => (
+                                <button key={amt} className="btn btn-outline-info fw-bold w-100 py-2 shadow-sm" onClick={() => handleBuyGems(amt)}>
+                                    Buy {amt} Gems
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
                 
                 <div className="col-12 col-md-6">
                     <div className="card bg-white rounded-4 border shadow-sm p-4 h-100">
                         <h5 className="fw-bold"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
-                        <p className="small text-muted mb-3">Rate: 1 Gem = {rate} Credits</p>
+                        <p className="small text-muted mb-3">Convert your Gems into Credits instantly!</p>
                         
-                        <div className="d-flex justify-content-center align-items-center gap-2 mb-3">
-                            <div className="input-group" style={{maxWidth: '150px'}}>
-                                <input type="number" className="form-control text-center fw-bold" min="1" value={exchangeAmount} onChange={e => setExchangeAmount(Math.max(1, parseInt(e.target.value) || 1))} />
-                                <span className="input-group-text bg-light text-muted"><i className="fas fa-gem"></i></span>
-                            </div>
+                        <div className="d-flex flex-column gap-2 mt-auto">
+                            {gemPackages.map(pkg => (
+                                <button key={pkg.id} className="btn btn-warning fw-bold w-100 py-2 shadow-sm text-dark d-flex justify-content-between px-3" disabled={!user || user.gems < pkg.gems} onClick={() => handleExchange(pkg.id, pkg.gems)}>
+                                    <span>{pkg.gems} <i className="fas fa-gem fs-6"></i></span>
+                                    <i className="fas fa-arrow-right opacity-50"></i>
+                                    <span>{pkg.credits} <i className="fas fa-coins fs-6"></i></span>
+                                </button>
+                            ))}
+                            {gemPackages.length === 0 && <span className="text-muted small">No packages available.</span>}
                         </div>
-                        
-                        <div className="alert alert-light border shadow-sm small py-2 mb-3">
-                            Receive: <b className="text-success fs-5">{exchangeAmount * rate} Credits</b>
-                        </div>
-                        
-                        <button className="btn btn-warning fw-bold rounded-pill mt-auto w-100 py-2 shadow-sm text-dark" disabled={!user || user.gems < exchangeAmount} onClick={handleExchange}>
-                            Exchange Now
-                        </button>
                     </div>
                 </div>
             </div>
@@ -91,7 +89,6 @@ const ProfileView = ({ user, socket, setModal }) => {
         if (window.tg && window.tg.openTelegramLink) {
             try { window.tg.openTelegramLink(botLink); }
             catch (e) { window.open(botLink, '_blank'); }
-            setTimeout(() => window.tg.close(), 300);
         } else {
             window.open(botLink, '_blank');
         }
