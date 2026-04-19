@@ -2,7 +2,7 @@ const { useState, useEffect } = React;
 
 const ShopView = ({ user, socket, setModal, systemConfig }) => {
     const gemPackages = systemConfig?.gemPackages || [];
-    const buyPackages = [20, 30, 40, 50];
+    const buyPackages = [20, 50, 100, 500];
 
     const handleBuyGems = (amount) => {
         const botLink = `https://t.me/doodledashbot?start=buygems_${amount}`;
@@ -32,7 +32,7 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                         <div className="d-flex flex-column gap-2 mt-auto">
                             {buyPackages.map(amt => (
                                 <button key={amt} className="btn btn-outline-info fw-bold w-100 py-2 shadow-sm" onClick={() => handleBuyGems(amt)}>
-                                    Buy {amt} Gems
+                                    Buy Gems with {amt} ⭐️
                                 </button>
                             ))}
                         </div>
