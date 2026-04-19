@@ -1,6 +1,6 @@
 const { useState } = React;
 
-const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted }) => {
+const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted, systemConfig }) => {
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
     const [maxMembers, setMaxMembers] = useState(6);
@@ -136,7 +136,11 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'create_room') {
-        let baseRoomCost = isPriv ? (maxMembers + (expireHours === 1 ? 2 : 1)) : 0; 
+        const roomLimits = systemConfig?.roomLimits || { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+        
+        let extraUsers = Math.max(0, maxMembers - roomLimits.privateFree);
+        let baseRoomCost = isPriv ? ((extraUsers * roomLimits.privateExtraCost) + (expireHours === 1 ? 2 : 1)) : 0; 
+
         content = (
             <>
                 <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
@@ -154,16 +158,22 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 )}
 
                 <div className="mb-3">
-                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players {isPriv ? '(1 Cred / Player)' : ''}</label>
-                    <div className="d-flex gap-1 flex-wrap">
-                        {[2, 3, 4, 5, 6, 8, 10].map(num => (
-                            <div key={num}
-                                 className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                 onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '40px'}}>
-                                <div className="fw-bold fs-6">{num}</div>
-                            </div>
-                        ))}
-                    </div>
+                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players {isPriv ? `(Free up to ${roomLimits.privateFree}, then ${roomLimits.privateExtraCost} Cred/Player)` : ''}</label>
+                    {isPriv ? (
+                        <div className="d-flex gap-1 flex-wrap">
+                            {Array.from({length: Math.max(1, roomLimits.privateMax - 1)}, (_, i) => i + 2).map(num => (
+                                <div key={num}
+                                     className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${maxMembers === num ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                     onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '40px'}}>
+                                    <div className="fw-bold fs-6">{num}</div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
+                            <i className="fas fa-info-circle me-1"></i> Public rooms are fixed at <b>{roomLimits.publicMax}</b> players.
+                        </div>
+                    )}
                 </div>
 
                 {isPriv ? (
