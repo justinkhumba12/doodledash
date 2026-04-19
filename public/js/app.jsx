@@ -345,6 +345,16 @@ const App = () => {
             });
         });
 
+        newSocket.on('update_ink_capacity', ({ user_id, extra }) => {
+            setRoomData(prev => {
+                if (!prev) return prev;
+                const newMembers = prev.members.map(m => 
+                    m.user_id === user_id ? { ...m, ink_extra: extra } : m
+                );
+                return { ...prev, members: newMembers };
+            });
+        });
+
         newSocket.on('kick_idle', () => {
             setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
             setCurrentRoomId(null);
