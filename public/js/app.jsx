@@ -349,6 +349,10 @@ const App = () => {
             setModal({ type: 'error', title: 'Idle Timeout', content: 'You were removed from the room for being inactive for 1 minute.' });
             setCurrentRoomId(null);
         });
+        
+        newSocket.on('room_limit_reached', () => {
+            setModal({ type: 'error', title: 'Server Full', content: 'The server has reached the maximum capacity of active rooms. Please try again later or join an existing room!' });
+        });
 
         newSocket.on('idle_warning', (data) => {
             setIdleTimer(data.timeLeft || 30);
@@ -628,7 +632,7 @@ const App = () => {
             <ModalManager modal={modal} setModal={setModal} socket={socket} setCurrentRoomId={setCurrentRoomId} idleTimer={idleTimer} setSoundPolicyAccepted={setSoundPolicyAccepted} />
             
             {profileModal && (
-                <div className="wb-overlay" style={{zIndex: 5000, background: 'rgba(0,0,0,0.8)', position: 'fixed'}} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
                    {!profileModal.full ? (
                        <div className="call-toast text-center position-relative" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
                            {profileModal.user_id !== window.tgId && (
