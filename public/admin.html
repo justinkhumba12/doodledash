@@ -401,7 +401,7 @@
             const [targetUser, setTargetUser] = useState('');
             const [credits, setCredits] = useState(0);
             const [gems, setGems] = useState(0);
-            const [htmlMessage, setHtmlMessage] = useState(''); // Added HTML message state
+            const [htmlMessage, setHtmlMessage] = useState(''); 
             
             const [gemPackages, setGemPackages] = useState([]);
             const [starPackages, setStarPackages] = useState([]);
@@ -409,7 +409,6 @@
             const [unbanCost, setUnbanCost] = useState(50);
             const [unmuteCost, setUnmuteCost] = useState(25);
             
-            // Accordion states
             const [showStarPkgs, setShowStarPkgs] = useState(false);
             const [showGemPkgs, setShowGemPkgs] = useState(false);
             const [showInkCfg, setShowInkCfg] = useState(false);
@@ -470,7 +469,8 @@
                                     </div>
                                     <div className="mb-2">
                                         <label className="form-label small fw-bold text-secondary">HTML Message (Optional Notification)</label>
-                                        <textarea className="form-control form-control-sm" placeholder="<b>Congratulations!</b> You've been granted extra currency." rows="2" value={htmlMessage} onChange={e => setHtmlMessage(e.target.value)}></textarea>
+                                        <textarea className="form-control form-control-sm" placeholder="<b>Congratulations!</b> You've been granted <i>extra</i> currency." rows="2" value={htmlMessage} onChange={e => setHtmlMessage(e.target.value)}></textarea>
+                                        <div className="form-text text-muted" style={{fontSize: '0.75rem'}}>Supports HTML: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;s&gt;, &lt;a href="..."&gt;, &lt;code&gt;</div>
                                     </div>
                                     <button className="btn btn-success mt-auto" onClick={applyFunds} disabled={!targetUser}>Execute Transaction</button>
                                 </div>
@@ -729,7 +729,7 @@
             const [initData, setInitData] = useState('');
             const [error, setError] = useState('');
             const [tab, setTab] = useState('dashboard');
-            const [isVerified, setIsVerified] = useState(false); // New state to hold loading block
+            const [isVerified, setIsVerified] = useState(false);
 
             useEffect(() => {
                 if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
@@ -740,7 +740,6 @@
                 }
             }, []);
 
-            // 🔐 Pre-verify against ADMIN_IDS from backend before rendering the UI
             useEffect(() => {
                 if (initData) {
                     fetch('/api/admin/verify', {
@@ -750,7 +749,7 @@
                         if (res.status === 403 || res.status === 401) {
                             setError('Access Denied: You are not authorized as an Admin.');
                             if (window.Telegram && window.Telegram.WebApp) {
-                                setTimeout(() => window.Telegram.WebApp.close(), 3000); // Closes MiniApp
+                                setTimeout(() => window.Telegram.WebApp.close(), 3000);
                             }
                         } else {
                             setIsVerified(true);
@@ -767,7 +766,6 @@
                 if (body) options.body = JSON.stringify(body);
                 const res = await fetch(`/api/admin${path}`, options);
                 
-                // Extra protection in-case status changes while app is open
                 if (res.status === 403 || res.status === 401) { 
                     setError('Access Denied: You are not authorized.'); 
                     if (window.Telegram && window.Telegram.WebApp) {
