@@ -95,6 +95,69 @@
             );
         };
 
+        const StylesManager = ({ apiFetch }) => {
+            const [styles, setStyles] = useState([]);
+            
+            const loadStyles = () => apiFetch('/styles').then(setStyles);
+            useEffect(() => { loadStyles(); }, []);
+
+            const updateStylePrices = async (id, credit_price, gem_price) => {
+                await apiFetch('/styles/update', 'POST', { id, credit_price: Number(credit_price), gem_price: Number(gem_price) });
+                alert('Style prices updated globally!');
+                loadStyles();
+            };
+
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">Username Styles Management</h3>
+                    <div className="alert alert-info py-2 small mb-4">Manage prices for all in-game username styles. Dynamic CSS elements are injected directly to the client.</div>
+
+                    <div className="card shadow-sm border-0">
+                        <div className="table-responsive p-3">
+                            <table className="table align-middle text-center mb-0" style={{minWidth: '600px'}}>
+                                <thead className="table-light">
+                                    <tr>
+                                        <th>Style Preview</th>
+                                        <th>CSS Class</th>
+                                        <th>Tier Type</th>
+                                        <th>Credits Price</th>
+                                        <th>Gems Price</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {styles.map(s => (
+                                        <tr key={s.id}>
+                                            <td className="fw-bold fs-5"><span style={{fontFamily: s.font_family?.split(':')[0] || 'sans-serif', color: 'var(--primary)'}}>DoodleDash</span></td>
+                                            <td><code className="text-secondary bg-light px-2 py-1 rounded">{s.class_name}</code></td>
+                                            <td>
+                                                {s.is_premium ? <span className="badge bg-info text-dark shadow-sm">Premium</span> : <span className="badge bg-secondary shadow-sm">Standard</span>}
+                                            </td>
+                                            <td>
+                                                <input type="number" className="form-control form-control-sm mx-auto text-center" style={{width: '90px'}} 
+                                                       value={s.credit_price} 
+                                                       disabled={s.is_premium}
+                                                       onChange={e => setStyles(styles.map(st => st.id === s.id ? {...st, credit_price: e.target.value} : st))} />
+                                            </td>
+                                            <td>
+                                                <input type="number" className="form-control form-control-sm mx-auto text-center" style={{width: '90px'}} 
+                                                       value={s.gem_price} 
+                                                       onChange={e => setStyles(styles.map(st => st.id === s.id ? {...st, gem_price: e.target.value} : st))} />
+                                            </td>
+                                            <td>
+                                                <button className="btn btn-sm btn-primary rounded-pill fw-bold px-3 shadow-sm" onClick={() => updateStylePrices(s.id, s.credit_price, s.gem_price)}>Save</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {styles.length === 0 && <tr><td colSpan="6" className="text-muted p-4">Loading styles...</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const Moderation = ({ apiFetch }) => {
             const [search, setSearch] = useState('');
             const [users, setUsers] = useState([]);
@@ -789,6 +852,7 @@
                         <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-2 w-15"></i> Dashboard</div>
                         <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-2 w-15"></i> Moderation</div>
                         <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-2 w-15"></i> Economy</div>
+                        <div className={`nav-item ${tab === 'styles' ? 'active' : ''}`} onClick={() => setTab('styles')}><i className="fas fa-font me-2 w-15"></i> Styles</div>
                         <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-2 w-15"></i> Settings</div>
                         
                         <div className="sidebar-footer text-center opacity-50 small mt-auto">
@@ -799,6 +863,7 @@
                         {tab === 'dashboard' && <Dashboard apiFetch={apiFetch} />}
                         {tab === 'moderation' && <Moderation apiFetch={apiFetch} />}
                         {tab === 'economy' && <Economy apiFetch={apiFetch} />}
+                        {tab === 'styles' && <StylesManager apiFetch={apiFetch} />}
                         {tab === 'server' && <ServerControl apiFetch={apiFetch} />}
                     </div>
                 </div>
