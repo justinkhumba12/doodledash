@@ -52,6 +52,56 @@ window.renderGenderIcon = (gender) => {
     return null;
 };
 
+// Global Hook to Dynamically load specific Styles + CSS without loading them all
+window.useDynamicStyles = (activeStyleIds, styleDatabase) => {
+    const { useEffect } = React;
+    useEffect(() => {
+        if (!styleDatabase || !activeStyleIds) return;
+        
+        const uniqueIds = [...new Set(activeStyleIds)].filter(Boolean);
+        const requiredFonts = new Set();
+        let combinedCSS = "";
+        
+        uniqueIds.forEach(id => {
+            const styleData = styleDatabase.find(s => s.id === id);
+            if (styleData) {
+                // Ensure spaces are properly URL Encoded for Google Fonts
+                requiredFonts.add(styleData.font_family);
+                combinedCSS += `\n/* Loaded for ${id} */\n${styleData.css_content}`;
+            }
+        });
+        
+        // Handle Dynamic Fonts Injection
+        if (requiredFonts.size > 0) {
+            const fontFamilies = Array.from(requiredFonts).map(f => `family=${f.replace(/ /g, '+')}`).join('&');
+            const fontUrl = `https://fonts.googleapis.com/css2?${fontFamilies}&display=swap`;
+            
+            let linkTag = document.getElementById('dynamic-google-fonts');
+            if (!linkTag) {
+                linkTag = document.createElement('link');
+                linkTag.id = 'dynamic-google-fonts';
+                linkTag.rel = 'stylesheet';
+                document.head.appendChild(linkTag);
+            }
+            if (linkTag.href !== fontUrl) {
+                linkTag.href = fontUrl;
+            }
+        }
+        
+        // Handle Dynamic CSS Rules Injection
+        let styleTag = document.getElementById('dynamic-room-styles');
+        if (!styleTag) {
+            styleTag = document.createElement('style');
+            styleTag.id = 'dynamic-room-styles';
+            document.head.appendChild(styleTag);
+        }
+        if (styleTag.innerHTML !== combinedCSS) {
+            styleTag.innerHTML = combinedCSS;
+        }
+        
+    }, [JSON.stringify(activeStyleIds), styleDatabase]);
+};
+
 const { useState, useEffect, useRef, useCallback } = React;
 
 // --- Main App Component ---
@@ -490,6 +540,7 @@ const App = () => {
     const LeaderboardView = window.LeaderboardView || (() => null);
     const ProfileView = window.ProfileView || (() => null);
     const ShopView = window.ShopView || (() => null);
+    const InventoryView = window.InventoryView || (() => null);
     const GameRoom = window.GameRoom || (() => null);
     const ModalManager = window.ModalManager || (() => null);
     const GuessBox = window.GuessBox || (() => null);
@@ -529,7 +580,8 @@ const App = () => {
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
                         {mainPageTab === 'shop' && <ShopView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
                         {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} systemConfig={systemConfig} />}
-                        {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
+                        {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} setMainPageTab={setMainPageTab} />}
+                        {mainPageTab === 'inventory' && <InventoryView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} setMainPageTab={setMainPageTab} />}
                         
                         <div className="bottom-nav">
                             <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
@@ -544,7 +596,7 @@ const App = () => {
                             <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
                                 <i className="fas fa-trophy"></i><span>Ranks</span>
                             </div>
-                            <div className={`nav-item ${mainPageTab === 'profile' ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
+                            <div className={`nav-item ${['profile', 'inventory'].includes(mainPageTab) ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                 <i className="fas fa-user"></i><span>Profile</span>
                             </div>
                         </div>
