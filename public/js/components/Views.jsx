@@ -4,20 +4,6 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
 const gemPackages = systemConfig?.gemPackages || [];
 const starPackages = systemConfig?.starPackages || [];
 
-const handleBuyGems = (amount) => {
-    const botLink = `https://t.me/doodledashbot?start=buygems_${amount}`;
-    if (window.tg && window.tg.openTelegramLink) {
-        try { window.tg.openTelegramLink(botLink); } catch (e) { window.open(botLink, '_blank'); }
-    } else {
-        window.open(botLink, '_blank');
-    }
-};
-
-const handleExchange = (package_id, cost) => {
-    if (user?.gems < cost) return setModal({ type: 'error', title: 'Error', content: 'Not enough gems.' });
-    socket.emit('exchange_gems', { package_id });
-};
-
 return (
     <div className="container mt-4 pb-5 text-center">
         {/* Inline styles for horizontal scrollable UI */}
@@ -47,16 +33,16 @@ return (
                     <h5 className="fw-bold mb-1"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
                     <p className="small text-muted mb-3">Purchase Gems securely using Telegram Stars.</p>
                     
-                    <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1 pt-2">
+                    <div className="d-flex flex-row gap-3 overflow-auto pb-3 scrollable-row w-100 px-1 pt-2">
                         {starPackages.map(pkg => (
-                            <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => handleBuyGems(pkg.stars)} style={{ width: '130px' }}>
+                            <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => setModal({ type: 'item_description', itemType: 'gems', pkg })} style={{ width: '130px' }}>
                                 <div className="card-body p-2 d-flex flex-column align-items-center justify-content-center h-100">
                                     <div className="bg-info bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2 shop-pkg-icon">
                                         <i className="fas fa-gem text-info"></i>
                                     </div>
                                     <h4 className="fw-bold mb-0 text-dark">{pkg.gems}</h4>
                                     <small className="text-muted mb-2 fw-bold">Gems</small>
-                                    <button className="btn btn-vibrant-gradient rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1">
+                                    <button className="btn btn-vibrant-gradient rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1" onClick={(e) => { e.stopPropagation(); setModal({ type: 'confirm_buy_gems', pkg }); }}>
                                         <i className="fas fa-star" style={{color: '#fef08a'}}></i> {pkg.stars} Stars
                                     </button>
                                 </div>
@@ -72,18 +58,18 @@ return (
                     <h5 className="fw-bold mb-1"><i className="fas fa-exchange-alt text-warning me-2"></i> Exchange Gems</h5>
                     <p className="small text-muted mb-3">Convert your Gems into Credits instantly!</p>
                     
-                    <div className="d-flex flex-row gap-3 overflow-auto pb-2 scrollable-row w-100 px-1 pt-2">
+                    <div className="d-flex flex-row gap-3 overflow-auto pb-3 scrollable-row w-100 px-1 pt-2">
                         {gemPackages.map(pkg => {
                             const canAfford = user?.gems >= pkg.gems;
                             return (
-                                <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => canAfford && handleExchange(pkg.id, pkg.gems)} style={{ width: '130px' }}>
+                                <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => setModal({ type: 'item_description', itemType: 'credits', pkg, canAfford })} style={{ width: '130px' }}>
                                     <div className="card-body p-2 d-flex flex-column align-items-center justify-content-center h-100">
                                         <div className="bg-warning bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2 shop-pkg-icon">
                                             <i className="fas fa-coins text-warning"></i>
                                         </div>
                                         <h4 className="fw-bold mb-0 text-dark">{pkg.credits}</h4>
                                         <small className="text-muted mb-2 fw-bold">Credits</small>
-                                        <button className={`btn rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1 ${canAfford ? 'btn-success-gradient' : 'btn-disabled-style opacity-50'}`} disabled={!canAfford}>
+                                        <button className={`btn rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1 ${canAfford ? 'btn-success-gradient' : 'btn-disabled-style opacity-50'}`} disabled={!canAfford} onClick={(e) => { e.stopPropagation(); canAfford && setModal({ type: 'confirm_exchange_gems', pkg }); }}>
                                             <i className="fas fa-gem" style={{color: canAfford ? '#cffafe' : '#94a3b8'}}></i> {pkg.gems} Gems
                                         </button>
                                     </div>
