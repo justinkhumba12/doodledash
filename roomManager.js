@@ -97,14 +97,16 @@ async function syncRoom(roomId, io) {
     const genders = {};
     const names = {};
     const photos = {};
+    const styles = {};
     
     if (userIds.size > 0) {
         const idsArr = Array.from(userIds);
         try {
-            const [genRows] = await db.query(`SELECT tg_id, gender, name FROM users WHERE tg_id IN (?)`, [idsArr]);
+            const [genRows] = await db.query(`SELECT tg_id, gender, name, equipped_style FROM users WHERE tg_id IN (?)`, [idsArr]);
             genRows.forEach(r => {
                 genders[r.tg_id] = r.gender;
                 names[r.tg_id] = r.name;
+                styles[r.tg_id] = r.equipped_style;
             });
 
             const fetchedPhotos = await redis.hmget('user_photos', ...idsArr);
@@ -169,6 +171,7 @@ async function syncRoom(roomId, io) {
                 genders,
                 names,
                 photos,
+                styles,
                 masked_word: masked_word,
                 server_time: new Date().toISOString()
             });
