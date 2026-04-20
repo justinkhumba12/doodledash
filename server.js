@@ -18,7 +18,6 @@ if (cluster.isPrimary) {
                 await db.query(`DROP TABLE IF EXISTS ${table}`);
             }
 
-            // The users table query includes streak mechanics and secondary currency (gems)
             await db.query(`
                 CREATE TABLE IF NOT EXISTS users (
                     tg_id VARCHAR(50) PRIMARY KEY,
@@ -40,7 +39,8 @@ if (cluster.isPrimary) {
                     gender VARCHAR(10) DEFAULT NULL,
                     name VARCHAR(50) DEFAULT NULL,
                     avatar_url VARCHAR(255) DEFAULT NULL,
-                    ban_count INT DEFAULT 0
+                    ban_count INT DEFAULT 0,
+                    equipped_style VARCHAR(50) DEFAULT NULL
                 )
             `);
 
@@ -72,7 +72,6 @@ if (cluster.isPrimary) {
                 )
             `);
 
-            // Creates the robust reports table to store evidence
             await db.query(`
                 CREATE TABLE IF NOT EXISTS reports (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -82,6 +81,27 @@ if (cluster.isPrimary) {
                     reason VARCHAR(255),
                     snapshot_data LONGTEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS name_styles (
+                    id VARCHAR(50) PRIMARY KEY,
+                    class_name VARCHAR(50),
+                    font_family VARCHAR(100),
+                    css_content TEXT,
+                    credit_price INT DEFAULT 0,
+                    gem_price INT DEFAULT 0,
+                    is_premium BOOLEAN DEFAULT FALSE
+                )
+            `);
+
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS user_styles_inventory (
+                    tg_id VARCHAR(50),
+                    style_id VARCHAR(50),
+                    purchased_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (tg_id, style_id)
                 )
             `);
 
