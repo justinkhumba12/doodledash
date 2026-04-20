@@ -38,6 +38,9 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const inkConfig = systemConfig?.inkConfig || { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 };
     const currentMaxInk = inkConfig.free + (drawerInkExtraObj['black'] || 0);
 
+    const currentMaxInkRef = useRef(currentMaxInk);
+    useEffect(() => { currentMaxInkRef.current = currentMaxInk; }, [currentMaxInk]);
+
     const maintActive = systemConfig?.maintenance?.active;
     const maintEndTime = systemConfig?.maintenance?.end_time;
 
@@ -85,12 +88,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
     const updateInkUIRef = useRef(updateInkUI);
     useEffect(() => { updateInkUIRef.current = updateInkUI; });
-
-    const currentMaxInkRef = useRef(currentMaxInk);
-    useEffect(() => { 
-        currentMaxInkRef.current = currentMaxInk; 
-        if (updateInkUIRef.current) updateInkUIRef.current();
-    }, [currentMaxInk]);
 
     useEffect(() => {
         if (room.status !== 'DRAWING') {
@@ -276,4 +273,617 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         lastPosRef.current = getMousePos(e);
     };
 
-    const
+    const moveDraw = (e) => {
+        if (!drawingRef.current) return;
+        e.preventDefault();
+        const newPos = getMousePos(e);
+        
+        const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
+        if (dist < 1) return; 
+        
+        const buysMade = (drawerInkExtraObj['black'] || 0) / inkConfig.extra;
+        const hasMaxInk = buysMade >= inkConfig.max_buys;
+        
+        if (inkUsedRef.current + dist > currentMaxInkRef.current) {
+            stopDraw(e); 
+            if (!hasMaxInk) {
+                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
+            }
+            return;
+        }
+        
+        inkUsedRef.current += dist;
+        localInkRef.current['black'] = inkUsedRef.current; 
+
+        updateInkUI();
+        
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.beginPath();
+        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+        ctx.lineTo(newPos.x, newPos.y);
+        ctx.strokeStyle = '#000000';
+        ctx.stroke();
+
+        currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
+        lastPosRef.current = newPos;
+    };
+
+    const flushDrawQueue = useCallback(() => {
+        if (drawQueueRef.current.length > 0) {
+            if (socket) socket.emit('draw', { lines: drawQueueRef.current });
+            drawQueueRef.current = [];
+        }
+        emitTimeoutRef.current = null;
+    }, [socket]);
+
+    const stopDraw = (e) => {
+        if(!drawingRef.current) return;
+        drawingRef.current = false;
+        try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
+        
+        if(currentLineRef.current.length > 0) {
+            drawQueueRef.current.push(...currentLineRef.current);
+        }
+        
+        if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
+            emitTimeoutRef.current = setTimeout(() => {
+                flushDrawQueue();
+            }, 500);
+        }
+    };
+
+    const activeReactionCount = Object.values(userReactions).length;
+    const shouldHideReactions = isDrawer && activeReactionCount === 0;
+
+    return (
+        <div className="w-100 d-flex flex-column align-items-center">
+            {isDrawingPhase && isDrawer && (
+                <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
+                    <div className="d-flex justify-content-between small fw-bold mb-1">
+                        <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                        <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
+                    </div>
+                    <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
+                        <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                             style={{width: '100%', transition: 'width 0.1s'}}></div>
+                    </div>
+                    <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                        <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
+                        }}>
+                            <i className="fas fa-plus-circle"></i> Refill Ink ({inkConfig.cost} Cred)
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="whiteboard-container">
+                <canvas 
+                    ref={canvasRef} width="500" height="500"
+                    style={{ touchAction: 'none' }}
+                    onPointerDown={startDraw} 
+                    onPointerMove={moveDraw} 
+                    onPointerUp={stopDraw} 
+                    onPointerOut={stopDraw}
+                    onPointerCancel={stopDraw}
+                />
+                
+                {room.status === 'DRAWING' && !isDrawer && (
+                    <button 
+                        className="btn btn-light text-danger shadow-sm rounded-circle position-absolute" 
+                        style={{top: '10px', right: '10px', zIndex: 100, width: '36px', height: '36px'}}
+                        onClick={() => {
+                            setModal({ type: 'report_input', context: 'drawing', reported_id: room.current_drawer_id, snapshot_data: JSON.stringify(initialDrawingsRef.current) });
+                        }}
+                        title="Report Inappropriate Drawing"
+                    >
+                        <i className="fas fa-flag"></i>
+                    </button>
+                )}
+                
+                {room.status === 'PRE_DRAW' && isDrawer && (
+                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.95)', padding: '10px'}}>
+                        <h5 className="text-primary fw-bold mb-1">Your Turn!</h5>
+                        <h6 className="text-danger fw-bold mb-2"><i className="fas fa-stopwatch"></i> {preDrawTimeLeft}s</h6>
+                        <div className="w-100 px-2 text-center">
+                            <label className="small fw-bold text-muted mb-1">Word to draw (3-10 chars)</label>
+                            <div className="input-group input-group-sm mb-2">
+                                <input type="text" maxLength={10} minLength={3} className="form-control text-center fw-bold text-dark" placeholder="Enter word" value={wordInput} onChange={e => setWordInput(e.target.value.toUpperCase())} style={{letterSpacing: '1px'}} />
+                                {wordInput && <button className="btn btn-outline-secondary btn-sm" onClick={() => setWordInput('')}><i className="fas fa-times"></i></button>}
+                            </div>
+                            <div className="d-flex gap-2 justify-content-center">
+                                <button className="btn btn-outline-primary btn-sm rounded-pill shadow-sm fw-bold flex-grow-1" onClick={() => setWordInput(RANDOM_WORDS[Math.floor(Math.random() * RANDOM_WORDS.length)].toUpperCase())}><i className="fas fa-dice me-1"></i> Random</button>
+                                <button className="btn btn-success btn-sm rounded-pill shadow-sm fw-bold flex-grow-1" disabled={wordInput.length < 3 || wordInput.length > 10} onClick={() => socket.emit('set_word', {word: wordInput})}><i className="fas fa-paint-brush me-1"></i> Start</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {room.status === 'PRE_DRAW' && !isDrawer && (
+                    <div className="wb-overlay"><h4>Drawer is choosing a word...</h4></div>
+                )}
+
+                {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
+                    <div className="wb-overlay">
+                        {room.status !== 'WAITING' && (
+                            <>
+                                {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
+                                    <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h6>
+                                )}
+                                
+                                {room.end_reason === 'drawer_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
+                                ) : room.end_reason === 'all_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
+                                ) : room.end_reason === 'timeout_predraw' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
+                                ) : room.end_reason === 'drawer_skipped' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
+                                ) : room.end_reason === 'drawer_disconnected' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
+                                ) : room.last_winner_id ? (
+                                    <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm">
+                                        {(roomData?.photos?.[room.last_winner_id]) ? (
+                                            <img src={roomData.photos[room.last_winner_id]} className="rounded-circle shadow border" width="60" height="60" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Winner"/>
+                                        ) : (
+                                            <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
+                                        )}
+                                        <span className="fs-5"><b>{window.getDisplayName(room.last_winner_id, roomData?.names)}</b> guessed it!</span>
+                                    </div>
+                                ) : (
+                                    <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
+                                )}
+                            </>
+                        )}
+                        
+                        {isMeReady ? (
+                            <h5 className="mt-4 text-muted fw-bold">
+                                {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
+                            </h5>
+                        ) : maintActive ? (
+                            <button className="btn btn-secondary rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => setModal({ type: 'maintenance', end_time: maintEndTime })}><i className="fas fa-tools"></i> Server Maintenance</button>
+                        ) : (
+                            <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {isDrawer && isDrawingPhase && (
+                <div className="d-flex gap-2 justify-content-center mt-3 w-100">
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                            onClick={() => socket.emit('undo')} 
+                            disabled={(room.undo_steps || 0) === 0}
+                            title="Undo">
+                        <i className="fas fa-undo"></i> <span className="badge bg-secondary rounded-circle">{room.undo_steps || 0}</span>
+                    </button>
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-danger d-flex align-items-center gap-2 border border-danger" 
+                            onClick={() => socket.emit('clear_all')} 
+                            title="Clear All">
+                        <i className="fas fa-trash-alt"></i> Clear All
+                    </button>
+                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                            onClick={() => socket.emit('redo')} 
+                            disabled={(room.redo_steps || 0) === 0}
+                            title="Redo">
+                        <i className="fas fa-redo"></i> <span className="badge bg-secondary rounded-circle">{room.redo_steps || 0}</span>
+                    </button>
+                </div>
+            )}
+            
+            {isDrawingPhase && !shouldHideReactions && (
+                <div className="d-flex justify-content-center mt-3 w-100 px-3">
+                    <div className="bg-white rounded-4 shadow-sm border p-2 d-flex flex-wrap gap-2 justify-content-center" style={{ maxWidth: '100%' }}>
+                        {emojis.map(emoji => {
+                            const count = Object.values(userReactions).filter(e => e === emoji).length;
+                            const myReaction = userReactions[tgId] === emoji;
+                            if (isDrawer && count === 0) return null;
+                            
+                            return (
+                                <button key={emoji} 
+                                    className={`btn rounded-circle d-flex align-items-center justify-content-center position-relative flex-shrink-0 ${myReaction ? 'bg-primary border-primary text-white shadow' : 'bg-light border-0'}`}
+                                    onClick={() => sendReaction(emoji)} 
+                                    title={isDrawer ? "Reactions" : (myReaction ? "Remove Reaction" : "React")}
+                                    disabled={isDrawer}
+                                    style={{ 
+                                        width: '38px', height: '38px',
+                                        transition: 'all 0.2s',
+                                        transform: myReaction ? 'scale(1.15)' : 'scale(1)',
+                                        opacity: 1
+                                    }}>
+                                    <span className="fs-5 lh-1" style={{ transform: myReaction ? 'translateY(-1px)' : 'none' }}>{emoji}</span>
+                                    {count > 0 && (
+                                        <span className="position-absolute translate-middle badge rounded-pill bg-danger shadow-sm border border-2 border-white" style={{ top: '2px', left: '90%', fontSize: '0.65rem', padding: '0.2em 0.4em' }}>
+                                            {count}
+                                        </span>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
+    const [input, setInput] = useState('');
+    const messagesEndRef = useRef(null);
+    const isCreator = Boolean(roomData.room.is_private) && roomData.room.creator_id === tgId;
+    
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chats]);
+
+    const handleUnmute = () => {
+        const botLink = `https://t.me/doodledashbot?start=unmute`;
+        if (window.tg && window.tg.openTelegramLink) {
+            try {
+                window.tg.openTelegramLink(botLink);
+                setTimeout(() => window.tg.close(), 300);
+            } catch (e) {
+                window.open(botLink, '_blank');
+            }
+        } else {
+            window.open(botLink, '_blank');
+        }
+    };
+
+    return (
+        <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+            <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                {chats.map(c => {
+                    const photo = roomData?.photos?.[c.user_id];
+                    const isDeleted = c.message === '[Deleted by admin]' || c.message === '[Deleted by room creator]';
+                    
+                    return (
+                        <div key={c.id} 
+                             className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} 
+                             style={{ 
+                                 borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', 
+                                 cursor: (c.user_id !== 'System' && !isDeleted) ? 'pointer' : 'default' 
+                             }}
+                             onClick={() => {
+                                 if (c.user_id === 'System' || isDeleted) return;
+                                 if (setModal) {
+                                     if (c.user_id !== tgId || isCreator) {
+                                         setModal({ type: 'chat_action', message: c, isCreator });
+                                     }
+                                 }
+                             }}>
+                            {c.user_id !== 'System' && (
+                                photo ? 
+                                    <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                    <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            )}
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
+                                </small>
+                                <span style={{marginTop: '2px', fontStyle: isDeleted ? 'italic' : 'normal', color: isDeleted ? '#94a3b8' : 'inherit'}}>{c.message}</span>
+                            </div>
+                        </div>
+                    );
+                })}
+                <div ref={messagesEndRef} />
+                
+                {isCreator && chats.length > 0 && (
+                    <div className="text-center mt-3 mb-2">
+                        <button className="btn btn-sm btn-outline-danger rounded-pill shadow-sm" onClick={() => setModal({ type: 'confirm_clear_chat' })}>
+                            <i className="fas fa-trash-alt"></i> Clear All Messages
+                        </button>
+                    </div>
+                )}
+            </div>
+            
+            <div className="chat-input-wrapper d-flex align-items-end mt-auto gap-2" style={{padding: '10px 15px', backgroundColor: 'white', borderTop: '1px solid #e2e8f0'}}>
+                {user?.status === 'mute' ? (
+                    <button 
+                        className="btn btn-danger w-100 rounded-pill fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2"
+                        style={{ height: '45px' }}
+                        onClick={handleUnmute}
+                    >
+                        <i className="fas fa-volume-mute"></i> Unmute in Bot
+                    </button>
+                ) : (
+                    <>
+                        <textarea
+                            className="form-control bg-light border-0"
+                            style={{ resize: 'none', minHeight: '40px', maxHeight: '80px', borderRadius: '20px', padding: '10px 15px', overflowY: 'auto' }}
+                            rows={1}
+                            value={input}
+                            maxLength={200}
+                            placeholder="Type message..."
+                            onChange={(e) => {
+                                setInput(e.target.value);
+                                e.target.style.height = 'auto';
+                                e.target.style.height = Math.min(e.target.scrollHeight, 80) + 'px';
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (input.trim()) {
+                                        socket.emit('chat', {message: input.trim()});
+                                        setInput('');
+                                        e.target.style.height = 'auto';
+                                    }
+                                }
+                            }}
+                        />
+                        <button
+                            className="btn btn-primary rounded-circle flex-shrink-0 shadow-sm"
+                            style={{width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
+                            onClick={() => {
+                                if (input.trim()) {
+                                    socket.emit('chat', {message: input.trim()});
+                                    setInput('');
+                                    const ta = document.querySelector('.chat-input-wrapper textarea');
+                                    if (ta) ta.style.height = 'auto';
+                                }
+                            }}>
+                            <i className="fas fa-paper-plane"></i>
+                        </button>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
+    const [rawInput, setRawInput] = useState('');
+    const isDrawer = roomData.room.current_drawer_id === tgId;
+    const messagesEndRef = useRef(null);
+
+    const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
+    const isFree = myGuessesCount < 4;
+    const isBlocked = myGuessesCount >= 6;
+    const needsPayment = myGuessesCount === 4;
+
+    const myMemberData = roomData.members.find(m => m.user_id === tgId);
+    const hasGivenUp = myMemberData?.has_given_up;
+
+    const totalGuessers = Math.max(0, roomData.members.length - 1);
+    const givenUpCount = roomData.members.filter(m => m.user_id !== roomData.room.current_drawer_id && m.has_given_up).length;
+
+    const wordData = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word : null;
+    const wordLength = wordData ? wordData.length : 10;
+    const unrevealedCount = wordData ? wordData.filter(w => !w.revealed).length : wordLength;
+
+    useEffect(() => {
+        if (rawInput.length > unrevealedCount) {
+            setRawInput(rawInput.slice(0, unrevealedCount));
+        }
+    }, [unrevealedCount, rawInput]);
+
+    const reconstructGuess = () => {
+        if (!wordData) return rawInput;
+        let result = '';
+        let rawIdx = 0;
+        for (const item of wordData) {
+            if (item.revealed) {
+                result += item.char;
+            } else {
+                result += rawInput[rawIdx] || ' ';
+                rawIdx++;
+            }
+        }
+        return result;
+    };
+
+    const handleGuessSubmit = () => {
+        if (isBlocked) return;
+        if (rawInput.length !== unrevealedCount) {
+            setModal({ type: 'error', title: 'Invalid Guess', content: `Please fill in all ${unrevealedCount} missing letters.`});
+            return;
+        }
+        
+        const fullGuess = reconstructGuess();
+
+        if (needsPayment) {
+            setModal({ type: 'confirm_guess_credit', guess: fullGuess, title: 'Unlock 2 Extra Guesses?' });
+            setRawInput('');
+        } else {
+            if (socket) socket.emit('guess', {guess: fullGuess});
+            setRawInput('');
+        }
+    };
+
+    const handleInputChange = (e) => {
+        const val = e.target.value.toUpperCase();
+        if (val.length <= unrevealedCount) {
+            setRawInput(val);
+        }
+    };
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [guesses]);
+
+    return (
+        <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
+            <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
+                {guesses.map(g => {
+                    const photo = roomData?.photos?.[g.user_id];
+                    return (
+                        <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
+                            {photo ? 
+                                <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
+                                <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
+                            }
+                            <div className="d-flex flex-column w-100">
+                                <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
+                                    {window.getDisplayName(g.user_id, roomData?.names)}
+                                </small>
+                                <span style={{marginTop: '2px'}}>{g.guess_text}</span>
+                            </div>
+                        </div>
+                    );
+                })}
+                <div ref={messagesEndRef} />
+            </div>
+            
+            {roomData.room.status === 'DRAWING' || roomData.room.status === 'PRE_DRAW' ? (
+                <div className="chat-input-wrapper d-flex flex-column mt-auto pb-3">
+                    <button 
+                        className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                        onClick={() => {
+                            setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                        }}
+                        disabled={!isDrawer && hasGivenUp}
+                    >
+                        <i className="fas fa-flag"></i> 
+                        {isDrawer ? 'Give Up Turn' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                    </button>
+
+                    {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
+                        <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
+                            <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
+                                
+                                <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
+                                    {wordData ? (
+                                        (() => {
+                                            let rawIdx = 0;
+                                            return wordData.map((item, i) => {
+                                                let displayChar = '';
+                                                let isHint = item.revealed;
+                                                let showCursor = false;
+                                                if (isHint) {
+                                                    displayChar = item.char;
+                                                } else {
+                                                    displayChar = rawInput[rawIdx] || '';
+                                                    if (rawIdx === rawInput.length && !isBlocked) showCursor = true;
+                                                    rawIdx++;
+                                                }
+                                                return (
+                                                    <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
+                                                        {displayChar}
+                                                        {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                    </div>
+                                                );
+                                            })
+                                        })()
+                                    ) : (
+                                        Array.from({length: wordLength}).map((_, i) => {
+                                            const showCursor = (i === rawInput.length) && !isBlocked;
+                                            return (
+                                                <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                    {rawInput[i] || ''}
+                                                    {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                                
+                                <input type="text"
+                                    className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
+                                    style={{opacity: 0, zIndex: 10, cursor: 'text'}}
+                                    value={rawInput}
+                                    onChange={handleInputChange}
+                                    onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
+                                    maxLength={unrevealedCount}
+                                    disabled={isBlocked}
+                                    autoComplete="off"
+                                    autoCorrect="off"
+                                    spellCheck="false"
+                                />
+                            </div>
+                            <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || rawInput.length !== unrevealedCount}>
+                                {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
+                            </button>
+                        </div>
+                    ) : null}
+                    
+                    {!isDrawer && !hasGivenUp && isBlocked && (
+                        <div className="text-danger fw-bold text-center small mt-1">Max 6 guesses reached.</div>
+                    )}
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemConfig }) => {
+    const { room, members } = roomData;
+    const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
+
+    return (
+        <div className="row pb-5">
+            <div className="col-12 col-lg-8 mx-auto">
+                <div className="whiteboard-wrapper">
+                    
+                    {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
+                    <div className="w-100 d-flex flex-wrap justify-content-center gap-2 mb-3 bg-light p-2 rounded-pill shadow-sm">
+                        {roomData.masked_word.map((item, i) => (
+                            <div 
+                                key={i}
+                                className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
+                                style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                onClick={() => {
+                                    if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                        setModal({ type: 'confirm_buy_hint', index: item.index });
+                                    }
+                                }}
+                                title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (1 Credit)" : ""}
+                            >
+                                {item.revealed ? item.char : '?'}
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
+
+                <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} systemConfig={systemConfig} />
+
+                    <div className="mt-4 w-100">
+                        <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
+                        {sortedMembers.map(m => {
+                            const photo = roomData?.photos?.[m.user_id];
+                            const isDrawer = room.current_drawer_id === m.user_id;
+                            return (
+                                <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: isDrawer ? 'var(--primary)' : 'transparent'}}>
+                                    <div className="d-flex align-items-center">
+                                        <div onClick={() => setProfileModal({user_id: m.user_id, pic: photo, gender: roomData.genders?.[m.user_id]})} className="cursor-pointer position-relative">
+                                            {photo ? 
+                                                <img src={photo} className="rounded-circle me-2 border" width="30" height="30" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Player"/> : 
+                                                <i className="fas fa-user-circle fs-3 text-secondary me-2 bg-white rounded-circle"></i>
+                                            }
+                                        </div>
+                                        <div className="d-flex flex-column">
+                                            <span className="fw-bold" style={{fontSize: '0.85rem'}}>
+                                                {window.getDisplayName(m.user_id, roomData?.names)} 
+                                                {m.user_id === tgId ? <small className="text-muted" style={{fontSize: '0.7em'}}> (You)</small> : ''}
+                                            </span>
+                                            <div className="d-flex align-items-center gap-1">
+                                                {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.6rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="d-flex align-items-center gap-2">
+                                        {room.is_private === 1 && room.creator_id === window.tgId && m.user_id !== window.tgId && (
+                                            <button className="btn btn-sm btn-outline-danger py-0 px-1 rounded" title="Kick Player" onClick={() => setModal({type: 'kick_player', target_id: m.user_id})}><i className="fas fa-times"></i></button>
+                                        )}
+                                        {isDrawer ? (
+                                            <span className="badge bg-primary shadow-sm" title="Drawing"><i className="fas fa-paint-brush"></i></span>
+                                        ) : m.is_ready ? (
+                                            <span className="badge bg-success shadow-sm" title="Ready"><i className="fas fa-check"></i></span>
+                                        ) : (
+                                            <span className="badge bg-secondary shadow-sm" title="Waiting"><i className="fas fa-hourglass-half"></i></span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+window.Whiteboard = Whiteboard;
+window.ChatBox = ChatBox;
+window.GuessBox = GuessBox;
+window.GameRoom = GameRoom;
