@@ -46,7 +46,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
 
         const Dashboard = ({ apiFetch }) => {
             const [stats, setStats] = useState(null);
@@ -158,6 +158,35 @@
                 await apiFetch('/reports/delete', 'POST', { id });
                 apiFetch('/reports').then(setReports);
             };
+            
+            const drawProofCanvas = useCallback((canvas) => {
+                if (!canvas || !proofModal || proofModal.context !== 'drawing') return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0,0, canvas.width, canvas.height);
+                try {
+                    const drawings = JSON.parse(proofModal.snapshot_data);
+                    if (Array.isArray(drawings)) {
+                        ctx.lineCap = 'round';
+                        ctx.lineWidth = 5;
+                        const scale = 400 / 500; 
+                        ctx.scale(scale, scale);
+                        
+                        drawings.forEach(data => {
+                            ctx.strokeStyle = data.color === 'black' ? '#000000' : (data.color || '#000000');
+                            const lines = data.lines;
+                            if (lines) {
+                                for (let i = 0; i < lines.length; i += 4) {
+                                    ctx.beginPath();
+                                    ctx.moveTo(lines[i], lines[i+1]);
+                                    ctx.lineTo(lines[i+2], lines[i+3]);
+                                    ctx.stroke();
+                                }
+                            }
+                        });
+                        ctx.setTransform(1, 0, 0, 1, 0, 0); 
+                    }
+                } catch(e) { console.error('Canvas Draw Error', e); }
+            }, [proofModal]);
 
             const filteredReports = reports.filter(r => {
                 if (reportFilter === 'all') return true;
@@ -328,7 +357,13 @@
                                             </div>
                                         )}
                                         {reportModalTab === 'proof' && (
-                                            <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
+                                            proofModal.context === 'drawing' ? (
+                                                <div className="bg-white p-3 border rounded shadow-sm d-flex justify-content-center">
+                                                    <canvas ref={drawProofCanvas} width="400" height="400" style={{border: '2px solid #cbd5e1', borderRadius: '12px', maxWidth: '100%', background: '#fff', backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '16px 16px'}}></canvas>
+                                                </div>
+                                            ) : (
+                                                <pre className="bg-white p-3 border rounded shadow-sm" style={{maxHeight: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.8rem'}}>{proofModal.snapshot_data}</pre>
+                                            )
                                         )}
                                     </div>
                                 </div>
@@ -694,6 +729,7 @@
             const [initData, setInitData] = useState('');
             const [error, setError] = useState('');
             const [tab, setTab] = useState('dashboard');
+            const [isVerified, setIsVerified] = useState(false); // New state to hold loading block
 
             useEffect(() => {
                 if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
@@ -704,16 +740,46 @@
                 }
             }, []);
 
+            // 🔐 Pre-verify against ADMIN_IDS from backend before rendering the UI
+            useEffect(() => {
+                if (initData) {
+                    fetch('/api/admin/verify', {
+                        headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData }
+                    })
+                    .then(res => {
+                        if (res.status === 403 || res.status === 401) {
+                            setError('Access Denied: You are not authorized as an Admin.');
+                            if (window.Telegram && window.Telegram.WebApp) {
+                                setTimeout(() => window.Telegram.WebApp.close(), 3000); // Closes MiniApp
+                            }
+                        } else {
+                            setIsVerified(true);
+                        }
+                    })
+                    .catch(err => {
+                        setError('Connection error verifying admin status.');
+                    });
+                }
+            }, [initData]);
+
             const apiFetch = async (path, method = 'GET', body = null) => {
                 const options = { method, headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData } };
                 if (body) options.body = JSON.stringify(body);
                 const res = await fetch(`/api/admin${path}`, options);
-                if (res.status === 403 || res.status === 401) { setError('Access Denied: You are not authorized.'); throw new Error('Auth'); }
+                
+                // Extra protection in-case status changes while app is open
+                if (res.status === 403 || res.status === 401) { 
+                    setError('Access Denied: You are not authorized.'); 
+                    if (window.Telegram && window.Telegram.WebApp) {
+                        setTimeout(() => window.Telegram.WebApp.close(), 3000);
+                    }
+                    throw new Error('Auth'); 
+                }
                 return res.json();
             };
 
-            if (error) return <div className="container mt-5"><div className="alert alert-danger shadow-lg p-5 text-center"><i className="fas fa-shield-alt fs-1 mb-3"></i><h4>{error}</h4><p className="mb-0">Please access this panel through the official Telegram Bot.</p></div></div>;
-            if (!initData) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
+            if (error) return <div className="container mt-5"><div className="alert alert-danger shadow-lg p-5 text-center"><i className="fas fa-shield-alt fs-1 mb-3"></i><h4>{error}</h4><p className="mb-0">Please access this panel through the official Telegram Bot. Closing...</p></div></div>;
+            if (!isVerified) return <div className="d-flex justify-content-center align-items-center vh-100"><div className="spinner-border text-primary"></div></div>;
 
             return (
                 <div className="d-flex app-container w-100">
