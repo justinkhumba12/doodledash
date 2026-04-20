@@ -7,7 +7,6 @@ async function getUserState(tg_id) {
     const [statsRows] = await db.query('SELECT invites FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?', [tg_id, weekKey]);
     const weeklyInvites = statsRows.length > 0 ? statsRows[0].invites : 0;
 
-    // Advanced scaling queries for consecutive days and task logic updates
     const [rows] = await db.query(`
         SELECT *,
         (last_streak_claim IS NULL OR DATE_FORMAT(last_streak_claim, '%Y-%m-%d') != DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as daily_available,
@@ -27,6 +26,10 @@ async function getUserState(tg_id) {
     
     // Attach DB weekly invites
     u.weekly_invites = weeklyInvites;
+
+    // Load user's style inventory
+    const [invRows] = await db.query('SELECT style_id FROM user_styles_inventory WHERE tg_id = ?', [tg_id]);
+    u.owned_styles = invRows.map(r => r.style_id);
 
     await redis.hset('user_credits', tg_id, u.credits);
     
