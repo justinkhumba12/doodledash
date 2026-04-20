@@ -38,7 +38,12 @@ const tgApiCall = (method, data) => {
 };
 
 const sendMsg = (chatId, text, replyMarkup, options = {}) => {
-    tgApiCall('sendMessage', { chat_id: chatId, text, reply_markup: replyMarkup, ...options });
+    // Strip null variables to prevent Telegram API parsing errors
+    const payload = { chat_id: chatId, text, ...options };
+    if (replyMarkup) {
+        payload.reply_markup = replyMarkup;
+    }
+    tgApiCall('sendMessage', payload);
 };
 
 // Get current ISO year-week format (e.g., "2024-W12")
