@@ -52,6 +52,7 @@ async function setupAdminPanel(app, io) {
 
     const adminRouter = express.Router();
 
+    // 🔐 ENFORCING ADMIN AUTHENTICATION ON EVERY ACTION
     adminRouter.use(async (req, res, next) => {
         const initData = req.headers['x-init-data'];
         if (!initData) return res.status(401).json({ error: 'Missing initData' });
@@ -67,7 +68,7 @@ async function setupAdminPanel(app, io) {
             const userObj = JSON.parse(urlParams.get('user'));
             const tgId = userObj.id.toString();
             
-            const adminIds = (process.env.ADMIN_IDS || '').split(',');
+            const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim());
             if (!isMock && !adminIds.includes(tgId)) {
                 return res.status(403).json({ error: 'Unauthorized: You are not listed in ADMIN_IDS.' });
             }
@@ -77,6 +78,11 @@ async function setupAdminPanel(app, io) {
         } catch (e) {
             return res.status(400).json({ error: 'Malformed initData payload.' });
         }
+    });
+
+    // Verification endpoint for the frontend Admin App loader
+    adminRouter.get('/verify', (req, res) => {
+        res.json({ success: true, adminId: req.adminId });
     });
 
     // --- DASHBOARD ANALYTICS ---
@@ -190,7 +196,6 @@ async function setupAdminPanel(app, io) {
         await db.query(`UPDATE users SET credits = credits + ?, gems = gems + ? WHERE tg_id = ?`, [credits || 0, gems || 0, tgId]);
         if (credits) await redis.hincrbyfloat('user_credits', tgId, credits);
         
-        // If an HTML formatted message was provided, send it through the Telegram Bot
         if (message && message.trim() !== '') {
             sendMsg(tgId, message, null, { parse_mode: 'HTML' });
         }
@@ -300,7 +305,6 @@ async function setupAdminPanel(app, io) {
             await redis.del('maintenance_end_time');
             await redis.del('maintenance_start_time');
 
-            // Add duration to all active private rooms
             const activeIds = await redis.smembers('active_rooms');
             for (const id of activeIds) {
                 const r = await getRoom(id);
@@ -386,7 +390,9 @@ async function setupAdminPanel(app, io) {
 async function handleAdminWebhook(update) {
     if (update?.message?.text === '/adminpanel') {
         const tgId = update.message.from.id.toString();
-        const adminIds = (process.env.ADMIN_IDS || '').split(',');
+        
+        // 🔐 Verifying against ADMIN_IDS
+        const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim());
         
         if (adminIds.includes(tgId)) {
             const webAppUrl = process.env.ADMIN_WEBAPP_URL || `${process.env.WEBAPP_URL}/admin.html`;
