@@ -3,6 +3,11 @@ const { useState, useEffect } = React;
 const ShopView = ({ user, socket, setModal, systemConfig }) => {
 const gemPackages = systemConfig?.gemPackages || [];
 const starPackages = systemConfig?.starPackages || [];
+const nameStyles = systemConfig?.nameStyles || [];
+const ownedStyleIds = user?.owned_styles || [];
+
+// Dynamically inject styling for the name styles using the global function from app.jsx
+window.useDynamicStyles(nameStyles.map(s => s.id), nameStyles);
 
 return (
     <div className="container mt-4 pb-5 text-center">
@@ -25,9 +30,56 @@ return (
 
         <i className="fas fa-store text-primary mb-3" style={{fontSize: '4rem'}}></i>
         <h3 className="fw-bold mb-2">Item Shop</h3>
-        <p className="text-muted">Get Gems and exchange them for Credits!</p>
+        <p className="text-muted">Get Gems, exchange for Credits, and buy custom Name Styles!</p>
         
         <div className="row g-3 mt-3 text-start">
+            <div className="col-12">
+                <div className="card bg-white rounded-4 border shadow-sm p-3 p-md-4 h-100">
+                    <h5 className="fw-bold mb-1"><i className="fas fa-paint-brush text-primary me-2"></i> Username Styles</h5>
+                    <p className="small text-muted mb-3">Customize your display name to stand out in the chat and leaderboards!</p>
+                    
+                    <div className="d-flex flex-row gap-3 overflow-auto pb-3 scrollable-row w-100 px-1 pt-2">
+                        {nameStyles.map(style => {
+                            const isOwned = ownedStyleIds.includes(style.id);
+                            return (
+                                <div key={style.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 flex-shrink-0" style={{ width: '240px' }}>
+                                    <div className="card-body p-3 d-flex flex-column h-100">
+                                        <div className="text-center p-3 mb-3 bg-white rounded border overflow-hidden d-flex align-items-center justify-content-center shadow-sm" style={{minHeight: '90px'}}>
+                                            <span className={style.class_name} data-name="DoodleDash">DoodleDash</span>
+                                        </div>
+                                        <div className="d-flex justify-content-between align-items-center mb-3 px-1">
+                                            <h6 className="fw-bold text-dark m-0">Style</h6>
+                                            {style.is_premium ? <span className="badge bg-warning text-dark shadow-sm"><i className="fas fa-star me-1"></i>Premium</span> : <span className="badge bg-secondary shadow-sm">Standard</span>}
+                                        </div>
+                                        
+                                        <div className="mt-auto d-flex flex-column gap-2">
+                                            {isOwned ? (
+                                                <button className="btn btn-secondary rounded-pill w-100 fw-bold" disabled>
+                                                    <i className="fas fa-check me-1"></i> Owned
+                                                </button>
+                                            ) : (
+                                                <>
+                                                    {style.is_premium ? (
+                                                        <button className="btn btn-info text-white rounded-pill w-100 fw-bold shadow-sm hover-up" onClick={(e) => { e.stopPropagation(); socket.emit('buy_style', { style_id: style.id, currency: 'gems' }); }}>
+                                                            <i className="fas fa-gem me-1"></i> {style.gem_price} Gems
+                                                        </button>
+                                                    ) : (
+                                                        <button className="btn btn-warning text-dark rounded-pill w-100 fw-bold shadow-sm hover-up" onClick={(e) => { e.stopPropagation(); socket.emit('buy_style', { style_id: style.id, currency: 'credits' }); }}>
+                                                            <i className="fas fa-coins me-1"></i> {style.credit_price} Credits
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                        {nameStyles.length === 0 && <span className="text-muted small w-100 text-center py-4">No styles available right now.</span>}
+                    </div>
+                </div>
+            </div>
+            
             <div className="col-12">
                 <div className="card bg-white rounded-4 border shadow-sm p-3 p-md-4 h-100">
                     <h5 className="fw-bold mb-1"><i className="fas fa-gem text-info me-2"></i> Buy Gems</h5>
@@ -87,7 +139,7 @@ return (
 
 };
 
-const ProfileView = ({ user, socket, setModal }) => {
+const ProfileView = ({ user, socket, setModal, setMainPageTab }) => {
 const [editingGender, setEditingGender] = useState(false);
 const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
 
@@ -190,6 +242,21 @@ return (
             </div>
         </div>
 
+        <div className="card bg-white rounded-4 border shadow-sm mb-4 cursor-pointer hover-up" onClick={() => setMainPageTab('inventory')}>
+            <div className="card-body p-3 d-flex align-items-center justify-content-between">
+                <div className="d-flex align-items-center gap-3">
+                    <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'}}>
+                        <i className="fas fa-box-open fs-5"></i>
+                    </div>
+                    <div>
+                        <h6 className="fw-bold text-dark mb-0">My Inventory</h6>
+                        <p className="text-muted small mb-0">View & equip purchased items</p>
+                    </div>
+                </div>
+                <i className="fas fa-chevron-right text-muted"></i>
+            </div>
+        </div>
+
         <div className="card bg-light border-dashed rounded-4 mb-3" style={{ transition: '0.3s' }}>
             <div className="card-body p-4 text-center">
                 <i className="fas fa-heart text-danger fs-1 mb-2"></i>
@@ -202,6 +269,67 @@ return (
 );
 
 
+};
+
+const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab }) => {
+    const ownedStyleIds = user?.owned_styles || [];
+    const nameStyles = systemConfig?.nameStyles || [];
+    const ownedStyles = nameStyles.filter(s => ownedStyleIds.includes(s.id));
+    const equippedStyle = user?.equipped_style;
+
+    window.useDynamicStyles(ownedStyleIds, nameStyles);
+
+    return (
+        <div className="container mt-4 pb-5">
+            <div className="d-flex align-items-center mb-4">
+                <button className="btn btn-light rounded-circle shadow-sm me-3 border" onClick={() => setMainPageTab('profile')}><i className="fas fa-arrow-left"></i></button>
+                <h3 className="fw-bold mb-0">Inventory</h3>
+            </div>
+
+            <div className="row g-3">
+                <div className="col-12">
+                    <div className="d-flex align-items-center gap-2 mb-3">
+                        <i className="fas fa-paint-brush fs-4 text-primary"></i>
+                        <h5 className="fw-bold text-secondary mb-0">Username Styles ({ownedStyles.length})</h5>
+                    </div>
+                    
+                    {ownedStyles.length === 0 ? (
+                        <div className="text-center p-5 bg-white rounded-4 border shadow-sm">
+                            <i className="fas fa-box-open text-muted opacity-50 mb-3" style={{fontSize: '3rem'}}></i>
+                            <p className="text-muted fw-bold">Your inventory is empty.</p>
+                            <button className="btn btn-primary rounded-pill fw-bold shadow-sm mt-2" onClick={() => setMainPageTab('shop')}>Visit Shop</button>
+                        </div>
+                    ) : (
+                        <div className="row g-3">
+                            {ownedStyles.map(s => {
+                                const isEquipped = equippedStyle === s.id;
+                                return (
+                                    <div key={s.id} className="col-12 col-md-6">
+                                        <div className={`card rounded-4 border shadow-sm p-3 h-100 ${isEquipped ? 'border-primary bg-primary bg-opacity-10' : 'bg-white'}`}>
+                                            <div className="d-flex flex-column h-100">
+                                                <div className="text-center p-3 mb-3 rounded border flex-grow-1 d-flex align-items-center justify-content-center overflow-hidden" style={{minHeight: '80px', backgroundColor: '#f3f4f8'}}>
+                                                    <span className={s.class_name} data-name={user?.name || 'Preview'}>{user?.name || 'Preview'}</span>
+                                                </div>
+                                                <div className="d-flex justify-content-between align-items-center mt-auto">
+                                                    <span className="small fw-bold text-muted">{s.is_premium ? 'Premium' : 'Standard'} Style</span>
+                                                    <button 
+                                                        className={`btn rounded-pill fw-bold px-4 btn-sm shadow-sm ${isEquipped ? 'btn-danger' : 'btn-success'}`}
+                                                        onClick={() => socket.emit('equip_style', { style_id: isEquipped ? null : s.id })}
+                                                    >
+                                                        {isEquipped ? <><i className="fas fa-times me-1"></i> Unequip</> : <><i className="fas fa-check me-1"></i> Equip</>}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 };
 
 const TasksView = ({ user, socket, setModal }) => {
@@ -488,7 +616,7 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 </div>
                             )}
                             <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                <span className="fw-bold text-dark" style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
+                                <span className={`fw-bold text-dark ${l.equipped_style || ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
                                 {l.username && l.username !== 'unset' ? (
                                     <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
                                         @{l.username}
@@ -766,6 +894,7 @@ return (
 
 window.ShopView = ShopView;
 window.ProfileView = ProfileView;
+window.InventoryView = InventoryView;
 window.TasksView = TasksView;
 window.LeaderboardView = LeaderboardView;
 window.LobbyView = LobbyView;
