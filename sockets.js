@@ -3,6 +3,11 @@ const { toHex, getWeekKey, validateInitData } = require('./utils');
 const { getRoom, saveRoom, releaseRoomMemory, deleteRoomData, broadcastRooms, checkRoomReset, syncRoom } = require('./roomManager');
 const { getUserState } = require('./userManager');
 const config = require('./config');
+const crypto = require('crypto');
+
+const hashPassword = (pwd) => {
+    return crypto.createHash('sha256').update(pwd.toString()).digest('hex');
+};
 
 const calculateStrokeLength = (lines) => {
     let strokeLength = 0;
@@ -57,8 +62,11 @@ module.exports = (io) => {
 
             if (!bypassCost) {
                 if (room.is_private) {
-                    if (room.creator_id !== userId && room.password !== password) {
-                        return socket.emit('join_error', 'Incorrect password.');
+                    const pwdStr = password ? password.toString() : '';
+                    if (room.creator_id !== userId) {
+                        if (!/^\d+$/.test(pwdStr) || room.password !== hashPassword(pwdStr)) {
+                            return socket.emit('join_error', 'Incorrect password.');
+                        }
                     }
                 }
             }
@@ -532,7 +540,12 @@ module.exports = (io) => {
                 const roomLimits = roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
 
                 const isPriv = Boolean(data.is_private);
-                const pwd = data.password || '';
+                const pwd = data.password ? data.password.toString() : '';
+
+                if (isPriv && (!/^\d+$/.test(pwd) || pwd.length < 6 || pwd.length > 10)) {
+                    return socket.emit('create_error', 'Password must be a numeric value between 6 and 10 digits.');
+                }
+
                 let maxMem = parseInt(data.max_members) || 6;
                 const expireHours = parseFloat(data.expire_hours) || 0.5;
 
@@ -567,7 +580,7 @@ module.exports = (io) => {
                     id: newRoomIdNum,
                     creator_id: currentUser,
                     is_private: isPriv ? 1 : 0,
-                    password: pwd,
+                    password: isPriv ? hashPassword(pwd) : '',
                     max_members: maxMem,
                     status: 'WAITING',
                     created_at: Date.now(),
@@ -592,6 +605,25 @@ module.exports = (io) => {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
                 await performJoinRoom(currentUser, data.room_id, data.password || '');
+            });
+        });
+
+        socket.on('change_password', async ({ password }) => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                if (!currentUser || !currentRoom) return;
+
+                const room = await getRoom(currentRoom);
+                if (room && room.is_private && room.creator_id === currentUser) {
+                    const pwd = password ? password.toString() : '';
+                    if (!/^\d+$/.test(pwd) || pwd.length < 6 || pwd.length > 10) {
+                        return socket.emit('create_error', 'Password must be a numeric value between 6 and 10 digits.');
+                    }
+                    room.password = hashPassword(pwd);
+                    await saveRoom(room);
+                    socket.emit('reward_success', 'Room password updated successfully.');
+                }
             });
         });
 
