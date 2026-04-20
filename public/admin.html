@@ -101,6 +101,45 @@
             const loadStyles = () => apiFetch('/styles').then(setStyles);
             useEffect(() => { loadStyles(); }, []);
 
+            // Dynamically load Fonts & CSS for accurate preview rendering
+            useEffect(() => {
+                if (!styles || styles.length === 0) return;
+                
+                const requiredFonts = new Set();
+                let combinedCSS = "";
+                
+                styles.forEach(s => {
+                    if (s.font_family) requiredFonts.add(s.font_family);
+                    if (s.css_content) combinedCSS += `\n/* Loaded for ${s.id} */\n${s.css_content}`;
+                });
+                
+                if (requiredFonts.size > 0) {
+                    const fontFamilies = Array.from(requiredFonts).map(f => `family=${f.replace(/ /g, '+')}`).join('&');
+                    const fontUrl = `https://fonts.googleapis.com/css2?${fontFamilies}&display=swap`;
+                    
+                    let linkTag = document.getElementById('dynamic-google-fonts');
+                    if (!linkTag) {
+                        linkTag = document.createElement('link');
+                        linkTag.id = 'dynamic-google-fonts';
+                        linkTag.rel = 'stylesheet';
+                        document.head.appendChild(linkTag);
+                    }
+                    if (linkTag.href !== fontUrl) {
+                        linkTag.href = fontUrl;
+                    }
+                }
+                
+                let styleTag = document.getElementById('dynamic-room-styles');
+                if (!styleTag) {
+                    styleTag = document.createElement('style');
+                    styleTag.id = 'dynamic-room-styles';
+                    document.head.appendChild(styleTag);
+                }
+                if (styleTag.innerHTML !== combinedCSS) {
+                    styleTag.innerHTML = combinedCSS;
+                }
+            }, [styles]);
+
             const updateStylePrices = async (id, credit_price, gem_price) => {
                 await apiFetch('/styles/update', 'POST', { id, credit_price: Number(credit_price), gem_price: Number(gem_price) });
                 alert('Style prices updated globally!');
@@ -128,7 +167,9 @@
                                 <tbody>
                                     {styles.map(s => (
                                         <tr key={s.id}>
-                                            <td className="fw-bold fs-5"><span style={{fontFamily: s.font_family?.split(':')[0] || 'sans-serif', color: 'var(--primary)'}}>DoodleDash</span></td>
+                                            <td className="fw-bold fs-5 bg-light rounded m-2 inline-block py-3 px-4 shadow-sm" style={{ minWidth: '150px' }}>
+                                                <span className={s.class_name} data-name="DoodleDash">DoodleDash</span>
+                                            </td>
                                             <td><code className="text-secondary bg-light px-2 py-1 rounded">{s.class_name}</code></td>
                                             <td>
                                                 {s.is_premium ? <span className="badge bg-info text-dark shadow-sm">Premium</span> : <span className="badge bg-secondary shadow-sm">Standard</span>}
