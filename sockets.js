@@ -177,23 +177,23 @@ module.exports = (io) => {
                 const maxRoomsRaw = await redis.get('config_max_rooms');
                 const roomLimitsRaw = await redis.get('config_room_limits');
                 
+                // Fetch name styles to pass to the client
+                const [nameStyles] = await db.query('SELECT * FROM name_styles');
+
                 const systemConfig = {
                     maintenance: { active: maint === '1', end_time: maintEndTime },
                     gemPackages: packagesRaw ? JSON.parse(packagesRaw) : [
-                        { id: 1, gems: 1, credits: 5 },
-                        { id: 2, gems: 3, credits: 15 },
-                        { id: 3, gems: 5, credits: 25 },
-                        { id: 4, gems: 10, credits: 50 }
+                        { id: 1, gems: 1, credits: 5 }, { id: 2, gems: 3, credits: 15 },
+                        { id: 3, gems: 5, credits: 25 }, { id: 4, gems: 10, credits: 50 }
                     ],
                     starPackages: starPackagesRaw ? JSON.parse(starPackagesRaw) : [
-                        { id: 1, stars: 20, gems: 20 },
-                        { id: 2, stars: 50, gems: 50 },
-                        { id: 3, stars: 100, gems: 100 },
-                        { id: 4, stars: 500, gems: 500 }
+                        { id: 1, stars: 20, gems: 20 }, { id: 2, stars: 50, gems: 50 },
+                        { id: 3, stars: 100, gems: 100 }, { id: 4, stars: 500, gems: 500 }
                     ],
                     inkConfig: inkConfigRaw ? JSON.parse(inkConfigRaw) : { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 },
                     maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250,
-                    roomLimits: roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 }
+                    roomLimits: roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 },
+                    nameStyles
                 };
 
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom, systemConfig });
@@ -201,6 +201,64 @@ module.exports = (io) => {
                 console.error('Auth Error', err); 
                 socket.emit('auth_error', 'Authentication processing failed.');
             }
+        });
+
+        // Store Logic for Styles
+        socket.on('buy_style', async ({ style_id, currency }) => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser || !style_id || !currency) return;
+
+            const [styleRows] = await db.query('SELECT * FROM name_styles WHERE id = ?', [style_id]);
+            if (styleRows.length === 0) return socket.emit('create_error', 'Style not found.');
+            const style = styleRows[0];
+
+            const [invCheck] = await db.query('SELECT * FROM user_styles_inventory WHERE tg_id = ? AND style_id = ?', [currentUser, style_id]);
+            if (invCheck.length > 0) return socket.emit('create_error', 'You already own this style.');
+
+            const [userRows] = await db.query('SELECT credits, gems FROM users WHERE tg_id = ?', [currentUser]);
+            if (userRows.length === 0) return;
+            const u = userRows[0];
+
+            if (currency === 'credits') {
+                if (style.is_premium) return socket.emit('create_error', 'This style can only be purchased with Gems.');
+                if (u.credits < style.credit_price) return socket.emit('create_error', 'Not enough credits.');
+                
+                await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [style.credit_price, currentUser]);
+                await redis.hincrbyfloat('user_credits', currentUser, -style.credit_price);
+            } else if (currency === 'gems') {
+                if (u.gems < style.gem_price) return socket.emit('create_error', 'Not enough gems.');
+                await db.query('UPDATE users SET gems = gems - ? WHERE tg_id = ?', [style.gem_price, currentUser]);
+            } else {
+                return;
+            }
+
+            await db.query('INSERT INTO user_styles_inventory (tg_id, style_id) VALUES (?, ?)', [currentUser, style_id]);
+            
+            socket.emit('reward_success', 'Style purchased and added to your inventory!');
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
+        });
+
+        socket.on('equip_style', async ({ style_id }) => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser) return;
+
+            if (!style_id) {
+                await db.query('UPDATE users SET equipped_style = NULL WHERE tg_id = ?', [currentUser]);
+            } else {
+                const [inv] = await db.query('SELECT * FROM user_styles_inventory WHERE tg_id = ? AND style_id = ?', [currentUser, style_id]);
+                if (inv.length === 0) return socket.emit('create_error', 'You do not own this style.');
+                await db.query('UPDATE users SET equipped_style = ? WHERE tg_id = ?', [style_id, currentUser]);
+            }
+
+            const currentRoom = socket.data.currentRoom;
+            if (currentRoom) {
+                await syncRoom(currentRoom, io);
+            }
+
+            socket.emit('reward_success', style_id ? 'Style equipped successfully!' : 'Style unequipped.');
+            const userState = await getUserState(currentUser);
+            if (userState) socket.emit('user_update', userState);
         });
 
         socket.on('set_ready', async () => {
@@ -300,20 +358,22 @@ module.exports = (io) => {
                     const result = [];
                     const ids = rows.map(r => r.tg_id);
                     
-                    const [userRows] = await db.query(`SELECT tg_id, avatar_url, gender, name FROM users WHERE tg_id IN (?)`, [ids]);
+                    const [userRows] = await db.query(`SELECT tg_id, avatar_url, gender, name, equipped_style FROM users WHERE tg_id IN (?)`, [ids]);
                     const avatarMap = {};
                     const genderMap = {};
                     const nameMap = {};
+                    const styleMap = {};
                     userRows.forEach(u => {
                         avatarMap[u.tg_id] = u.avatar_url;
                         genderMap[u.tg_id] = u.gender;
                         nameMap[u.tg_id] = u.name;
+                        styleMap[u.tg_id] = u.equipped_style;
                     });
 
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id], name: nameMap[id] });
+                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id], name: nameMap[id], equipped_style: styleMap[id] });
                     }
                     return result;
                 };
@@ -337,13 +397,9 @@ module.exports = (io) => {
 
         socket.on('get_donators_leaderboard', async () => {
             try {
-                const cached = await redis.get('donators_leaderboard');
-                if (cached) {
-                    return socket.emit('donators_leaderboard_data', JSON.parse(cached));
-                }
-                
+                // To keep live equipped styles, we dynamically fetch them
                 const [rows] = await db.query(`
-                    SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender, u.name
+                    SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender, u.name, u.equipped_style
                     FROM donations d
                     LEFT JOIN users u ON d.tg_id = u.tg_id
                     ORDER BY d.total_donated DESC LIMIT 50
@@ -352,9 +408,8 @@ module.exports = (io) => {
                 const leaderboard = [];
                 for (const row of rows) {
                     const username = await redis.hget('user_usernames', row.tg_id) || 'unset';
-                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url, gender: row.gender, name: row.name });
+                    leaderboard.push({ tg_id: row.tg_id, total_donated: row.total_donated, username, avatar_url: row.avatar_url, gender: row.gender, name: row.name, equipped_style: row.equipped_style });
                 }
-                await redis.set('donators_leaderboard', JSON.stringify(leaderboard), 'EX', 86400); 
                 socket.emit('donators_leaderboard_data', leaderboard);
             } catch (err) { console.error('Donators leaderboard error:', err); }
         });
