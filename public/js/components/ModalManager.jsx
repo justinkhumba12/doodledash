@@ -158,21 +158,24 @@ if (modal.type === 'maintenance') {
             </div>
 
             {isPriv && (
-                <input type="text" className="form-control mb-3" placeholder="Set Password (6-10 chars)..." value={pwd} onChange={e => setPwd(e.target.value)} />
+                <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password (6-10 digits)..." value={pwd} onChange={e => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setPwd(val.slice(0, 10));
+                }} />
             )}
 
             <div className="mb-3">
                 <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players {isPriv ? `(Free up to ${roomLimits.privateFree}, then ${roomLimits.privateExtraCost} Cred/Player)` : ''}</label>
                 {isPriv ? (
-                    <div className="d-flex gap-2 overflow-auto pb-2 px-1 hide-scrollbar">
+                    <div className="d-flex gap-2 overflow-auto pb-3 px-2 hide-scrollbar">
                         {Array.from({length: Math.max(1, roomLimits.privateMax - 1)}, (_, i) => i + 2).map(num => {
                             const isSelected = maxMembers === num;
                             const extra = Math.max(0, num - roomLimits.privateFree);
                             const cost = extra * roomLimits.privateExtraCost;
                             return (
                                 <div key={num}
-                                     className={`flex-shrink-0 text-center border rounded-3 py-2 px-2 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                     onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '60px'}}>
+                                     className={`flex-shrink-0 text-center border rounded-3 py-3 px-3 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow' : 'bg-white text-muted border-light shadow-sm'}`}
+                                     onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '70px'}}>
                                     <div className="fw-bold fs-5">{num}</div>
                                     <div style={{fontSize: '0.65rem', opacity: isSelected ? 0.9 : 0.6}}>
                                         <i className="fas fa-coins me-1"></i>{cost}
@@ -233,8 +236,8 @@ if (modal.type === 'maintenance') {
 } else if (modal.type === 'change_password') {
     content = (
         <>
-            <p className="text-muted small">Set a new password (6-10 characters).</p>
-            <input type="text" className="form-control mb-3" placeholder="New Password..." value={pwd} onChange={e => setPwd(e.target.value)} />
+            <p className="text-muted small">Set a new numeric password (6-10 digits).</p>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="New Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
             <div className="d-flex gap-2">
                 <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                 <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
@@ -254,13 +257,71 @@ if (modal.type === 'maintenance') {
 } else if (modal.type === 'prompt_pwd') {
     content = (
         <>
-            <p className="text-muted small mb-3">This room is private. Please enter the password to join.</p>
-            <input type="text" className="form-control mb-3 text-center fw-bold" placeholder="Password" value={pwd} onChange={e => setPwd(e.target.value)} />
+            <p className="text-muted small mb-3">This room is private. Please enter the numeric password to join.</p>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
             <div className="d-flex gap-2">
                 <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                <button className="btn btn-primary w-50 rounded-pill" disabled={!pwd} onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); close(); }}>Join</button>
+                <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); close(); }}>Join</button>
             </div>
         </>
+    );
+} else if (modal.type === 'item_description') {
+    title = modal.itemType === 'gems' ? 'Gems Package' : 'Credits Package';
+    content = (
+        <div className="text-center py-2">
+            <i className={`fas ${modal.itemType === 'gems' ? 'fa-gem text-info' : 'fa-coins text-warning'} fs-1 mb-3`}></i>
+            <h4 className="fw-bold mb-2">{modal.itemType === 'gems' ? `${modal.pkg.gems} Gems` : `${modal.pkg.credits} Credits`}</h4>
+            <p className="text-muted small mb-4">
+                {modal.itemType === 'gems' 
+                    ? `This package grants you ${modal.pkg.gems} Gems, which can be exchanged for Credits to be used in the game.`
+                    : `Exchange ${modal.pkg.gems} Gems to receive ${modal.pkg.credits} Credits instantly!`
+                }
+            </p>
+            {modal.itemType === 'gems' ? (
+                <button className="btn btn-primary w-100 rounded-pill fw-bold py-2 shadow-sm" onClick={() => setModal({ type: 'confirm_buy_gems', pkg: modal.pkg })}>
+                    Purchase for {modal.pkg.stars} Stars
+                </button>
+            ) : (
+                <button className={`btn w-100 rounded-pill fw-bold py-2 shadow-sm ${modal.canAfford ? 'btn-success' : 'btn-secondary'}`} disabled={!modal.canAfford} onClick={() => modal.canAfford && setModal({ type: 'confirm_exchange_gems', pkg: modal.pkg })}>
+                    {modal.canAfford ? `Exchange for ${modal.pkg.gems} Gems` : `Not enough Gems (${modal.pkg.gems} required)`}
+                </button>
+            )}
+        </div>
+    );
+} else if (modal.type === 'confirm_buy_gems') {
+    title = 'Confirm Purchase';
+    content = (
+        <div className="text-center py-2">
+            <h5 className="fw-bold mb-3">Buy {modal.pkg.gems} Gems?</h5>
+            <p className="text-muted small mb-4">You will be redirected to Telegram to complete the purchase of {modal.pkg.gems} Gems for {modal.pkg.stars} Stars.</p>
+            <div className="d-flex gap-2">
+                <button className="btn btn-secondary w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                <button className="btn btn-primary w-50 rounded-pill fw-bold" onClick={() => {
+                    close();
+                    const botLink = `https://t.me/doodledashbot?start=buygems_${modal.pkg.stars}`;
+                    if (window.tg && window.tg.openTelegramLink) {
+                        try { window.tg.openTelegramLink(botLink); } catch (e) { window.open(botLink, '_blank'); }
+                    } else {
+                        window.open(botLink, '_blank');
+                    }
+                }}>Proceed</button>
+            </div>
+        </div>
+    );
+} else if (modal.type === 'confirm_exchange_gems') {
+    title = 'Confirm Exchange';
+    content = (
+        <div className="text-center py-2">
+            <h5 className="fw-bold mb-3">Exchange {modal.pkg.gems} Gems?</h5>
+            <p className="text-muted small mb-4">Are you sure you want to exchange {modal.pkg.gems} Gems for {modal.pkg.credits} Credits?</p>
+            <div className="d-flex gap-2">
+                <button className="btn btn-secondary w-50 rounded-pill fw-bold" onClick={close}>Cancel</button>
+                <button className="btn btn-success w-50 rounded-pill fw-bold" onClick={() => {
+                    socket.emit('exchange_gems', { package_id: modal.pkg.id });
+                    close();
+                }}>Confirm</button>
+            </div>
+        </div>
     );
 } else if (modal.type === 'confirm_leave') {
     title = 'Leave Room?';
