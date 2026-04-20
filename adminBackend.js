@@ -190,6 +190,19 @@ async function setupAdminPanel(app, io) {
         } catch(e) { res.status(500).json({ error: e.message }); }
     });
 
+    // --- STYLES MANAGEMENT ---
+    adminRouter.get('/styles', async (req, res) => {
+        const [rows] = await db.query('SELECT * FROM name_styles');
+        res.json(rows);
+    });
+
+    adminRouter.post('/styles/update', async (req, res) => {
+        const { id, credit_price, gem_price } = req.body;
+        await db.query('UPDATE name_styles SET credit_price = ?, gem_price = ? WHERE id = ?', [credit_price, gem_price, id]);
+        await logAdminAction(req.adminId, 'UPDATE_STYLE', { id, credit_price, gem_price });
+        res.json({ success: true });
+    });
+
     // --- ECONOMY & CONFIG ---
     adminRouter.post('/economy/modify', async (req, res) => {
         const { tgId, credits, gems, message } = req.body;
