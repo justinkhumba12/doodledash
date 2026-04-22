@@ -88,6 +88,7 @@
                                         </tr>
                                     ))}
                                 </tbody>
+                                        
                             </table>
                         </div>
                     </div>
@@ -98,6 +99,7 @@
         const StylesManager = ({ apiFetch }) => {
             const [styles, setStyles] = useState([]);
             const [showAddForm, setShowAddForm] = useState(false);
+            const [editModal, setEditModal] = useState(null);
             const [newStyle, setNewStyle] = useState({ class_name: '', is_premium: false, credit_price: 0, gem_price: 0, font_family: '', css_content: '', is_hidden: false });
             
             const loadStyles = () => apiFetch('/styles').then(setStyles);
@@ -148,7 +150,10 @@
                     credit_price: Number(s.credit_price), 
                     gem_price: Number(s.gem_price),
                     is_premium: Boolean(s.is_premium),
-                    is_hidden: Boolean(s.is_hidden)
+                    is_hidden: Boolean(s.is_hidden),
+                    css_content: s.css_content,
+                    class_name: s.class_name,
+                    font_family: s.font_family
                 });
                 alert('Style updated globally!');
                 loadStyles();
@@ -161,7 +166,10 @@
                     credit_price: Number(updatedStyle.credit_price), 
                     gem_price: Number(updatedStyle.gem_price),
                     is_premium: Boolean(updatedStyle.is_premium),
-                    is_hidden: Boolean(updatedStyle.is_hidden)
+                    is_hidden: Boolean(updatedStyle.is_hidden),
+                    css_content: updatedStyle.css_content,
+                    class_name: updatedStyle.class_name,
+                    font_family: updatedStyle.font_family
                 });
                 loadStyles();
             };
@@ -281,7 +289,8 @@
                                             </td>
                                             <td>
                                                 <div className="btn-group shadow-sm">
-                                                    <button className="btn btn-sm btn-primary fw-bold px-3" onClick={() => updateStyle(s)} title="Save Changes"><i className="fas fa-save"></i></button>
+                                                    <button className="btn btn-sm btn-info text-white px-3" onClick={() => setEditModal(s)} title="Edit CSS & Details"><i className="fas fa-edit"></i></button>
+                                                    <button className="btn btn-sm btn-primary fw-bold px-3" onClick={() => updateStyle(s)} title="Save Inline Changes"><i className="fas fa-save"></i></button>
                                                     <button className="btn btn-sm btn-danger px-3" onClick={() => deleteStyle(s.id)} title="Delete Style"><i className="fas fa-trash"></i></button>
                                                 </div>
                                             </td>
@@ -292,6 +301,42 @@
                             </table>
                         </div>
                     </div>
+
+                    {editModal && (
+                        <div className="modal d-block" style={{background: 'rgba(0,0,0,0.6)', zIndex: 1050}}>
+                            <div className="modal-dialog modal-dialog-centered modal-lg">
+                                <div className="modal-content border-0 shadow-lg rounded-4">
+                                    <div className="modal-header bg-dark text-white p-3">
+                                        <h5 className="modal-title fs-6"><i className="fas fa-code me-2"></i>Edit Style Attributes</h5>
+                                        <button className="btn-close btn-close-white" onClick={() => setEditModal(null)}></button>
+                                    </div>
+                                    <div className="modal-body bg-light p-4 text-start">
+                                        <div className="row g-3">
+                                            <div className="col-md-6">
+                                                <label className="form-label small fw-bold">CSS Class Name *</label>
+                                                <input type="text" className="form-control" value={editModal.class_name} onChange={e => setEditModal({...editModal, class_name: e.target.value})} />
+                                            </div>
+                                            <div className="col-md-6">
+                                                <label className="form-label small fw-bold">Google Font Family</label>
+                                                <input type="text" className="form-control" value={editModal.font_family || ''} onChange={e => setEditModal({...editModal, font_family: e.target.value})} />
+                                            </div>
+                                            <div className="col-12">
+                                                <label className="form-label small fw-bold">Custom CSS Code</label>
+                                                <textarea className="form-control font-monospace" rows="5" value={editModal.css_content || ''} onChange={e => setEditModal({...editModal, css_content: e.target.value})}></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="modal-footer bg-light border-top-0 d-flex justify-content-end p-3">
+                                        <button className="btn btn-secondary fw-bold" onClick={() => setEditModal(null)}>Cancel</button>
+                                        <button className="btn btn-primary fw-bold px-4" onClick={async () => {
+                                            await updateStyle(editModal);
+                                            setEditModal(null);
+                                        }}>Save Updates</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -489,6 +534,7 @@
                                     ))}
                                     {filteredReports.length === 0 && <tr><td colSpan="5" className="text-center p-4 text-muted">No reports found matching criteria.</td></tr>}
                                 </tbody>
+                                
                             </table>
                         </div>
                     </div>
@@ -1013,4 +1059,3 @@
     </script>
 </body>
 </html>
-
