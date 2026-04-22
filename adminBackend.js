@@ -28,11 +28,11 @@ async function setupAdminPanel(app, io) {
             )
         `);
         
-        // Ensure name_styles table exists with all properties
+        // Ensure name_styles table exists with all properties, using VARCHAR for id to match class_name
         await db.query(`
             CREATE TABLE IF NOT EXISTS name_styles (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                class_name VARCHAR(100) NOT NULL UNIQUE,
+                id VARCHAR(100) PRIMARY KEY,
+                class_name VARCHAR(100) NOT NULL,
                 is_premium BOOLEAN DEFAULT 0,
                 credit_price INT DEFAULT 0,
                 gem_price INT DEFAULT 0,
@@ -41,6 +41,14 @@ async function setupAdminPanel(app, io) {
                 is_hidden BOOLEAN DEFAULT 0
             )
         `);
+
+        // Migration step: Try converting existing `id` columns to VARCHAR and making id = class_name
+        try {
+            await db.query(`ALTER TABLE name_styles MODIFY id VARCHAR(100)`);
+            await db.query(`UPDATE name_styles SET id = class_name`);
+        } catch (e) {
+            // Safely ignored: Table might already be migrated or DB engine prevents modify
+        }
 
         // Ensure name_styles has is_hidden column just in case it was created earlier without it
         try {
@@ -232,11 +240,12 @@ async function setupAdminPanel(app, io) {
     adminRouter.post('/styles/update', async (req, res) => {
         try {
             const { id, credit_price, gem_price, is_premium, is_hidden, css_content, class_name, font_family } = req.body;
+            // Update both ID and class_name to the same provided value 
             await db.query(
-                'UPDATE name_styles SET credit_price = ?, gem_price = ?, is_premium = ?, is_hidden = ?, css_content = ?, class_name = ?, font_family = ? WHERE id = ?', 
-                [Number(credit_price)||0, Number(gem_price)||0, is_premium ? 1 : 0, is_hidden ? 1 : 0, css_content || null, class_name, font_family || null, id]
+                'UPDATE name_styles SET id = ?, class_name = ?, credit_price = ?, gem_price = ?, is_premium = ?, is_hidden = ?, css_content = ?, font_family = ? WHERE id = ?', 
+                [class_name, class_name, Number(credit_price)||0, Number(gem_price)||0, is_premium ? 1 : 0, is_hidden ? 1 : 0, css_content || null, font_family || null, id]
             );
-            await logAdminAction(req.adminId, 'UPDATE_STYLE', { id, credit_price, gem_price, is_premium, is_hidden, class_name });
+            await logAdminAction(req.adminId, 'UPDATE_STYLE', { id: class_name, credit_price, gem_price, is_premium, is_hidden, class_name });
             res.json({ success: true });
         } catch(e) { res.status(500).json({ error: e.message }); }
     });
@@ -244,11 +253,12 @@ async function setupAdminPanel(app, io) {
     adminRouter.post('/styles/add', async (req, res) => {
         try {
             const { class_name, is_premium, credit_price, gem_price, font_family, css_content, is_hidden } = req.body;
+            // Insert the same string into both `id` and `class_name`
             await db.query(
-                'INSERT INTO name_styles (class_name, is_premium, credit_price, gem_price, font_family, css_content, is_hidden) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [class_name, is_premium ? 1 : 0, Number(credit_price)||0, Number(gem_price)||0, font_family || null, css_content || null, is_hidden ? 1 : 0]
+                'INSERT INTO name_styles (id, class_name, is_premium, credit_price, gem_price, font_family, css_content, is_hidden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [class_name, class_name, is_premium ? 1 : 0, Number(credit_price)||0, Number(gem_price)||0, font_family || null, css_content || null, is_hidden ? 1 : 0]
             );
-            await logAdminAction(req.adminId, 'ADD_STYLE', { class_name, is_premium });
+            await logAdminAction(req.adminId, 'ADD_STYLE', { id: class_name, class_name, is_premium });
             res.json({ success: true });
         } catch(e) { res.status(500).json({ error: e.message }); }
     });
