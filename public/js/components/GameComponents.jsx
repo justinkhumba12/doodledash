@@ -539,6 +539,8 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
                 {chats.map(c => {
                     const photo = roomData?.photos?.[c.user_id];
                     const isDeleted = c.message === '[Deleted by admin]' || c.message === '[Deleted by room creator]';
+                    const userStyle = roomData?.styles?.[c.user_id] || '';
+                    const displayName = c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
                     
                     return (
                         <div key={c.id} 
@@ -561,8 +563,8 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
                                     <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                             )}
                             <div className="d-flex flex-column w-100">
-                                <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
+                                <small className={`fw-bold ${userStyle}`} data-name={displayName} style={{fontSize: '0.75rem', color: userStyle ? undefined : (c.user_id === tgId ? 'var(--primary)' : '#64748b'), lineHeight: '1'}}>
+                                    {displayName}
                                 </small>
                                 <span style={{marginTop: '2px', fontStyle: isDeleted ? 'italic' : 'normal', color: isDeleted ? '#94a3b8' : 'inherit'}}>{c.message}</span>
                             </div>
@@ -709,6 +711,8 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                 {guesses.map(g => {
                     const photo = roomData?.photos?.[g.user_id];
+                    const userStyle = roomData?.styles?.[g.user_id] || '';
+                    const displayName = window.getDisplayName(g.user_id, roomData?.names);
                     return (
                         <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
                             {photo ? 
@@ -716,8 +720,8 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
                                 <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                             }
                             <div className="d-flex flex-column w-100">
-                                <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {window.getDisplayName(g.user_id, roomData?.names)}
+                                <small className={`fw-bold ${userStyle}`} data-name={displayName} style={{fontSize: '0.75rem', color: userStyle ? undefined : (g.user_id === tgId ? 'var(--primary)' : '#64748b'), lineHeight: '1'}}>
+                                    {displayName}
                                 </small>
                                 <span style={{marginTop: '2px'}}>{g.guess_text}</span>
                             </div>
@@ -844,6 +848,8 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         {sortedMembers.map(m => {
                             const photo = roomData?.photos?.[m.user_id];
                             const isDrawer = room.current_drawer_id === m.user_id;
+                            const userStyle = roomData?.styles?.[m.user_id] || '';
+                            const displayName = window.getDisplayName(m.user_id, roomData?.names);
                             return (
                                 <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: isDrawer ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
@@ -854,8 +860,8 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                             }
                                         </div>
                                         <div className="d-flex flex-column">
-                                            <span className="fw-bold" style={{fontSize: '0.85rem'}}>
-                                                {window.getDisplayName(m.user_id, roomData?.names)} 
+                                            <span style={{fontSize: '0.85rem'}}>
+                                                <span className={`fw-bold ${userStyle}`} data-name={displayName}>{displayName}</span>
                                                 {m.user_id === tgId ? <small className="text-muted" style={{fontSize: '0.7em'}}> (You)</small> : ''}
                                             </span>
                                             <div className="d-flex align-items-center gap-1">
