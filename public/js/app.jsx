@@ -59,8 +59,9 @@ window.getStyleClass = (styleId, systemConfig) => {
     return style ? style.class_name : '';
 };
 
-// FIX for Blank Screen Issue: Convert the global function Hook into a proper React Component
-const DynamicStyles = ({ activeStyleIds, styleDatabase }) => {
+// CRITICAL FIX: Revert DynamicStyles to a proper Custom Hook instead of a React Component.
+// The previous change caused a blank screen because external files expecting a hook threw an Invalid Hook Call error.
+window.DynamicStyles = (activeStyleIds, styleDatabase) => {
     const { useEffect } = React;
     useEffect(() => {
         if (!styleDatabase || !activeStyleIds) return;
@@ -104,10 +105,7 @@ const DynamicStyles = ({ activeStyleIds, styleDatabase }) => {
         }
         
     }, [JSON.stringify(activeStyleIds), styleDatabase]);
-    
-    return null;
 };
-window.DynamicStyles = DynamicStyles;
 
 
 const { useState, useEffect, useRef, useCallback } = React;
@@ -150,6 +148,9 @@ const App = () => {
     const lastKnownRoomRef = useRef(null);
 
     const [idleTimer, setIdleTimer] = useState(30);
+
+    // Call the global Hook here dynamically for the main app container
+    window.DynamicStyles(systemConfig?.nameStyles?.map(s => s.id) || [], systemConfig?.nameStyles || []);
 
     useEffect(() => {
         let isMounted = true;
@@ -571,8 +572,6 @@ const App = () => {
 
     return (
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
-            
-            <DynamicStyles activeStyleIds={systemConfig?.nameStyles?.map(s => s.id) || []} styleDatabase={systemConfig?.nameStyles || []} />
             
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
