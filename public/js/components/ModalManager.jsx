@@ -538,17 +538,19 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         const displayName = getDisplayName(id, name, username);
 
         content = (
-            <div className="text-center py-2">
+            <div className="d-flex flex-column align-items-center justify-content-center py-2 text-center">
                 {modal.pic ? (
                     <img src={modal.pic} className="rounded-circle shadow-sm border mb-3" width="80" height="80" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
                 ) : (
                     <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '80px', color: 'var(--primary)'}}></i>
                 )}
-                <h4 className={`fw-bold mb-1 ${styleClass}`} data-name={displayName}>{displayName}</h4>
-                <div className="text-muted small mb-4">
-                    {window.renderGenderIcon(modal.gender)} {modal.gender || 'Not Set'}
+                <div className="w-100 d-flex flex-column align-items-center">
+                    <h4 className={`fw-bold mb-1 ${styleClass}`} style={{wordBreak: 'break-word'}} data-name={displayName}>{displayName}</h4>
+                    <div className="text-muted small mb-4 mt-1">
+                        {window.renderGenderIcon(modal.gender)} {modal.gender || 'Not Set'}
+                    </div>
                 </div>
-                <button className="btn btn-secondary w-100 rounded-pill" onClick={close}>Close</button>
+                <button className="btn btn-secondary w-100 rounded-pill mt-2" onClick={close}>Close</button>
             </div>
         );
     }
