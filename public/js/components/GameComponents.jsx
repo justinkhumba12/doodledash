@@ -510,7 +510,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     );
 };
 
-const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
+const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }) => {
     const [input, setInput] = useState('');
     const messagesEndRef = useRef(null);
     const isCreator = Boolean(roomData.room.is_private) && roomData.room.creator_id === tgId;
@@ -539,30 +539,35 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
                 {chats.map(c => {
                     const photo = roomData?.photos?.[c.user_id];
                     const isDeleted = c.message === '[Deleted by admin]' || c.message === '[Deleted by room creator]';
+                    const isSystem = c.user_id === 'System';
+                    const displayName = isSystem ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
+                    const styleClass = isSystem ? '' : window.getStyleClass(roomData?.styles?.[c.user_id], systemConfig);
                     
                     return (
                         <div key={c.id} 
-                             className={`msg-box d-flex gap-2 ${c.user_id === 'System' ? 'sys' : ''}`} 
+                             className={`msg-box d-flex gap-2 ${isSystem ? 'sys' : ''}`} 
                              style={{ 
                                  borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', 
-                                 cursor: (c.user_id !== 'System' && !isDeleted) ? 'pointer' : 'default' 
+                                 cursor: (!isSystem && !isDeleted) ? 'pointer' : 'default' 
                              }}
                              onClick={() => {
-                                 if (c.user_id === 'System' || isDeleted) return;
+                                 if (isSystem || isDeleted) return;
                                  if (setModal) {
                                      if (c.user_id !== tgId || isCreator) {
                                          setModal({ type: 'chat_action', message: c, isCreator });
                                      }
                                  }
                              }}>
-                            {c.user_id !== 'System' && (
+                            {!isSystem && (
                                 photo ? 
                                     <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
                                     <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                             )}
                             <div className="d-flex flex-column w-100">
-                                <small className="fw-bold" style={{fontSize: '0.75rem', color: c.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {c.user_id === 'System' ? 'System' : window.getDisplayName(c.user_id, roomData?.names)}
+                                <small className={`fw-bold ${styleClass || ''}`} 
+                                       style={styleClass ? {fontSize: '0.85rem'} : {fontSize: '0.75rem', color: (c.user_id === tgId || isSystem) ? 'var(--primary)' : '#64748b', lineHeight: '1'}}
+                                       data-name={displayName}>
+                                    {displayName}
                                 </small>
                                 <span style={{marginTop: '2px', fontStyle: isDeleted ? 'italic' : 'normal', color: isDeleted ? '#94a3b8' : 'inherit'}}>{c.message}</span>
                             </div>
@@ -634,7 +639,7 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal }) => {
     );
 };
 
-const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
+const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) => {
     const [rawInput, setRawInput] = useState('');
     const isDrawer = roomData.room.current_drawer_id === tgId;
     const messagesEndRef = useRef(null);
@@ -709,6 +714,9 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
             <div className="panel-body flex-grow-1" style={{overflowY: 'auto'}}>
                 {guesses.map(g => {
                     const photo = roomData?.photos?.[g.user_id];
+                    const displayName = window.getDisplayName(g.user_id, roomData?.names);
+                    const styleClass = window.getStyleClass(roomData?.styles?.[g.user_id], systemConfig);
+                    
                     return (
                         <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
                             {photo ? 
@@ -716,8 +724,10 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal }) => {
                                 <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                             }
                             <div className="d-flex flex-column w-100">
-                                <small className="fw-bold" style={{fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}>
-                                    {window.getDisplayName(g.user_id, roomData?.names)}
+                                <small className={`fw-bold ${styleClass || ''}`} 
+                                       style={styleClass ? {fontSize: '0.85rem'} : {fontSize: '0.75rem', color: g.user_id === tgId ? 'var(--primary)' : '#64748b', lineHeight: '1'}}
+                                       data-name={displayName}>
+                                    {displayName}
                                 </small>
                                 <span style={{marginTop: '2px'}}>{g.guess_text}</span>
                             </div>
