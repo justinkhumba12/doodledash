@@ -172,14 +172,18 @@ const styleClass = window.getStyleClass(user?.equipped_style, systemConfig);
 
 return (
     <div className="container mt-4 pb-5">
-        <div className="text-center mb-4">
+        <div className="text-center mb-4 d-flex flex-column align-items-center">
+            {/* REQUIREMENT 2: STYLED NAME DIRECTLY BELOW PROFILE PIC */}
             {window.profilePic ? (
                 <img src={window.profilePic} className="rounded-circle shadow-lg mb-3 border" width="120" height="120" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
             ) : (
                 <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '120px', color: 'var(--primary)'}}></i>
             )}
-            <h3 className={`fw-bold mb-1 ${styleClass || 'text-dark'}`} data-name={user?.name || window.toHex(user?.tg_id)}>{user?.name || window.toHex(user?.tg_id)}</h3>
-            {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
+            
+            <div className="d-flex flex-column align-items-center justify-content-center">
+                <h3 className={`fw-bold mb-1 ${styleClass || 'text-dark'}`} data-name={user?.name || window.toHex(user?.tg_id)}>{user?.name || window.toHex(user?.tg_id)}</h3>
+                {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
+            </div>
         </div>
 
         <div className="card bg-white rounded-4 border shadow-sm mb-4">
