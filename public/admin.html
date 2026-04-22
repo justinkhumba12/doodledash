@@ -174,8 +174,8 @@
             const [logs, setLogs] = useState([]);
 
             useEffect(() => {
-                apiFetch('/stats').then(setStats);
-                apiFetch('/audit').then(setLogs);
+                apiFetch('/stats').then(setStats).catch(console.error);
+                apiFetch('/audit').then(setLogs).catch(console.error);
             }, []);
 
             if (!stats) return <div className="p-5 text-center"><div className="spinner-border text-primary"></div></div>;
@@ -223,7 +223,7 @@
             const [editModal, setEditModal] = useState(null);
             const [newStyle, setNewStyle] = useState({ class_name: '', is_premium: false, credit_price: 0, gem_price: 0, font_family: '', css_content: '', is_hidden: false });
             
-            const loadStyles = () => apiFetch('/styles').then(setStyles);
+            const loadStyles = () => apiFetch('/styles').then(setStyles).catch(console.error);
             useEffect(() => { loadStyles(); }, []);
 
             // Dynamically load Fonts & CSS for accurate preview rendering
@@ -266,47 +266,61 @@
             }, [styles]);
 
             const updateStyle = async (s) => {
-                await apiFetch('/styles/update', 'POST', { 
-                    id: s.id, 
-                    credit_price: Number(s.credit_price), 
-                    gem_price: Number(s.gem_price),
-                    is_premium: Boolean(s.is_premium),
-                    is_hidden: Boolean(s.is_hidden),
-                    css_content: s.css_content,
-                    class_name: s.class_name,
-                    font_family: s.font_family
-                });
-                alert('Style updated globally!');
-                loadStyles();
+                try {
+                    await apiFetch('/styles/update', 'POST', { 
+                        id: s.id, 
+                        credit_price: Number(s.credit_price), 
+                        gem_price: Number(s.gem_price),
+                        is_premium: Boolean(s.is_premium),
+                        is_hidden: Boolean(s.is_hidden),
+                        css_content: s.css_content,
+                        class_name: s.class_name,
+                        font_family: s.font_family
+                    });
+                    alert('Style updated globally!');
+                    loadStyles();
+                } catch(e) {}
             };
 
             const toggleVisibility = async (s) => {
-                const updatedStyle = { ...s, is_hidden: !s.is_hidden };
-                await apiFetch('/styles/update', 'POST', { 
-                    id: updatedStyle.id, 
-                    credit_price: Number(updatedStyle.credit_price), 
-                    gem_price: Number(updatedStyle.gem_price),
-                    is_premium: Boolean(updatedStyle.is_premium),
-                    is_hidden: Boolean(updatedStyle.is_hidden),
-                    css_content: updatedStyle.css_content,
-                    class_name: updatedStyle.class_name,
-                    font_family: updatedStyle.font_family
-                });
-                loadStyles();
+                try {
+                    const updatedStyle = { ...s, is_hidden: !s.is_hidden };
+                    await apiFetch('/styles/update', 'POST', { 
+                        id: updatedStyle.id, 
+                        credit_price: Number(updatedStyle.credit_price), 
+                        gem_price: Number(updatedStyle.gem_price),
+                        is_premium: Boolean(updatedStyle.is_premium),
+                        is_hidden: Boolean(updatedStyle.is_hidden),
+                        css_content: updatedStyle.css_content,
+                        class_name: updatedStyle.class_name,
+                        font_family: updatedStyle.font_family
+                    });
+                    loadStyles();
+                } catch(e) {}
             };
 
             const deleteStyle = async (id) => {
                 if (!window.confirm("Are you sure you want to completely delete this style?")) return;
-                await apiFetch('/styles/delete', 'POST', { id });
-                loadStyles();
+                try {
+                    await apiFetch('/styles/delete', 'POST', { id });
+                    loadStyles();
+                } catch(e) {}
             };
 
             const addNewStyle = async () => {
                 if (!newStyle.class_name) return alert('Class name is required!');
-                await apiFetch('/styles/add', 'POST', newStyle);
-                setNewStyle({ class_name: '', is_premium: false, credit_price: 0, gem_price: 0, font_family: '', css_content: '', is_hidden: false });
-                setShowAddForm(false);
-                loadStyles();
+                try {
+                    await apiFetch('/styles/add', 'POST', {
+                        ...newStyle,
+                        credit_price: Number(newStyle.credit_price),
+                        gem_price: Number(newStyle.gem_price)
+                    });
+                    setNewStyle({ class_name: '', is_premium: false, credit_price: 0, gem_price: 0, font_family: '', css_content: '', is_hidden: false });
+                    setShowAddForm(false);
+                    loadStyles();
+                } catch (e) {
+                    // Handled by apiFetch globally
+                }
             };
 
             return (
@@ -473,21 +487,25 @@
             const [reportFilter, setReportFilter] = useState('all');
             const [selectedProfile, setSelectedProfile] = useState(null);
 
-            useEffect(() => { apiFetch('/reports').then(setReports); }, []);
+            useEffect(() => { apiFetch('/reports').then(setReports).catch(console.error); }, []);
 
             const doSearch = async () => {
                 if(!search) return;
-                const res = await apiFetch('/users/search', 'POST', { query: search });
-                setUsers(res);
+                try {
+                    const res = await apiFetch('/users/search', 'POST', { query: search });
+                    setUsers(res);
+                } catch(e) {}
             };
 
             const fetchProfile = async (tgId, reportData = null) => {
-                const res = await apiFetch('/users/search', 'POST', { query: tgId });
-                if (res && res.length > 0) {
-                    setSelectedProfile({ ...res[0], reportData });
-                } else {
-                    alert('User not found.');
-                }
+                try {
+                    const res = await apiFetch('/users/search', 'POST', { query: tgId });
+                    if (res && res.length > 0) {
+                        setSelectedProfile({ ...res[0], reportData });
+                    } else {
+                        alert('User not found.');
+                    }
+                } catch(e) {}
             };
 
             const openActionModal = (tgId, action, days, reportData = null) => {
@@ -505,25 +523,29 @@
             };
 
             const takeAction = async (data) => {
-                await apiFetch('/users/action', 'POST', {
-                    tgId: data.tgId,
-                    action: data.action,
-                    days: data.days,
-                    message: data.message,
-                    reporterId: data.reporterId,
-                    reportId: data.reportId
-                });
-                setActionModal(null);
-                setSelectedProfile(null);
-                setProofModal(null);
-                doSearch();
-                apiFetch('/reports').then(setReports);
+                try {
+                    await apiFetch('/users/action', 'POST', {
+                        tgId: data.tgId,
+                        action: data.action,
+                        days: data.days,
+                        message: data.message,
+                        reporterId: data.reporterId,
+                        reportId: data.reportId
+                    });
+                    setActionModal(null);
+                    setSelectedProfile(null);
+                    setProofModal(null);
+                    doSearch();
+                    apiFetch('/reports').then(setReports).catch(console.error);
+                } catch(e) {}
             };
 
             const deleteReport = async (id) => {
                 if (!window.confirm('Are you sure you want to delete this unsolved report?')) return;
-                await apiFetch('/reports/delete', 'POST', { id });
-                apiFetch('/reports').then(setReports);
+                try {
+                    await apiFetch('/reports/delete', 'POST', { id });
+                    apiFetch('/reports').then(setReports).catch(console.error);
+                } catch(e) {}
             };
             
             const drawProofCanvas = useCallback((canvas) => {
@@ -790,15 +812,17 @@
                     if (c.inkConfig) setInkConfig(c.inkConfig);
                     if (c.unbanCost) setUnbanCost(c.unbanCost);
                     if (c.unmuteCost) setUnmuteCost(c.unmuteCost);
-                });
+                }).catch(console.error);
             };
             useEffect(() => { loadSettings(); }, []);
 
             const applyFunds = async () => {
                 if(!targetUser) return;
-                await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems), message: htmlMessage });
-                alert('Funds successfully applied!');
-                setCredits(0); setGems(0); setHtmlMessage(''); setTargetUser('');
+                try {
+                    await apiFetch('/economy/modify', 'POST', { tgId: targetUser, credits: Number(credits), gems: Number(gems), message: htmlMessage });
+                    alert('Funds successfully applied!');
+                    setCredits(0); setGems(0); setHtmlMessage(''); setTargetUser('');
+                } catch(e) {}
             };
 
             const addGemPackage = () => {
@@ -820,8 +844,10 @@
             const removeStarPackage = (id) => setStarPackages(starPackages.filter(p => p.id !== id));
 
             const saveEconomy = async () => {
-                await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, inkConfig, unbanCost, unmuteCost });
-                alert('Economy Configuration Saved. Modifications reflected globally.');
+                try {
+                    await apiFetch('/config/economy', 'POST', { gemPackages, starPackages, inkConfig, unbanCost, unmuteCost });
+                    alert('Economy Configuration Saved. Modifications reflected globally.');
+                } catch(e) {}
             };
 
             return (
@@ -969,15 +995,17 @@
                     setDict(c.dictionary.join(', ')); 
                     if(c.maxRooms) setMaxRooms(c.maxRooms);
                     if(c.roomLimits) setRoomLimits(c.roomLimits);
-                });
-                apiFetch('/rooms').then(setRooms);
+                }).catch(console.error);
+                apiFetch('/rooms').then(setRooms).catch(console.error);
             };
             useEffect(() => { load(); }, []);
 
             const actionRoom = async (roomId, action) => {
                 if(!window.confirm(`${action.toUpperCase()} Room ${roomId}?`)) return;
-                await apiFetch('/rooms/action', 'POST', { roomId, action });
-                load();
+                try {
+                    await apiFetch('/rooms/action', 'POST', { roomId, action });
+                    load();
+                } catch(e) {}
             };
 
             return (
@@ -999,7 +1027,12 @@
                                         </div>
                                     )}
 
-                                    <button className={`btn rounded-pill px-4 fw-bold mt-auto ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { await apiFetch('/config/maintenance', 'POST', { maintenance: !maint, duration_hours: maintDuration }); load(); }}>
+                                    <button className={`btn rounded-pill px-4 fw-bold mt-auto ${maint ? 'btn-danger' : 'btn-success'}`} onClick={async () => { 
+                                        try {
+                                            await apiFetch('/config/maintenance', 'POST', { maintenance: !maint, duration_hours: maintDuration }); 
+                                            load(); 
+                                        } catch(e) {}
+                                    }}>
                                         {maint ? 'Disable Maintenance' : 'Activate Maintenance Mode'}
                                     </button>
                                 </div>
@@ -1013,14 +1046,25 @@
                                         <label className="form-label small fw-bold">Max Active Rooms Capacity</label>
                                         <div className="d-flex gap-2 flex-wrap flex-md-nowrap">
                                             <input type="number" className="form-control" value={maxRooms} onChange={e=>setMaxRooms(e.target.value)} />
-                                            <button className="btn btn-primary fw-bold" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); alert('Server capacity updated!'); }}>Save</button>
+                                            <button className="btn btn-primary fw-bold" onClick={async () => { 
+                                                try {
+                                                    await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); 
+                                                    alert('Server capacity updated!'); 
+                                                } catch(e) {}
+                                            }}>Save</button>
                                         </div>
                                         <small className="text-muted" style={{fontSize: '0.75rem'}}>Prevents new rooms if this limit is reached to save server resources.</small>
                                     </div>
                                     <div className="mt-auto">
                                         <label className="form-label small fw-bold">Global PA System</label>
                                         <textarea className="form-control mb-2" placeholder="Attention all players..." value={msg} onChange={e=>setMsg(e.target.value)} rows="2"></textarea>
-                                        <button className="btn btn-dark w-100 fw-bold" onClick={async () => { await apiFetch('/broadcast', 'POST', { message: msg }); setMsg(''); alert('Broadcast deployed!'); }} disabled={!msg}>Send Red Alert</button>
+                                        <button className="btn btn-dark w-100 fw-bold" onClick={async () => { 
+                                            try {
+                                                await apiFetch('/broadcast', 'POST', { message: msg }); 
+                                                setMsg(''); 
+                                                alert('Broadcast deployed!'); 
+                                            } catch(e) {}
+                                        }} disabled={!msg}>Send Red Alert</button>
                                     </div>
                                 </div>
                             </div>
@@ -1052,7 +1096,12 @@
                                     <small className="text-muted" style={{fontSize: '0.7rem'}}>Cred per user</small>
                                 </div>
                             </div>
-                            <button className="btn btn-primary btn-sm fw-bold w-100 py-2" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); alert('Room configurations saved!'); }}>Save Room Configuration</button>
+                            <button className="btn btn-primary btn-sm fw-bold w-100 py-2" onClick={async () => { 
+                                try {
+                                    await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); 
+                                    alert('Room configurations saved!'); 
+                                } catch(e) {}
+                            }}>Save Room Configuration</button>
                         </div>
                     </div>
 
@@ -1063,8 +1112,10 @@
                             <textarea className="form-control mb-3" rows="4" value={dict} onChange={e=>setDict(e.target.value)}></textarea>
                             <button className="btn btn-info text-white fw-bold w-100 py-2" onClick={async () => { 
                                 const arr = dict.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length >= 3);
-                                await apiFetch('/dictionary/update', 'POST', { words: arr });
-                                alert('Dictionary Saved!'); 
+                                try {
+                                    await apiFetch('/dictionary/update', 'POST', { words: arr });
+                                    alert('Dictionary Saved!'); 
+                                } catch(e) {}
                             }}>Sync Dictionary to Redis</button>
                         </div>
                     </div>
@@ -1135,16 +1186,30 @@
             const apiFetch = async (path, method = 'GET', body = null) => {
                 const options = { method, headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData } };
                 if (body) options.body = JSON.stringify(body);
-                const res = await fetch(`/api/admin${path}`, options);
                 
-                if (res.status === 403 || res.status === 401) { 
-                    setError('Access Denied: You are not authorized.'); 
-                    if (window.Telegram && window.Telegram.WebApp) {
-                        setTimeout(() => window.Telegram.WebApp.close(), 3000);
+                try {
+                    const res = await fetch(`/api/admin${path}`, options);
+                    
+                    if (res.status === 403 || res.status === 401) { 
+                        setError('Access Denied: You are not authorized.'); 
+                        if (window.Telegram && window.Telegram.WebApp) {
+                            setTimeout(() => window.Telegram.WebApp.close(), 3000);
+                        }
+                        throw new Error('Auth'); 
                     }
-                    throw new Error('Auth'); 
+                    
+                    const data = await res.json();
+                    
+                    if (!res.ok || data.error) {
+                        throw new Error(data.error || `HTTP error ${res.status}`);
+                    }
+                    return data;
+                } catch (e) {
+                    if (e.message !== 'Auth') {
+                        alert('API Error: ' + e.message);
+                    }
+                    throw e; // Rethrow to prevent further execution in component functions
                 }
-                return res.json();
             };
 
             if (error) return <div className="container mt-5"><div className="alert alert-danger shadow-lg p-4 p-md-5 text-center"><i className="fas fa-shield-alt fs-1 mb-3"></i><h4>{error}</h4><p className="mb-0">Please access this panel through the official Telegram Bot. Closing...</p></div></div>;
