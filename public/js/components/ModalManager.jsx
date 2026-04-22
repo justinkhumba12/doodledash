@@ -392,7 +392,7 @@ if (modal.type === 'maintenance') {
             {!modal.isFirstTime && <div className="alert alert-warning py-2 small mb-3 text-center">This will cost <b>5 Credits</b>.</div>}
             <div className="d-flex gap-2">
                 <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('update_profile', { name: modal.name }); close(); }}>Confirm</button>
+                <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('set_name', { name: modal.name }); close(); }}>Confirm</button>
             </div>
         </>
     );
@@ -404,7 +404,7 @@ if (modal.type === 'maintenance') {
             {!modal.isFirstTime && <div className="alert alert-warning py-2 small mb-3 text-center">This will cost <b>5 Credits</b>.</div>}
             <div className="d-flex gap-2">
                 <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('update_profile', { gender: modal.gender }); close(); }}>Confirm</button>
+                <button className="btn btn-primary w-50 rounded-pill" onClick={() => { socket.emit('set_gender', { gender: modal.gender }); close(); }}>Confirm</button>
             </div>
         </>
     );
