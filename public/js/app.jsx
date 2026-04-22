@@ -52,8 +52,15 @@ window.renderGenderIcon = (gender) => {
     return null;
 };
 
-// Global Hook to Dynamically load specific Styles + CSS without loading them all
-window.useDynamicStyles = (activeStyleIds, styleDatabase) => {
+// FIX for User Styles Issue: Retrieve CSS Class name from the Style ID
+window.getStyleClass = (styleId, systemConfig) => {
+    if (!styleId || !systemConfig?.nameStyles) return '';
+    const style = systemConfig.nameStyles.find(s => Number(s.id) === Number(styleId));
+    return style ? style.class_name : '';
+};
+
+// FIX for Blank Screen Issue: Convert the global function Hook into a proper React Component
+const DynamicStyles = ({ activeStyleIds, styleDatabase }) => {
     const { useEffect } = React;
     useEffect(() => {
         if (!styleDatabase || !activeStyleIds) return;
@@ -63,15 +70,13 @@ window.useDynamicStyles = (activeStyleIds, styleDatabase) => {
         let combinedCSS = "";
         
         uniqueIds.forEach(id => {
-            const styleData = styleDatabase.find(s => s.id === id);
+            const styleData = styleDatabase.find(s => Number(s.id) === Number(id));
             if (styleData) {
-                // Ensure spaces are properly URL Encoded for Google Fonts
                 requiredFonts.add(styleData.font_family);
                 combinedCSS += `\n/* Loaded for ${id} */\n${styleData.css_content}`;
             }
         });
         
-        // Handle Dynamic Fonts Injection
         if (requiredFonts.size > 0) {
             const fontFamilies = Array.from(requiredFonts).map(f => `family=${f.replace(/ /g, '+')}`).join('&');
             const fontUrl = `https://fonts.googleapis.com/css2?${fontFamilies}&display=swap`;
@@ -88,7 +93,6 @@ window.useDynamicStyles = (activeStyleIds, styleDatabase) => {
             }
         }
         
-        // Handle Dynamic CSS Rules Injection
         let styleTag = document.getElementById('dynamic-room-styles');
         if (!styleTag) {
             styleTag = document.createElement('style');
@@ -100,7 +104,11 @@ window.useDynamicStyles = (activeStyleIds, styleDatabase) => {
         }
         
     }, [JSON.stringify(activeStyleIds), styleDatabase]);
+    
+    return null;
 };
+window.DynamicStyles = DynamicStyles;
+
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -561,10 +569,11 @@ const App = () => {
         }
     }
 
-    window.useDynamicStyles(systemConfig?.nameStyles?.map(s => s.id) || [], systemConfig?.nameStyles || []);
-
     return (
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
+            
+            <DynamicStyles activeStyleIds={systemConfig?.nameStyles?.map(s => s.id) || []} styleDatabase={systemConfig?.nameStyles || []} />
+            
             <div className="app-header flex-shrink-0">
                 <h1 className="app-title"><i className="fas fa-palette"></i> DoodleDash</h1>
                 <div className="d-flex align-items-center bg-light rounded-pill shadow-sm border border-secondary border-opacity-25" style={{ padding: '2px 8px' }}>
@@ -653,8 +662,8 @@ const App = () => {
                                         <div className={`panel-tab ${activeTab === 'sounds' ? 'active' : ''}`} onClick={() => setActiveTab('sounds')} title="Sound Settings"><i className="fas fa-volume-up"></i></div>
                                     </div>
                                     
-                                    {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} />}
-                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} roomData={roomData} setModal={setModal} />}
+                                    {activeTab === 'guess' && <GuessBox guesses={roomData.guesses} tgId={window.tgId} roomData={roomData} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
+                                    {activeTab === 'chat' && <ChatBox chats={roomData.chats} socket={socket} tgId={window.tgId} user={user} roomData={roomData} setModal={setModal} systemConfig={systemConfig} />}
                                     {activeTab === 'sounds' && (
                                         <div className="panel-body">
                                             <h5 className="fw-bold mb-4 text-center mt-3"><i className="fas fa-sliders-h text-primary"></i> Sound Settings</h5>
