@@ -148,8 +148,7 @@
                     credit_price: Number(s.credit_price), 
                     gem_price: Number(s.gem_price),
                     is_premium: Boolean(s.is_premium),
-                    is_hidden: Boolean(s.is_hidden),
-                    css_content: s.css_content
+                    is_hidden: Boolean(s.is_hidden)
                 });
                 alert('Style updated globally!');
                 loadStyles();
@@ -162,8 +161,7 @@
                     credit_price: Number(updatedStyle.credit_price), 
                     gem_price: Number(updatedStyle.gem_price),
                     is_premium: Boolean(updatedStyle.is_premium),
-                    is_hidden: Boolean(updatedStyle.is_hidden),
-                    css_content: updatedStyle.css_content
+                    is_hidden: Boolean(updatedStyle.is_hidden)
                 });
                 loadStyles();
             };
@@ -240,12 +238,11 @@
 
                     <div className="card shadow-sm border-0">
                         <div className="table-responsive p-3">
-                            <table className="table align-middle text-center mb-0" style={{minWidth: '1200px'}}>
+                            <table className="table align-middle text-center mb-0" style={{minWidth: '800px'}}>
                                 <thead className="table-light">
                                     <tr>
                                         <th>Style Preview</th>
                                         <th>CSS Class</th>
-                                        <th>CSS Editor</th>
                                         <th>Tier Type</th>
                                         <th>Credits</th>
                                         <th>Gems</th>
@@ -260,16 +257,6 @@
                                                 <span className={s.class_name} data-name="DoodleDash">DoodleDash</span>
                                             </td>
                                             <td><code className="text-secondary bg-white px-2 py-1 rounded border shadow-sm">{s.class_name}</code></td>
-                                            <td>
-                                                <textarea 
-                                                    className="form-control form-control-sm font-monospace text-start" 
-                                                    rows="3" 
-                                                    style={{minWidth: '200px', fontSize: '0.8rem'}}
-                                                    value={s.css_content || ''} 
-                                                    onChange={e => setStyles(styles.map(st => st.id === s.id ? {...st, css_content: e.target.value} : st))}
-                                                    placeholder="CSS rules here..."
-                                                ></textarea>
-                                            </td>
                                             <td>
                                                 <select className="form-select form-select-sm shadow-sm" value={s.is_premium ? 'true' : 'false'} onChange={e => setStyles(styles.map(st => st.id === s.id ? {...st, is_premium: e.target.value === 'true'} : st))}>
                                                     <option value="true">Premium</option>
@@ -300,7 +287,7 @@
                                             </td>
                                         </tr>
                                     ))}
-                                    {styles.length === 0 && <tr><td colSpan="8" className="text-muted p-4">Loading styles...</td></tr>}
+                                    {styles.length === 0 && <tr><td colSpan="7" className="text-muted p-4">Loading styles...</td></tr>}
                                 </tbody>
                             </table>
                         </div>
@@ -464,7 +451,7 @@
                                                 </tr>
                                             ))}
                                         </tbody>
-                                        </table>
+                                    </table>
                                 </div>
                             )}
                         </div>
@@ -502,7 +489,7 @@
                                     ))}
                                     {filteredReports.length === 0 && <tr><td colSpan="5" className="text-center p-4 text-muted">No reports found matching criteria.</td></tr>}
                                 </tbody>
-                                </table>
+                            </table>
                         </div>
                     </div>
 
@@ -932,7 +919,7 @@
                                     ))}
                                     {rooms.length === 0 && <tr><td colSpan="5" className="text-muted p-4">No active rooms found.</td></tr>}
                                 </tbody>
-                                </table>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -1026,3 +1013,4 @@
     </script>
 </body>
 </html>
+
