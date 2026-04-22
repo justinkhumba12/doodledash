@@ -605,11 +605,11 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 {index + 1}
                             </div>
                             {l.avatar_url ? (
-                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: l.avatar_url, gender: l.gender})}>
+                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
                                     <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
                                 </div>
                             ) : (
-                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: null, gender: l.gender})}>
+                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setProfileModal && setProfileModal({user_id: l.tg_id, pic: null, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
                                     <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
                                         <i className="fas fa-user fs-5"></i>
                                     </div>
