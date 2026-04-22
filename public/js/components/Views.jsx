@@ -6,9 +6,6 @@ const starPackages = systemConfig?.starPackages || [];
 const nameStyles = systemConfig?.nameStyles || [];
 const ownedStyleIds = user?.owned_styles || [];
 
-// Dynamically inject styling for the name styles using the global function from app.jsx
-window.useDynamicStyles(nameStyles.map(s => s.id), nameStyles);
-
 return (
     <div className="container mt-4 pb-5 text-center">
         {/* Inline styles for horizontal scrollable UI */}
@@ -136,10 +133,9 @@ return (
     </div>
 );
 
-
 };
 
-const ProfileView = ({ user, socket, setModal, setMainPageTab }) => {
+const ProfileView = ({ user, socket, setModal, systemConfig, setMainPageTab }) => {
 const [editingGender, setEditingGender] = useState(false);
 const [selectedGender, setSelectedGender] = useState(user?.gender || 'Other');
 
@@ -172,6 +168,8 @@ const handleDonateClick = () => {
     }
 };
 
+const styleClass = window.getStyleClass(user?.equipped_style, systemConfig);
+
 return (
     <div className="container mt-4 pb-5">
         <div className="text-center mb-4">
@@ -180,7 +178,7 @@ return (
             ) : (
                 <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '120px', color: 'var(--primary)'}}></i>
             )}
-            <h3 className={`fw-bold mb-1 ${user?.equipped_style ? user.equipped_style : 'text-dark'}`} data-name={user?.name || window.toHex(user?.tg_id)}>{user?.name || window.toHex(user?.tg_id)}</h3>
+            <h3 className={`fw-bold mb-1 ${styleClass || 'text-dark'}`} data-name={user?.name || window.toHex(user?.tg_id)}>{user?.name || window.toHex(user?.tg_id)}</h3>
             {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
         </div>
 
@@ -268,7 +266,6 @@ return (
     </div>
 );
 
-
 };
 
 const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab }) => {
@@ -276,8 +273,6 @@ const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab })
     const nameStyles = systemConfig?.nameStyles || [];
     const ownedStyles = nameStyles.filter(s => ownedStyleIds.includes(s.id));
     const equippedStyle = user?.equipped_style;
-
-    window.useDynamicStyles(ownedStyleIds, nameStyles);
 
     return (
         <div className="container mt-4 pb-5">
@@ -526,10 +521,9 @@ return (
     </div>
 );
 
-
 };
 
-const LeaderboardView = ({ socket, setModal, setProfileModal }) => {
+const LeaderboardView = ({ socket, setModal, setProfileModal, systemConfig }) => {
 const [activeTab, setActiveTab] = useState('inviters');
 const [inviters, setInviters] = useState([]);
 const [guessers, setGuessers] = useState([]);
@@ -597,6 +591,8 @@ const renderList = (dataList, type, isPrevious = false) => {
                 if (index === 0) rankStyle = "bg-warning text-dark";
                 if (index === 1) rankStyle = "bg-secondary text-white";
                 if (index === 2) rankStyle = "bg-danger text-white";
+                
+                const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
 
                 return (
                     <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
@@ -616,7 +612,7 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 </div>
                             )}
                             <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                <span className={`fw-bold ${l.equipped_style ? l.equipped_style : 'text-dark'}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
+                                <span className={`fw-bold ${styleClass || 'text-dark'}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
                                 {l.username && l.username !== 'unset' ? (
                                     <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
                                         @{l.username}
@@ -715,7 +711,6 @@ return (
         )}
     </div>
 );
-
 
 };
 
@@ -888,7 +883,6 @@ return (
         </div>
     </div>
 );
-
 
 };
 
