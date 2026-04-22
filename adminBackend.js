@@ -1,3 +1,4 @@
+// justinkhumba12/doodledash/doodledash-e07c74cd6e295c9333392b96f16fd395722cf21d/adminBackend.js
 const express = require('express');
 const { db, redis } = require('./database');
 const { validateInitData, sendMsg } = require('./utils');
@@ -27,6 +28,13 @@ async function setupAdminPanel(app, io) {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
+        
+        // Ensure name_styles has is_hidden column
+        try {
+            await db.query(`ALTER TABLE name_styles ADD COLUMN is_hidden BOOLEAN DEFAULT 0`);
+        } catch(e) {
+            // Column already exists or error ignored
+        }
     } catch (err) {
         console.error('[Admin DB Init Error]', err);
     }
@@ -197,9 +205,26 @@ async function setupAdminPanel(app, io) {
     });
 
     adminRouter.post('/styles/update', async (req, res) => {
-        const { id, credit_price, gem_price } = req.body;
-        await db.query('UPDATE name_styles SET credit_price = ?, gem_price = ? WHERE id = ?', [credit_price, gem_price, id]);
-        await logAdminAction(req.adminId, 'UPDATE_STYLE', { id, credit_price, gem_price });
+        const { id, credit_price, gem_price, is_premium, is_hidden } = req.body;
+        await db.query('UPDATE name_styles SET credit_price = ?, gem_price = ?, is_premium = ?, is_hidden = ? WHERE id = ?', [credit_price, gem_price, is_premium ? 1 : 0, is_hidden ? 1 : 0, id]);
+        await logAdminAction(req.adminId, 'UPDATE_STYLE', { id, credit_price, gem_price, is_premium, is_hidden });
+        res.json({ success: true });
+    });
+
+    adminRouter.post('/styles/add', async (req, res) => {
+        const { class_name, is_premium, credit_price, gem_price, font_family, css_content, is_hidden } = req.body;
+        await db.query(
+            'INSERT INTO name_styles (class_name, is_premium, credit_price, gem_price, font_family, css_content, is_hidden) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [class_name, is_premium ? 1 : 0, credit_price, gem_price, font_family || null, css_content || null, is_hidden ? 1 : 0]
+        );
+        await logAdminAction(req.adminId, 'ADD_STYLE', { class_name, is_premium });
+        res.json({ success: true });
+    });
+
+    adminRouter.post('/styles/delete', async (req, res) => {
+        const { id } = req.body;
+        await db.query('DELETE FROM name_styles WHERE id = ?', [id]);
+        await logAdminAction(req.adminId, 'DELETE_STYLE', { id });
         res.json({ success: true });
     });
 
