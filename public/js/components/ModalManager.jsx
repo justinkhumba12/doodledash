@@ -36,34 +36,10 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
 
-    // Helper to ensure empty/blank names fall back to hex ID
-    // Upgraded to check multiple alternate properties and global player lists if the payload omits the name.
-    const getDisplayName = (id, ...nameOptions) => {
-        // 1. Check all explicitly passed name options from the modal payload
-        for (const n of nameOptions) {
-            if (n && typeof n === 'string' && n.trim() !== '' && n.toLowerCase() !== 'unset') {
-                return n;
-            }
-        }
-        
-        // 2. Global fallback check: If name wasn't in the payload, try looking up active players/users
-        if (id && typeof window !== 'undefined') {
-            const lists = [window.players, window.users, window.roomPlayers, window.roomState?.players];
-            for (const list of lists) {
-                if (!list) continue;
-                if (Array.isArray(list)) {
-                    const p = list.find(x => x.id === id || x.user_id === id);
-                    if (p?.name && p.name.toLowerCase() !== 'unset') return p.name;
-                    if (p?.username && p.username.toLowerCase() !== 'unset') return p.username;
-                } else if (typeof list === 'object' && list[id]) {
-                    const p = list[id];
-                    if (p?.name && p.name.toLowerCase() !== 'unset') return p.name;
-                    if (p?.username && p.username.toLowerCase() !== 'unset') return p.username;
-                }
-            }
-        }
-
-        // 3. Fallback to hex ID if absolutely no valid name was found
+    // Helper to ensure empty/blank names fall back to hex ID, matching Views.jsx logic
+    const getDisplayName = (id, name, username) => {
+        if (name && name.trim() !== '' && name.toLowerCase() !== 'unset') return name;
+        if (username && username.trim() !== '' && username.toLowerCase() !== 'unset') return username;
         return window.toHex ? window.toHex(id) : (id || 'Unknown');
     };
 
@@ -479,7 +455,12 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'chat_action') {
         title = 'Message Options';
         const styleClass = window.getStyleClass(modal.message.style, systemConfig) || 'text-dark';
-        const displayMsgName = getDisplayName(modal.message.user_id, modal.message.name, modal.message.username);
+        
+        // Ensure name extraction uses proper order of properties available
+        const id = modal.message.user_id;
+        const name = modal.message.name;
+        const username = modal.message.username;
+        const displayMsgName = getDisplayName(id, name, username);
         
         content = (
             <div className="d-flex flex-column gap-2">
@@ -514,7 +495,12 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'kick_player') {
         title = 'Kick Player';
         const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-        const displayTargetName = getDisplayName(modal.target_id, modal.target_name, modal.target_username, modal.name);
+
+        // Extracting name for kick player based on what gets passed in
+        const id = modal.target_id;
+        const name = modal.target_name || modal.name;
+        const username = modal.target_username || modal.username;
+        const displayTargetName = getDisplayName(id, name, username);
 
         content = (
             <>
@@ -531,7 +517,12 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'profile_view') {
         title = 'Player Profile';
         const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-        const displayName = getDisplayName(modal.user_id, modal.name, modal.username, modal.display_name);
+        
+        // Use user.name or modal values consistently
+        const id = modal.user_id || modal.tg_id;
+        const name = modal.name;
+        const username = modal.username || modal.display_name;
+        const displayName = getDisplayName(id, name, username);
 
         content = (
             <div className="text-center py-2">
