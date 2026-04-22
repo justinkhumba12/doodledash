@@ -447,8 +447,16 @@ if (modal.type === 'maintenance') {
     );
 } else if (modal.type === 'chat_action') {
     title = 'Message Options';
+    // Use window.getStyleClass for the styled name if they have a style equipped
+    const styleClass = window.getStyleClass(modal.message.style, systemConfig) || 'text-dark';
+    const displayMsgName = modal.message.name || window.toHex(modal.message.user_id);
+    
     content = (
         <div className="d-flex flex-column gap-2">
+            <div className="mb-3 text-center">
+                <div className="small text-muted mb-1">Message from:</div>
+                <div className={`fw-bold fs-5 ${styleClass}`} data-name={displayMsgName}>{displayMsgName}</div>
+            </div>
             {modal.message.user_id !== window.tgId && (
                 <button className="btn btn-danger rounded-pill w-100 fw-bold" onClick={() => setModal({ type: 'report_input', context: 'chat', reported_id: modal.message.user_id, snapshot_data: modal.message.message })}>
                     <i className="fas fa-flag me-2"></i> Report Message
@@ -475,14 +483,40 @@ if (modal.type === 'maintenance') {
     );
 } else if (modal.type === 'kick_player') {
     title = 'Kick Player';
+    const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
+    const displayTargetName = modal.target_name || window.toHex(modal.target_id);
+
     content = (
         <>
-            <p className="text-muted text-center mb-4">Remove this player from the room?</p>
+            <div className="mb-4 text-center">
+                <p className="text-muted mb-2">Remove this player from the room?</p>
+                <div className={`fw-bold fs-4 ${styleClass}`} data-name={displayTargetName}>{displayTargetName}</div>
+            </div>
             <div className="d-flex gap-2">
                 <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                 <button className="btn btn-danger w-50 rounded-pill" onClick={() => { socket.emit('kick_player', { target_id: modal.target_id }); close(); }}>Kick</button>
             </div>
         </>
+    );
+} else if (modal.type === 'profile_view') {
+    // THIS HANDLES SHOWING STYLED NAME IN PROFILE MODAL (REQUIREMENT 1)
+    title = 'Player Profile';
+    const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
+    const displayName = modal.name || window.toHex(modal.user_id);
+
+    content = (
+        <div className="text-center py-2">
+            {modal.pic ? (
+                <img src={modal.pic} className="rounded-circle shadow-sm border mb-3" width="80" height="80" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Profile" />
+            ) : (
+                <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '80px', color: 'var(--primary)'}}></i>
+            )}
+            <h4 className={`fw-bold mb-1 ${styleClass}`} data-name={displayName}>{displayName}</h4>
+            <div className="text-muted small mb-4">
+                {window.renderGenderIcon(modal.gender)} {modal.gender || 'Not Set'}
+            </div>
+            <button className="btn btn-secondary w-100 rounded-pill" onClick={close}>Close</button>
+        </div>
     );
 }
 
