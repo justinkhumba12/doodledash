@@ -844,6 +844,9 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         {sortedMembers.map(m => {
                             const photo = roomData?.photos?.[m.user_id];
                             const isDrawer = room.current_drawer_id === m.user_id;
+                            const styleClass = window.getStyleClass(roomData.styles?.[m.user_id], systemConfig) || 'text-dark';
+                            const displayName = window.getDisplayName(m.user_id, roomData?.names);
+
                             return (
                                 <div key={m.user_id} className="d-flex align-items-center justify-content-between p-2 bg-white shadow-sm rounded mb-2 border-start border-4" style={{borderColor: isDrawer ? 'var(--primary)' : 'transparent'}}>
                                     <div className="d-flex align-items-center">
@@ -862,10 +865,12 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                             }
                                         </div>
                                         <div className="d-flex flex-column">
-                                            <span className="fw-bold" style={{fontSize: '0.85rem'}}>
-                                                {window.getDisplayName(m.user_id, roomData?.names)} 
-                                                {m.user_id === tgId ? <small className="text-muted" style={{fontSize: '0.7em'}}> (You)</small> : ''}
-                                            </span>
+                                            <div className="d-flex align-items-baseline gap-1 flex-wrap">
+                                                <span className={`fw-bold ${styleClass}`} style={{fontSize: '0.85rem'}} data-name={displayName}>
+                                                    {displayName}
+                                                </span>
+                                                {m.user_id === tgId ? <small className="text-muted" style={{fontSize: '0.7em'}}>(You)</small> : null}
+                                            </div>
                                             <div className="d-flex align-items-center gap-1">
                                                 {m.has_given_up ? <span className="badge bg-warning text-dark shadow-sm" style={{fontSize: '0.6rem'}}><i className="fas fa-flag"></i> Gave Up</span> : null}
                                             </div>
