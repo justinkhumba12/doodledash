@@ -506,7 +506,6 @@ return (
     </div>
 );
 
-
 };
 
 window.ModalManager = ModalManager;
