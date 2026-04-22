@@ -36,20 +36,23 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
 
-    // Use window.getDisplayName for consistency with other components
+    // robust display name resolution prioritizing explicitly passed fallbackName (modal.name) over other lookups.
     const getDisplayName = (id, fallbackName, fallbackUsername) => {
+        if (fallbackName && typeof fallbackName === 'string' && fallbackName.trim() !== '' && fallbackName.toLowerCase() !== 'unset') {
+            return fallbackName;
+        }
+        if (roomData?.names && roomData.names[id]) {
+            return roomData.names[id];
+        }
         if (window.getDisplayName) {
              const resolvedName = window.getDisplayName(id, roomData?.names);
-             // If window.getDisplayName returns a hex id, but we have a valid fallback, use the fallback.
-             if (resolvedName === (window.toHex ? window.toHex(id) : id)) {
-                 if (fallbackName && fallbackName.trim() !== '' && fallbackName.toLowerCase() !== 'unset') return fallbackName;
-                 if (fallbackUsername && fallbackUsername.trim() !== '' && fallbackUsername.toLowerCase() !== 'unset') return fallbackUsername;
+             if (resolvedName !== (window.toHex ? window.toHex(id) : id)) {
+                 return resolvedName;
              }
-             return resolvedName;
         }
-
-        if (fallbackName && fallbackName.trim() !== '' && fallbackName.toLowerCase() !== 'unset') return fallbackName;
-        if (fallbackUsername && fallbackUsername.trim() !== '' && fallbackUsername.toLowerCase() !== 'unset') return fallbackUsername;
+        if (fallbackUsername && typeof fallbackUsername === 'string' && fallbackUsername.trim() !== '' && fallbackUsername.toLowerCase() !== 'unset') {
+            return fallbackUsername;
+        }
         return window.toHex ? window.toHex(id) : (id || 'Unknown');
     };
 
