@@ -42,7 +42,7 @@ return (
                                 <div key={style.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 flex-shrink-0" style={{ width: '240px' }}>
                                     <div className="card-body p-3 d-flex flex-column h-100">
                                         <div className="text-center p-3 mb-3 bg-white rounded border overflow-hidden d-flex align-items-center justify-content-center shadow-sm" style={{minHeight: '90px'}}>
-                                            <span className={style.class_name} data-name="DoodleDash">DoodleDash</span>
+                                            <span className={style.class_name} data-name={user?.name || (user?.tg_id ? window.toHex(user.tg_id) : "DoodleDash")}>{user?.name || (user?.tg_id ? window.toHex(user.tg_id) : "DoodleDash")}</span>
                                         </div>
                                         <div className="d-flex justify-content-between align-items-center mb-3 px-1">
                                             <h6 className="fw-bold text-dark m-0">Style</h6>
