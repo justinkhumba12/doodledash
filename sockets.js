@@ -760,7 +760,7 @@ module.exports = (io) => {
             if (room && room.status === 'PRE_DRAW' && room.current_drawer_id === currentUser) {
                 room.word_to_draw = word.toUpperCase();
                 room.status = 'DRAWING';
-                room.round_end_time = new Date(Date.now() + 90000);
+                room.round_end_time = null;
                 room.masked_word = word.split('').map((c, i) => ({ char: c, revealed: c === ' ', index: i }));
                 
                 await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`, `room:${currentRoom}:guesses`);
