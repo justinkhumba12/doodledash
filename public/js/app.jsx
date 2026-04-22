@@ -52,10 +52,10 @@ window.renderGenderIcon = (gender) => {
     return null;
 };
 
-// FIX for User Styles Issue: Retrieve CSS Class name from the Style ID
+// FIX for User Styles Issue: Retrieve CSS Class name from the Style ID (Changed Number to String)
 window.getStyleClass = (styleId, systemConfig) => {
     if (!styleId || !systemConfig?.nameStyles) return '';
-    const style = systemConfig.nameStyles.find(s => Number(s.id) === Number(styleId));
+    const style = systemConfig.nameStyles.find(s => String(s.id) === String(styleId));
     return style ? style.class_name : '';
 };
 
@@ -70,7 +70,7 @@ const DynamicStyles = ({ activeStyleIds, styleDatabase }) => {
         let combinedCSS = "";
         
         uniqueIds.forEach(id => {
-            const styleData = styleDatabase.find(s => Number(s.id) === Number(id));
+            const styleData = styleDatabase.find(s => String(s.id) === String(id));
             if (styleData) {
                 requiredFonts.add(styleData.font_family);
                 combinedCSS += `\n/* Loaded for ${id} */\n${styleData.css_content}`;
