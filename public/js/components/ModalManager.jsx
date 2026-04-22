@@ -449,7 +449,7 @@ if (modal.type === 'maintenance') {
     title = 'Message Options';
     // Use window.getStyleClass for the styled name if they have a style equipped
     const styleClass = window.getStyleClass(modal.message.style, systemConfig) || 'text-dark';
-    const displayMsgName = modal.message.name || window.toHex(modal.message.user_id);
+    const displayMsgName = (modal.message.name && modal.message.name !== 'unset') ? modal.message.name : window.toHex(modal.message.user_id);
     
     content = (
         <div className="d-flex flex-column gap-2">
@@ -484,7 +484,7 @@ if (modal.type === 'maintenance') {
 } else if (modal.type === 'kick_player') {
     title = 'Kick Player';
     const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-    const displayTargetName = modal.target_name || window.toHex(modal.target_id);
+    const displayTargetName = (modal.target_name && modal.target_name !== 'unset') ? modal.target_name : window.toHex(modal.target_id);
 
     content = (
         <>
@@ -502,7 +502,7 @@ if (modal.type === 'maintenance') {
     // THIS HANDLES SHOWING STYLED NAME IN PROFILE MODAL (REQUIREMENT 1)
     title = 'Player Profile';
     const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-    const displayName = modal.name || window.toHex(modal.user_id);
+    const displayName = (modal.name && modal.name !== 'unset') ? modal.name : window.toHex(modal.user_id);
 
     content = (
         <div className="text-center py-2">
