@@ -561,6 +561,8 @@ const App = () => {
         }
     }
 
+    window.useDynamicStyles(systemConfig?.nameStyles?.map(s => s.id) || [], systemConfig?.nameStyles || []);
+
     return (
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             <div className="app-header flex-shrink-0">
