@@ -180,7 +180,7 @@ return (
             ) : (
                 <i className="fas fa-user-circle text-secondary mb-3 shadow-sm rounded-circle bg-white" style={{fontSize: '120px', color: 'var(--primary)'}}></i>
             )}
-            <h3 className="fw-bold text-dark mb-1">{user?.name || window.toHex(user?.tg_id)}</h3>
+            <h3 className={`fw-bold mb-1 ${user?.equipped_style ? user.equipped_style : 'text-dark'}`} data-name={user?.name || window.toHex(user?.tg_id)}>{user?.name || window.toHex(user?.tg_id)}</h3>
             {window.username !== 'unset' && <p className="text-muted small">@{window.username}</p>}
         </div>
 
@@ -616,7 +616,7 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 </div>
                             )}
                             <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                <span className={`fw-bold text-dark ${l.equipped_style || ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
+                                <span className={`fw-bold ${l.equipped_style ? l.equipped_style : 'text-dark'}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
                                 {l.username && l.username !== 'unset' ? (
                                     <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
                                         @{l.username}
