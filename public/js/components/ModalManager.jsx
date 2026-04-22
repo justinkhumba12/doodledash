@@ -37,11 +37,34 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
 
     // Helper to ensure empty/blank names fall back to hex ID
-    const getDisplayName = (name, id) => {
-        if (!name || typeof name !== 'string' || name.trim() === '') {
-            return window.toHex ? window.toHex(id) : id;
+    // Upgraded to check multiple alternate properties and global player lists if the payload omits the name.
+    const getDisplayName = (id, ...nameOptions) => {
+        // 1. Check all explicitly passed name options from the modal payload
+        for (const n of nameOptions) {
+            if (n && typeof n === 'string' && n.trim() !== '' && n.toLowerCase() !== 'unset') {
+                return n;
+            }
         }
-        return name;
+        
+        // 2. Global fallback check: If name wasn't in the payload, try looking up active players/users
+        if (id && typeof window !== 'undefined') {
+            const lists = [window.players, window.users, window.roomPlayers, window.roomState?.players];
+            for (const list of lists) {
+                if (!list) continue;
+                if (Array.isArray(list)) {
+                    const p = list.find(x => x.id === id || x.user_id === id);
+                    if (p?.name && p.name.toLowerCase() !== 'unset') return p.name;
+                    if (p?.username && p.username.toLowerCase() !== 'unset') return p.username;
+                } else if (typeof list === 'object' && list[id]) {
+                    const p = list[id];
+                    if (p?.name && p.name.toLowerCase() !== 'unset') return p.name;
+                    if (p?.username && p.username.toLowerCase() !== 'unset') return p.username;
+                }
+            }
+        }
+
+        // 3. Fallback to hex ID if absolutely no valid name was found
+        return window.toHex ? window.toHex(id) : (id || 'Unknown');
     };
 
     const triggerHintAd = (index) => {
@@ -455,9 +478,8 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         );
     } else if (modal.type === 'chat_action') {
         title = 'Message Options';
-        // Use window.getStyleClass for the styled name if they have a style equipped
         const styleClass = window.getStyleClass(modal.message.style, systemConfig) || 'text-dark';
-        const displayMsgName = getDisplayName(modal.message.name, modal.message.user_id);
+        const displayMsgName = getDisplayName(modal.message.user_id, modal.message.name, modal.message.username);
         
         content = (
             <div className="d-flex flex-column gap-2">
@@ -492,7 +514,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'kick_player') {
         title = 'Kick Player';
         const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-        const displayTargetName = getDisplayName(modal.target_name, modal.target_id);
+        const displayTargetName = getDisplayName(modal.target_id, modal.target_name, modal.target_username, modal.name);
 
         content = (
             <>
@@ -507,10 +529,9 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'profile_view') {
-        // THIS HANDLES SHOWING STYLED NAME IN PROFILE MODAL (REQUIREMENT 1)
         title = 'Player Profile';
         const styleClass = window.getStyleClass(modal.style, systemConfig) || 'text-dark';
-        const displayName = getDisplayName(modal.name, modal.user_id);
+        const displayName = getDisplayName(modal.user_id, modal.name, modal.username, modal.display_name);
 
         content = (
             <div className="text-center py-2">
