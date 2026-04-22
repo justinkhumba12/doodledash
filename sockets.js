@@ -283,7 +283,7 @@ module.exports = (io) => {
                         const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
                         room.current_drawer_id = room.members[nextIndex].user_id;
 
-                        room.round_end_time = new Date(Date.now() + 30000);
+                        room.round_end_time = null; // Timer completely removed for drawing as requested
                         room.break_end_time = null;
                         room.word_to_draw = null;
                         room.end_reason = null;
@@ -422,7 +422,8 @@ module.exports = (io) => {
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                if (rows[0].gender !== null) {
+                // Fix issue 1: Ensure we check it is not null AND not empty string.
+                if (rows[0].gender !== null && rows[0].gender !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change gender.');
                 }
@@ -447,7 +448,8 @@ module.exports = (io) => {
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                if (rows[0].name !== null) {
+                // Fix issue 1: Ensure we check it is not null AND not empty string.
+                if (rows[0].name !== null && rows[0].name !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change name.');
                 }
