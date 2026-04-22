@@ -1,6 +1,6 @@
 const { useState } = React;
 
-const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted, systemConfig }) => {
+const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted, systemConfig, roomData }) => {
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
     const [maxMembers, setMaxMembers] = useState(6);
@@ -36,10 +36,20 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
     const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
 
-    // Helper to ensure empty/blank names fall back to hex ID, matching Views.jsx logic
-    const getDisplayName = (id, name, username) => {
-        if (name && name.trim() !== '' && name.toLowerCase() !== 'unset') return name;
-        if (username && username.trim() !== '' && username.toLowerCase() !== 'unset') return username;
+    // Use window.getDisplayName for consistency with other components
+    const getDisplayName = (id, fallbackName, fallbackUsername) => {
+        if (window.getDisplayName) {
+             const resolvedName = window.getDisplayName(id, roomData?.names);
+             // If window.getDisplayName returns a hex id, but we have a valid fallback, use the fallback.
+             if (resolvedName === (window.toHex ? window.toHex(id) : id)) {
+                 if (fallbackName && fallbackName.trim() !== '' && fallbackName.toLowerCase() !== 'unset') return fallbackName;
+                 if (fallbackUsername && fallbackUsername.trim() !== '' && fallbackUsername.toLowerCase() !== 'unset') return fallbackUsername;
+             }
+             return resolvedName;
+        }
+
+        if (fallbackName && fallbackName.trim() !== '' && fallbackName.toLowerCase() !== 'unset') return fallbackName;
+        if (fallbackUsername && fallbackUsername.trim() !== '' && fallbackUsername.toLowerCase() !== 'unset') return fallbackUsername;
         return window.toHex ? window.toHex(id) : (id || 'Unknown');
     };
 
