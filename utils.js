@@ -73,4 +73,20 @@ function verifyToken(token) {
     }
 }
 
-module.exports = { validateInitData, tgApiCall, sendMsg, getWeekKey, toHex, generateToken, verifyToken };
+// Safely escape HTML tags and neutralize potential XSS payloads
+function sanitizeText(text) {
+    if (typeof text !== 'string') return '';
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#x27;',
+        "/": '&#x2F;',
+        "`": '&#x60;',
+        "=": '&#x3D;'
+    };
+    return text.replace(/[&<>"'`=\/]/g, function(m) { return map[m]; });
+}
+
+module.exports = { validateInitData, tgApiCall, sendMsg, getWeekKey, toHex, generateToken, verifyToken, sanitizeText };
