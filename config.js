@@ -1,4 +1,5 @@
 const os = require('os');
+const crypto = require('crypto');
 
 module.exports = {
     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -7,6 +8,8 @@ module.exports = {
     NUM_WORKERS: process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cpus().length || 8),
     BOT_TOKEN: process.env.BOT_TOKEN,
     WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+    // Provide a complex fallback string in case JWT_SECRET is missing from the environment
+    JWT_SECRET: process.env.JWT_SECRET || 'doodledash_secure_fallback_secret_123!@#',
     CREDITS_PER_STAR: parseInt(process.env.CREDITS_PER_STAR) || 1,
     INK_CONFIG: {
         black: { free: 2500, extra: 2500, cost: 0.5 }
