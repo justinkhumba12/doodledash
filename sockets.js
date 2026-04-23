@@ -1,5 +1,5 @@
 const { db, redis } = require('./database');
-const { toHex, getWeekKey, verifyToken } = require('./utils');
+const { toHex, getWeekKey, verifyToken, sanitizeText } = require('./utils');
 const { getRoom, saveRoom, releaseRoomMemory, deleteRoomData, broadcastRooms, checkRoomReset, syncRoom } = require('./roomManager');
 const { getUserState } = require('./userManager');
 const config = require('./config');
@@ -770,19 +770,22 @@ module.exports = (io) => {
 
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom || !data.message) return;
+            if (!currentUser || !currentRoom || !data.message || typeof data.message !== 'string') return;
             
             const [userRows] = await db.query('SELECT status FROM users WHERE tg_id = ?', [currentUser]);
             if (userRows.length && userRows[0].status === 'mute') {
                 return socket.emit('create_error', 'You are currently muted and cannot send messages.');
             }
 
+            const sanitizedMessage = sanitizeText(data.message).substring(0, 200);
+            if (!sanitizedMessage) return;
+
             const msgId = await redis.incr('global_chat_id');
             const chatObj = {
                 id: msgId,
                 room_id: currentRoom,
                 user_id: currentUser,
-                message: data.message.substring(0, 200),
+                message: sanitizedMessage,
                 created_at: new Date()
             };
 
@@ -795,14 +798,17 @@ module.exports = (io) => {
         socket.on('set_word', async ({ word }) => {
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom || !word) return;
+            if (!currentUser || !currentRoom || !word || typeof word !== 'string') return;
+
+            const sanitizedWord = sanitizeText(word);
+            if (!sanitizedWord) return;
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'PRE_DRAW' && room.current_drawer_id === currentUser) {
-                room.word_to_draw = word.toUpperCase();
+                room.word_to_draw = sanitizedWord.toUpperCase();
                 room.status = 'DRAWING';
                 room.round_end_time = null;
-                room.masked_word = word.split('').map((c, i) => ({ char: c, revealed: c === ' ', index: i }));
+                room.masked_word = sanitizedWord.split('').map((c, i) => ({ char: c, revealed: c === ' ', index: i }));
                 
                 await redis.del(`room:${currentRoom}:drawings`, `room:${currentRoom}:redo`, `room:${currentRoom}:guesses`);
                 await saveRoom(room);
@@ -816,7 +822,16 @@ module.exports = (io) => {
 
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom || !data.lines) return;
+            
+            // Check existence and strictly enforce lines array
+            if (!currentUser || !currentRoom || !data.lines || !Array.isArray(data.lines)) return;
+
+            // Strict type validation for numerical coordinates
+            for (let i = 0; i < data.lines.length; i++) {
+                if (typeof data.lines[i] !== 'number' || isNaN(data.lines[i])) {
+                    return; // Reject invalid payload completely if non-numerical values are detected
+                }
+            }
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
@@ -940,7 +955,10 @@ module.exports = (io) => {
 
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
-            if (!currentUser || !currentRoom || !data.guess) return;
+            if (!currentUser || !currentRoom || !data.guess || typeof data.guess !== 'string') return;
+
+            const sanitizedGuess = sanitizeText(data.guess);
+            if (!sanitizedGuess) return;
 
             const room = await getRoom(currentRoom);
             if (!room || room.status !== 'DRAWING' || room.current_drawer_id === currentUser) return;
@@ -954,11 +972,11 @@ module.exports = (io) => {
 
             if (myGuesses.length >= 6) return socket.emit('create_error', 'Max guesses reached.');
 
-            const isCorrect = data.guess.toUpperCase() === room.word_to_draw;
+            const isCorrect = sanitizedGuess.toUpperCase() === room.word_to_draw;
             const guessObj = {
                 id: Date.now(),
                 user_id: currentUser,
-                guess_text: isCorrect ? 'Correct guess!' : data.guess.toUpperCase(),
+                guess_text: isCorrect ? 'Correct guess!' : sanitizedGuess.toUpperCase(),
                 is_correct: isCorrect
             };
 
