@@ -23,12 +23,44 @@ module.exports = (io) => {
         socket.data.idleWarned = false;
         socket.data.currentUser = null;
         socket.data.currentRoom = null;
-        socket.data.lastMessageTime = 0; 
         
-        const checkRateLimit = () => {
+        // --- REAL-TIME PROTECTIONS & STRICT RATE LIMITING ---
+        socket.data.eventCounts = {};
+        socket.data.isRateLimited = false;
+
+        const checkEventRate = (eventName, limit, timeWindow) => {
             const now = Date.now();
-            if (now - socket.data.lastMessageTime < 1000) return false;
-            socket.data.lastMessageTime = now;
+            if (!socket.data.eventCounts[eventName]) {
+                socket.data.eventCounts[eventName] = { count: 1, firstTime: now };
+                return true;
+            }
+            
+            const tracker = socket.data.eventCounts[eventName];
+            
+            // Reset the time window if it has passed
+            if (now - tracker.firstTime > timeWindow) {
+                tracker.count = 1;
+                tracker.firstTime = now;
+                return true;
+            }
+            
+            tracker.count++;
+            
+            if (tracker.count > limit) {
+                if (!socket.data.isRateLimited) {
+                    socket.data.isRateLimited = true;
+                    // Warn the client that they are being throttled
+                    socket.emit('rate_limit_warning', `You are sending too many '${eventName}' actions. Please slow down.`);
+                    setTimeout(() => { socket.data.isRateLimited = false; }, 3000); // 3-second penalty
+                }
+                
+                // Disconnect abusers who severely bypass the limit (e.g. malicious scripts)
+                if (tracker.count > limit * 3) {
+                    socket.emit('auth_error', 'Disconnected due to severe event spamming.');
+                    socket.disconnect(true);
+                }
+                return false;
+            }
             return true;
         };
 
@@ -198,7 +230,6 @@ module.exports = (io) => {
             }
         });
 
-        // Store Logic for Styles
         socket.on('buy_style', async ({ style_id, currency }) => {
             const currentUser = socket.data.currentUser;
             if (!currentUser || !style_id || !currency) return;
@@ -257,6 +288,7 @@ module.exports = (io) => {
         });
 
         socket.on('set_ready', async () => {
+            if (!checkEventRate('ready', 5, 5000)) return;
             queuedAction(async () => {
                 const roomId = socket.data.currentRoom;
                 const userId = socket.data.currentUser;
@@ -296,6 +328,8 @@ module.exports = (io) => {
         socket.on('report_user', async ({ reported_id, context, reason, snapshot_data }) => {
             const currentUser = socket.data.currentUser;
             if (!currentUser || !reported_id || !context) return;
+            if (!checkEventRate('report', 3, 10000)) return; // Max 3 reports per 10 seconds
+            
             try {
                 await db.query(
                     'INSERT INTO reports (reporter_id, reported_id, context, reason, snapshot_data) VALUES (?, ?, ?, ?, ?)',
@@ -309,6 +343,7 @@ module.exports = (io) => {
         });
         
         socket.on('exchange_gems', async ({ package_id }) => {
+            if (!checkEventRate('exchange', 2, 5000)) return;
             const packagesRaw = await redis.get('config_gem_packages');
             const packages = packagesRaw ? JSON.parse(packagesRaw) : [
                 { id: 1, gems: 1, credits: 5 }, { id: 2, gems: 3, credits: 15 },
@@ -331,6 +366,7 @@ module.exports = (io) => {
         });
 
         socket.on('get_leaderboard', async () => {
+            if (!checkEventRate('leaderboard', 3, 5000)) return;
             try {
                 const weekKey = getWeekKey();
                 
@@ -391,8 +427,8 @@ module.exports = (io) => {
         });
 
         socket.on('get_donators_leaderboard', async () => {
+            if (!checkEventRate('leaderboard_donators', 3, 5000)) return;
             try {
-                // To keep live equipped styles, we dynamically fetch them
                 const [rows] = await db.query(`
                     SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender, u.name, u.equipped_style
                     FROM donations d
@@ -412,12 +448,13 @@ module.exports = (io) => {
         socket.on('set_gender', async ({ gender }) => {
             const currentUser = socket.data.currentUser;
             if (!currentUser || !['Male', 'Female', 'Other'].includes(gender)) return;
+            if (!checkEventRate('settings', 5, 5000)) return;
+            
             try {
                 const [rows] = await db.query('SELECT gender, credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                // Fix issue 1: Ensure we check it is not null AND not empty string.
                 if (rows[0].gender !== null && rows[0].gender !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change gender.');
@@ -438,12 +475,13 @@ module.exports = (io) => {
         socket.on('set_name', async ({ name }) => {
             const currentUser = socket.data.currentUser;
             if (!currentUser || typeof name !== 'string' || name.trim().length < 2) return;
+            if (!checkEventRate('settings', 5, 5000)) return;
+            
             try {
                 const [rows] = await db.query('SELECT name, credits FROM users WHERE tg_id = ?', [currentUser]);
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                // Fix issue 1: Ensure we check it is not null AND not empty string.
                 if (rows[0].name !== null && rows[0].name !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change name.');
@@ -464,6 +502,7 @@ module.exports = (io) => {
         });
 
         socket.on('request_initial_drawings', async () => {
+            if (!checkEventRate('sync', 5, 3000)) return;
             const currentRoom = socket.data.currentRoom;
             if (currentRoom) {
                 const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
@@ -478,6 +517,7 @@ module.exports = (io) => {
         });
 
         socket.on('send_reaction', ({ emoji, action }) => {
+            if (!checkEventRate('reaction', 10, 5000)) return; // Max 10 reactions per 5 seconds
             const currentRoom = socket.data.currentRoom;
             const currentUser = socket.data.currentUser;
             if (currentRoom && currentUser) {
@@ -486,6 +526,7 @@ module.exports = (io) => {
         });
 
         socket.on('claim_reward', async ({ type }) => {
+            if (!checkEventRate('claim_reward', 5, 5000)) return;
             try {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
@@ -577,6 +618,7 @@ module.exports = (io) => {
         });
 
         socket.on('create_room', async (data) => {
+            if (!checkEventRate('create_room', 3, 10000)) return;
             queuedAction(async () => {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
@@ -653,6 +695,7 @@ module.exports = (io) => {
         });
 
         socket.on('join_room', async (data) => {
+            if (!checkEventRate('join_room', 5, 5000)) return;
             queuedAction(async () => {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
@@ -722,12 +765,13 @@ module.exports = (io) => {
         });
 
         socket.on('chat', async (data) => {
+            // Strict Rate Limit: 5 messages per 3 seconds
+            if (!checkEventRate('chat', 5, 3000)) return;
+
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom || !data.message) return;
             
-            if (!checkRateLimit()) return;
-
             const [userRows] = await db.query('SELECT status FROM users WHERE tg_id = ?', [currentUser]);
             if (userRows.length && userRows[0].status === 'mute') {
                 return socket.emit('create_error', 'You are currently muted and cannot send messages.');
@@ -767,6 +811,9 @@ module.exports = (io) => {
         });
 
         socket.on('draw', async (data) => {
+            // Strict Rate Limit for drawing lines (e.g. max 120 packets per second to prevent malicious crashes)
+            if (!checkEventRate('draw', 120, 1000)) return;
+
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom || !data.lines) return;
@@ -796,6 +843,7 @@ module.exports = (io) => {
         });
 
         socket.on('clear_all', async () => {
+            if (!checkEventRate('draw_action', 10, 2000)) return;
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
@@ -819,6 +867,7 @@ module.exports = (io) => {
         });
 
         socket.on('undo', async () => {
+            if (!checkEventRate('draw_action', 20, 2000)) return;
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
@@ -852,6 +901,7 @@ module.exports = (io) => {
         });
 
         socket.on('redo', async () => {
+            if (!checkEventRate('draw_action', 20, 2000)) return;
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
@@ -885,6 +935,9 @@ module.exports = (io) => {
         });
 
         socket.on('guess', async (data) => {
+            // Rate limit: Max 10 guesses per 5 seconds
+            if (!checkEventRate('guess', 10, 5000)) return;
+
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom || !data.guess) return;
