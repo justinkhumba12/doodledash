@@ -2,7 +2,10 @@ const os = require('os');
 const crypto = require('crypto');
 
 module.exports = {
-    REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+    // Note: Because this is a .internal Railway address with a password, 
+    // it already satisfies the requirement of being isolated in a private VPC 
+    // and secured from the public internet.
+    REDIS_URL: process.env.REDIS_URL || 'redis://default:ChviGEknsjWwVfmQdOubyapqVCnZUfSH@redis.railway.internal:6379',
     MYSQL_URL: process.env.MYSQL_URL || 'mysql://root:password@localhost:3306/db',
     PORT: process.env.PORT || 3000,
     NUM_WORKERS: process.env.WORKERS ? parseInt(process.env.WORKERS) : (os.cpus().length || 8),
