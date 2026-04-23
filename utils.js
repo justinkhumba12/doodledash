@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const config = require('./config');
+const jwt = require('jsonwebtoken');
 
 function validateInitData(initData, token) {
     if (!initData || !token) return false;
@@ -57,4 +58,19 @@ function getWeekKey() {
 
 const toHex = (id) => id ? "0x" + Number(id).toString(16).toUpperCase().slice(-6) : '';
 
-module.exports = { validateInitData, tgApiCall, sendMsg, getWeekKey, toHex };
+// Generate a short-lived JWT for the authenticated user
+function generateToken(userId) {
+    return jwt.sign({ id: userId }, config.JWT_SECRET, { expiresIn: '12h' });
+}
+
+// Verify the JWT and extract the user ID
+function verifyToken(token) {
+    try {
+        const decoded = jwt.verify(token, config.JWT_SECRET);
+        return decoded.id;
+    } catch (err) {
+        return null;
+    }
+}
+
+module.exports = { validateInitData, tgApiCall, sendMsg, getWeekKey, toHex, generateToken, verifyToken };
