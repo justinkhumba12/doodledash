@@ -1,6 +1,6 @@
 const rateLimit = require('express-rate-limit');
 const { db, redis } = require('./database');
-const { validateInitData, tgApiCall, sendMsg, getWeekKey } = require('./utils');
+const { validateInitData, tgApiCall, sendMsg, getWeekKey, generateToken } = require('./utils');
 const { getUserState } = require('./userManager');
 const config = require('./config');
 
@@ -124,7 +124,10 @@ module.exports = (app, io) => {
 
             await db.query(`UPDATE users SET last_active = UTC_TIMESTAMP() WHERE tg_id = ?`, [tgId]);
 
-            res.json({ success: true, userId: tgId });
+            // Generate JWT Token for stateless sessions over WebSockets
+            const token = generateToken(tgId);
+
+            res.json({ success: true, userId: tgId, token });
         } catch (err) {
             console.error('/api/authenticate error:', err);
             res.status(500).json({ error: 'Internal server error during authentication.' });
