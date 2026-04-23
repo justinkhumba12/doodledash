@@ -1,5 +1,5 @@
 const { db, redis } = require('./database');
-const { toHex, getWeekKey, validateInitData } = require('./utils');
+const { toHex, getWeekKey, verifyToken } = require('./utils');
 const { getRoom, saveRoom, releaseRoomMemory, deleteRoomData, broadcastRooms, checkRoomReset, syncRoom } = require('./roomManager');
 const { getUserState } = require('./userManager');
 const config = require('./config');
@@ -109,28 +109,22 @@ module.exports = (io) => {
             if (userState) socket.emit('user_update', userState);
         };
 
-        socket.on('auth', async ({ initData, photoUrl }) => {
+        socket.on('auth', async ({ token, photoUrl }) => {
             try {
-                let currentUser;
-                
-                if (initData) {
-                    const isMock = process.env.NODE_ENV !== 'production' && initData.includes('mock_web_auth=true');
-                    if (!isMock && config.BOT_TOKEN && !validateInitData(initData, config.BOT_TOKEN)) {
-                        return socket.emit('auth_error', 'Invalid Telegram authentication payload.');
-                    }
-                    const urlParams = new URLSearchParams(initData);
-                    const userObjStr = urlParams.get('user');
-                    if (!userObjStr) return socket.emit('auth_error', 'Invalid user payload.');
-                    const userObj = JSON.parse(userObjStr);
-                    currentUser = userObj.id.toString(); 
-                    if (userObj.username) {
-                        await redis.hset('user_usernames', currentUser, userObj.username);
-                    }
-                } else {
-                    return socket.emit('auth_error', 'Access Denied: Please open via Telegram.');
+                if (!token) {
+                    socket.emit('auth_error', 'Access Denied: Missing authentication token.');
+                    return socket.disconnect(true);
                 }
-                
+
+                const decodedUserId = verifyToken(token);
+                if (!decodedUserId) {
+                    socket.emit('auth_error', 'Invalid or expired authentication token.');
+                    return socket.disconnect(true);
+                }
+
+                const currentUser = decodedUserId.toString();
                 socket.data.currentUser = currentUser;
+
                 await redis.hdel('user_disconnects', currentUser);
                 
                 if (photoUrl) {
@@ -200,6 +194,7 @@ module.exports = (io) => {
             } catch (err) { 
                 console.error('Auth Error', err); 
                 socket.emit('auth_error', 'Authentication processing failed.');
+                socket.disconnect(true);
             }
         });
 
