@@ -20,10 +20,20 @@ const io = new Server(server, {
     adapter: createAdapter(pubClient, subClient)
 });
 
+// Configure the Content Security Policy (CSP) frame-ancestors directive to explicitly allow 'self', 
+// https://*.telegram.org, and tg: so the application can be safely iframed inside Telegram Web Apps 
+// while blocking unauthorized domains.
 app.use(helmet({
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    frameguard: false 
+    contentSecurityPolicy: {
+        directives: {
+            ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+            "frame-ancestors": ["'self'", "https://*.telegram.org", "tg:"],
+            "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:"],
+            "style-src": ["'self'", "'unsafe-inline'", "https:"],
+            "img-src": ["'self'", "data:", "https:", "http:"],
+            "connect-src": ["'self'", "ws:", "wss:", "http:", "https:"]
+        },
+    },
 }));
 
 app.use(cors(config.CORS_OPTIONS));
