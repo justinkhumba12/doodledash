@@ -20,6 +20,7 @@ const io = new Server(server, {
     adapter: createAdapter(pubClient, subClient)
 });
 
+// Enforce strict security headers.
 // Configure the Content Security Policy (CSP) frame-ancestors directive to explicitly allow 'self', 
 // https://*.telegram.org, and tg: so the application can be safely iframed inside Telegram Web Apps 
 // while blocking unauthorized domains.
