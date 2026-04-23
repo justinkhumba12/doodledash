@@ -4,6 +4,7 @@
   "description": "DoodleDash - Multiplayer drawing game backend",
   "main": "server.js",
   "scripts": {
+    "prestart": "npm audit || true",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
