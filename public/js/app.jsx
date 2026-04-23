@@ -109,7 +109,6 @@ const DynamicStyles = ({ activeStyleIds, styleDatabase }) => {
 };
 window.DynamicStyles = DynamicStyles;
 
-
 const { useState, useEffect, useRef, useCallback } = React;
 
 // --- Main App Component ---
@@ -330,6 +329,18 @@ const App = () => {
             reconnectionAttempts: Infinity
         });
 
+        // Add Local Socket Event Throttling Interceptor
+        window.isThrottled = false;
+        const originalEmit = newSocket.emit;
+        newSocket.emit = function(eventName, ...args) {
+            // Drop heavily spammed actions when currently rate-limited globally
+            if (window.isThrottled && ['draw', 'chat', 'guess', 'send_reaction'].includes(eventName)) {
+                console.warn(`Emission dropped by local throttle protection to prevent server disconnect: ${eventName}`);
+                return this; // Return self for chainability
+            }
+            return originalEmit.apply(this, [eventName, ...args]);
+        };
+
         newSocket.on('connect', () => {
             setLoadingState('Connecting to server...');
             setIsDisconnected(false);
@@ -429,6 +440,15 @@ const App = () => {
         newSocket.on('idle_warning', (data) => {
             setIdleTimer(data.timeLeft || 30);
             setModal({ type: 'idle_warning', title: 'Are you still there?' });
+        });
+
+        newSocket.on('rate_limit_warning', (msg) => {
+            // Apply warning modal and local throttle flags
+            setModal({ type: 'error', title: 'Action Throttled', content: msg });
+            window.triggerVibration('error');
+            window.isThrottled = true;
+            // Lift the throttle after an appropriate cooldown matching the server penalty
+            setTimeout(() => { window.isThrottled = false; }, 3000);
         });
 
         newSocket.on('reward_success', (msg) => setModal({ type: 'success', title: 'Success', content: msg }));
