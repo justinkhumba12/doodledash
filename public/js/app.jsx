@@ -175,6 +175,8 @@ const App = () => {
         .then(data => {
             if (!isMounted) return;
             if (data.success) {
+                // Securely store the provided JWT
+                sessionStorage.setItem('jwt_token', data.token);
                 setIsAuthComplete(true);
             } else {
                 if (data.error === 'not_registered') {
@@ -332,7 +334,9 @@ const App = () => {
             setLoadingState('Connecting to server...');
             setIsDisconnected(false);
             setIsReloading(false);
-            newSocket.emit('auth', { initData: window.initData, photoUrl: window.profilePic });
+            // Retrieve token and securely authenticate via WebSockets
+            const token = sessionStorage.getItem('jwt_token');
+            newSocket.emit('auth', { token, photoUrl: window.profilePic });
             
             if (lastKnownRoomRef.current) {
                 setTimeout(() => {
@@ -703,32 +707,32 @@ const App = () => {
             
             {profileModal && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { if(profileModal.full) setProfileModal({...profileModal, full: false}); else setProfileModal(null); }}>
-                   {!profileModal.full ? (
-                       <div className="call-toast text-center position-relative" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
-                           {profileModal.user_id !== window.tgId && (
-                               <button className="btn btn-link text-danger position-absolute top-0 end-0 p-3 shadow-none" title="Report Profile" onClick={(e) => {
-                                   e.stopPropagation();
-                                   setProfileModal(null);
-                                   setModal({ type: 'report_input', context: 'profile', reported_id: profileModal.user_id, snapshot_data: '' });
-                               }}>
-                                   <i className="fas fa-flag fs-5"></i>
-                               </button>
-                           )}
-                           
-                           {profileModal.pic ? (
-                               <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border mt-3" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
-                           ) : (
-                               <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm mt-3" style={{fontSize: '100px'}}></i>
-                           )}
-                           <h3 className="mb-1">{window.getDisplayName(profileModal.user_id, roomData?.names)}</h3>
-                           <p className="text-muted small fw-bold mb-3">{window.renderGenderIcon(profileModal.gender)}{profileModal.gender || 'Gender Not Set'}</p>
-                           <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
-                       </div>
-                   ) : (
-                       <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal({...profileModal, full: false})}>
-                           {profileModal.pic ? <img src={profileModal.pic} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} alt="Profile Full"/> : <i className="fas fa-user-circle text-secondary" style={{fontSize: '200px'}}></i>}
-                       </div>
-                   )}
+                    {!profileModal.full ? (
+                        <div className="call-toast text-center position-relative" style={{maxWidth: '400px', width: '90%'}} onClick={e=>e.stopPropagation()}>
+                            {profileModal.user_id !== window.tgId && (
+                                <button className="btn btn-link text-danger position-absolute top-0 end-0 p-3 shadow-none" title="Report Profile" onClick={(e) => {
+                                    e.stopPropagation();
+                                    setProfileModal(null);
+                                    setModal({ type: 'report_input', context: 'profile', reported_id: profileModal.user_id, snapshot_data: '' });
+                                }}>
+                                    <i className="fas fa-flag fs-5"></i>
+                                </button>
+                            )}
+                            
+                            {profileModal.pic ? (
+                                <img src={profileModal.pic} className="rounded-circle mb-3 shadow cursor-pointer border mt-3" width="100" height="100" style={{borderColor: 'var(--primary)', objectFit: 'cover'}} onClick={() => setProfileModal({...profileModal, full: true})} alt="Profile Pic"/>
+                            ) : (
+                                <i className="fas fa-user-circle text-secondary mb-3 bg-white rounded-circle shadow-sm mt-3" style={{fontSize: '100px'}}></i>
+                            )}
+                            <h3 className="mb-1">{window.getDisplayName(profileModal.user_id, roomData?.names)}</h3>
+                            <p className="text-muted small fw-bold mb-3">{window.renderGenderIcon(profileModal.gender)}{profileModal.gender || 'Gender Not Set'}</p>
+                            <button className="btn btn-secondary w-100 rounded-pill fw-bold mt-2" onClick={() => setProfileModal(null)}>Close</button>
+                        </div>
+                    ) : (
+                        <div className="w-100 h-100 d-flex align-items-center justify-content-center" onClick={() => setProfileModal({...profileModal, full: false})}>
+                            {profileModal.pic ? <img src={profileModal.pic} style={{maxWidth: '100vw', maxHeight: '100vh', objectFit: 'contain'}} alt="Profile Full"/> : <i className="fas fa-user-circle text-secondary" style={{fontSize: '200px'}}></i>}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
