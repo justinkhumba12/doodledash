@@ -461,7 +461,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         socket.emit('report_user', { reported_id: modal.reported_id, reason, context: modal.context, snapshot_data: modal.snapshot_data }); 
                         close(); 
                         setModal({type: 'success', title: 'Report Submitted', content: 'Thank you. Our moderators will review this.'});
-                    }}>Submit Report</button>
+                    }}>Submit</button>
                 </div>
             </>
         );
