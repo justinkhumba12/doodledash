@@ -379,7 +379,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                             }}
                             title="Report Inappropriate Drawing"
                         >
-                            <i className="fas fa-flag"></i> Report Drawing
+                            <i className="fas fa-flag"></i>
                         </button>
                     </div>
                 )}
