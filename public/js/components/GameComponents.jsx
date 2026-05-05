@@ -656,11 +656,11 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
     const messagesEndRef = useRef(null);
 
     const myGuessesCount = guesses.filter(g => g.user_id === tgId).length;
-    const isFree = myGuessesCount < 4;
-    const isBlocked = myGuessesCount >= 6;
-    const needsPayment = myGuessesCount === 4;
-
     const myMemberData = roomData.members.find(m => m.user_id === tgId);
+    
+    const purchasedGuesses = myMemberData?.purchased_guesses || 0;
+    const totalGuessesAllowed = 4 + purchasedGuesses;
+    const guessesLeft = Math.max(0, totalGuessesAllowed - myGuessesCount);
     const hasGivenUp = myMemberData?.has_given_up;
 
     const totalGuessers = Math.max(0, roomData.members.length - 1);
@@ -692,21 +692,15 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
     };
 
     const handleGuessSubmit = () => {
-        if (isBlocked) return;
+        if (guessesLeft <= 0) return;
         if (rawInput.length !== unrevealedCount) {
             setModal({ type: 'error', title: 'Invalid Guess', content: `Please fill in all ${unrevealedCount} missing letters.`});
             return;
         }
         
         const fullGuess = reconstructGuess();
-
-        if (needsPayment) {
-            setModal({ type: 'confirm_guess_credit', guess: fullGuess, title: 'Unlock 2 Extra Guesses?' });
-            setRawInput('');
-        } else {
-            if (socket) socket.emit('guess', {guess: fullGuess});
-            setRawInput('');
-        }
+        if (socket) socket.emit('guess', {guess: fullGuess});
+        setRawInput('');
     };
 
     const handleInputChange = (e) => {
@@ -719,6 +713,8 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [guesses]);
+    
+    const showGiveUpButton = isDrawer || guessesLeft <= 0 || hasGivenUp;
 
     return (
         <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>
@@ -750,79 +746,83 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
             
             {roomData.room.status === 'DRAWING' || roomData.room.status === 'PRE_DRAW' ? (
                 <div className="chat-input-wrapper d-flex flex-column mt-auto pb-3">
-                    <button 
-                        className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
-                        onClick={() => {
-                            setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
-                        }}
-                        disabled={!isDrawer && hasGivenUp}
-                    >
-                        <i className="fas fa-flag"></i> 
-                        {isDrawer ? 'Give Up Turn' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
-                    </button>
+                    
+                    {showGiveUpButton && (
+                        <button 
+                            className={`btn mb-2 rounded-pill shadow-sm fw-bold ${hasGivenUp ? 'btn-secondary text-light' : 'btn-warning text-dark'}`} 
+                            onClick={() => {
+                                setModal({ type: isDrawer ? 'confirm_drawer_give_up' : 'confirm_guesser_give_up', title: 'Confirm Give Up' });
+                            }}
+                            disabled={!isDrawer && hasGivenUp}
+                        >
+                            <i className="fas fa-flag"></i> 
+                            {isDrawer ? 'Give Up Turn' : (hasGivenUp ? `Voted Give Up (${givenUpCount}/${totalGuessers})` : 'Give Up Round')}
+                        </button>
+                    )}
 
                     {roomData.room.status === 'DRAWING' && (!isDrawer && !hasGivenUp) ? (
-                        <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
-                            <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
-                                
-                                <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
-                                    {wordData ? (
-                                        (() => {
-                                            let rawIdx = 0;
-                                            return wordData.map((item, i) => {
-                                                let displayChar = '';
-                                                let isHint = item.revealed;
-                                                let showCursor = false;
-                                                if (isHint) {
-                                                    displayChar = item.char;
-                                                } else {
-                                                    displayChar = rawInput[rawIdx] || '';
-                                                    if (rawIdx === rawInput.length && !isBlocked) showCursor = true;
-                                                    rawIdx++;
-                                                }
+                        guessesLeft > 0 ? (
+                            <div className="d-flex w-100 align-items-center bg-light rounded-pill p-1 shadow-sm position-relative border" style={{height: '42px'}}>
+                                <div className="flex-grow-1 position-relative d-flex justify-content-center align-items-center h-100" style={{overflow: 'hidden'}}>
+                                    
+                                    <div className="d-flex gap-1 h-100 position-absolute pointer-events-none w-100 px-2 justify-content-center" style={{zIndex: 1, pointerEvents: 'none'}}>
+                                        {wordData ? (
+                                            (() => {
+                                                let rawIdx = 0;
+                                                return wordData.map((item, i) => {
+                                                    let displayChar = '';
+                                                    let isHint = item.revealed;
+                                                    let showCursor = false;
+                                                    if (isHint) {
+                                                        displayChar = item.char;
+                                                    } else {
+                                                        displayChar = rawInput[rawIdx] || '';
+                                                        if (rawIdx === rawInput.length) showCursor = true;
+                                                        rawIdx++;
+                                                    }
+                                                    return (
+                                                        <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
+                                                            {displayChar}
+                                                            {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
+                                                        </div>
+                                                    );
+                                                })
+                                            })()
+                                        ) : (
+                                            Array.from({length: wordLength}).map((_, i) => {
+                                                const showCursor = (i === rawInput.length);
                                                 return (
-                                                    <div key={i} className={`d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative ${isHint ? 'text-success bg-light' : 'text-dark'}`} style={{width: '32px', height: '100%', borderColor: '#cbd5e1'}}>
-                                                        {displayChar}
+                                                    <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
+                                                        {rawInput[i] || ''}
                                                         {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
                                                     </div>
                                                 );
                                             })
-                                        })()
-                                    ) : (
-                                        Array.from({length: wordLength}).map((_, i) => {
-                                            const showCursor = (i === rawInput.length) && !isBlocked;
-                                            return (
-                                                <div key={i} className="d-flex align-items-center justify-content-center fw-bold fs-5 bg-white border rounded shadow-sm position-relative" style={{width: '32px', height: '100%', borderColor: '#cbd5e1', color: '#1e293b'}}>
-                                                    {rawInput[i] || ''}
-                                                    {showCursor && <span className="position-absolute" style={{ animation: 'blink 1s step-end infinite', borderRight: '2px solid #1e293b', height: '60%' }}></span>}
-                                                </div>
-                                            );
-                                        })
-                                    )}
+                                        )}
+                                    </div>
+                                    
+                                    <input type="text"
+                                        className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
+                                        style={{opacity: 0, zIndex: 10, cursor: 'text'}}
+                                        value={rawInput}
+                                        onChange={handleInputChange}
+                                        onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
+                                        maxLength={unrevealedCount}
+                                        autoComplete="off"
+                                        autoCorrect="off"
+                                        spellCheck="false"
+                                    />
                                 </div>
-                                
-                                <input type="text"
-                                    className="form-control position-absolute w-100 h-100 border-0 bg-transparent text-transparent"
-                                    style={{opacity: 0, zIndex: 10, cursor: 'text'}}
-                                    value={rawInput}
-                                    onChange={handleInputChange}
-                                    onKeyPress={e => e.key === 'Enter' && handleGuessSubmit()}
-                                    maxLength={unrevealedCount}
-                                    disabled={isBlocked}
-                                    autoComplete="off"
-                                    autoCorrect="off"
-                                    spellCheck="false"
-                                />
+                                <button className="btn btn-primary rounded-pill ms-2 px-3 h-100" style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={rawInput.length !== unrevealedCount}>
+                                    <i className="fas fa-paper-plane"></i>
+                                </button>
                             </div>
-                            <button className={`btn ${needsPayment ? 'btn-success' : 'btn-primary'} rounded-pill ms-2 px-3 h-100`} style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={isBlocked || rawInput.length !== unrevealedCount}>
-                                {needsPayment ? <i className="fas fa-unlock"></i> : <i className="fas fa-paper-plane"></i>}
+                        ) : (
+                            <button className="btn btn-success w-100 rounded-pill shadow-sm fw-bold d-flex align-items-center justify-content-center gap-2 mt-1" style={{height: '42px'}} onClick={() => socket && socket.emit('buy_guesses')}>
+                                <i className="fas fa-lock"></i> Buy 2 Guesses for 1 Credit
                             </button>
-                        </div>
+                        )
                     ) : null}
-                    
-                    {!isDrawer && !hasGivenUp && isBlocked && (
-                        <div className="text-danger fw-bold text-center small mt-1">Max 6 guesses reached.</div>
-                    )}
                 </div>
             ) : null}
         </div>

@@ -97,6 +97,7 @@ module.exports = (io) => {
                 total_turns: 0,
                 has_given_up: 0,
                 purchased_hints: '[]',
+                purchased_guesses: 0,
                 ink_used: {},      
                 ink_extra: {},     
                 ink_buys: {},     
@@ -306,6 +307,7 @@ module.exports = (io) => {
                         room.members.forEach(m => { 
                             m.has_given_up = 0; 
                             m.purchased_hints = '[]';
+                            m.purchased_guesses = 0;
                             m.ink_extra = {};
                             m.ink_buys = {};
                             m.ink_used = {};
@@ -957,7 +959,8 @@ module.exports = (io) => {
             const guesses = rawGuesses.map(g => JSON.parse(g));
             const myGuesses = guesses.filter(g => g.user_id === currentUser);
 
-            if (myGuesses.length >= 6) return socket.emit('create_error', 'Max guesses reached.');
+            const allowedGuesses = 4 + (member.purchased_guesses || 0);
+            if (myGuesses.length >= allowedGuesses) return socket.emit('create_error', 'Out of guesses. Please buy more.');
 
             const isCorrect = data.guess.toUpperCase() === room.word_to_draw;
             const guessObj = {
@@ -1118,15 +1121,26 @@ module.exports = (io) => {
             }
         });
 
-        socket.on('buy_guess', async ({ guess }) => {
+        socket.on('buy_guesses', async () => {
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
             
+            const room = await getRoom(currentRoom);
+            if (!room || room.status !== 'DRAWING' || room.current_drawer_id === currentUser) return;
+
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (!member) return;
+
             const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
             if (userRows.length && userRows[0].credits >= 1) {
                 await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
                 await redis.hincrbyfloat('user_credits', currentUser, -1);
+                
+                member.purchased_guesses = (member.purchased_guesses || 0) + 2;
+                
+                await saveRoom(room);
+                await syncRoom(currentRoom, io);
                 
                 const userState = await getUserState(currentUser);
                 if (userState) socket.emit('user_update', userState);

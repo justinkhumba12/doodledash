@@ -66,6 +66,7 @@ async function checkRoomReset(roomId) {
             room.members.forEach(m => { 
                 m.has_given_up = 0; 
                 m.purchased_hints = '[]'; 
+                m.purchased_guesses = 0;
                 m.ink_used = {}; 
                 m.ink_extra = {}; 
                 m.ink_buys = {}; 
@@ -85,6 +86,7 @@ async function checkRoomReset(roomId) {
         room.members.forEach(m => { 
             m.has_given_up = 0; 
             m.purchased_hints = '[]'; 
+            m.purchased_guesses = 0;
             m.ink_used = {}; 
             m.ink_extra = {}; 
             m.ink_buys = {}; 

@@ -190,7 +190,7 @@ module.exports = (io) => {
                             }
 
                             const cId = await redis.incr('global_chat_id');
-                            const sysChat = { id: cId, room_id: roomId, user_id: s.data.currentUser, message: 'was kicked for being idle.', is_system: true, created_at: new Date() };
+                            const sysChat = { id: cId, room_id: roomId, user_id: s.data.currentUser, message: 'was kicked for being inactive.', is_system: true, created_at: new Date() };
                             await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
                             await redis.ltrim(`room:${roomId}:chats`, -30, -1);
                             io.to(`room_${roomId}`).emit('new_chat', sysChat);
