@@ -1006,14 +1006,30 @@ module.exports = (io) => {
                     await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [inkConfig.cost, currentUser]);
                     await redis.hincrbyfloat('user_credits', currentUser, -inkConfig.cost);
                     
-                    // Logic updated: Ink extra is accurately accumulated allowing proper scaling without overwriting.
                     member.ink_extra = member.ink_extra || {};
-                    member.ink_extra[color] = (member.ink_extra[color] || 0) + inkConfig.extra;
+                    member.ink_used = member.ink_used || {};
+                    
+                    const currentUsed = member.ink_used[color] || 0;
+                    const currentExtra = member.ink_extra[color] || 0;
+                    
+                    // Logic Update: Calculate the true remaining ink
+                    // We use Math.max to prevent strange negative capacity behaviors if they ever theoretically drew past 0
+                    const currentRemaining = Math.max(0, inkConfig.free + currentExtra - currentUsed);
+                    
+                    // The new total capacity is strictly equal to their remaining amount + the bought amount 
+                    // This explicitly stops adding the "default free amount ink" on top of their new capacity
+                    const boughtInk = inkConfig.extra;
+                    const newTotalInk = currentRemaining + boughtInk;
+                    
+                    member.ink_used[color] = 0; // Reset used ink to mathematically make maxInk = their actual total ink.
+                    member.ink_extra[color] = newTotalInk - inkConfig.free; // Offset the frontend's static free capacity assumption
                     member.ink_buys[color] = buysMade + 1;
 
                     await saveRoom(room);
                     
+                    // Emit both capacity sync and used-reset sync so frontend updates accurately
                     io.to(`room_${currentRoom}`).emit('update_ink_capacity', { user_id: currentUser, extra: member.ink_extra });
+                    io.to(`room_${currentRoom}`).emit('update_ink', { color, used: 0 });
                     
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
@@ -1039,7 +1055,6 @@ module.exports = (io) => {
                 const purchased_hints = JSON.parse(member.purchased_hints || '[]');
                 const base_hints = JSON.parse(room.base_hints || '[]');
 
-                // Logic updated: Only mark the hint as unlocked for this specific member!
                 if (!purchased_hints.includes(index) && !base_hints.includes(index)) {
                     const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
                     if (userRows.length && userRows[0].credits >= 1) {
@@ -1077,7 +1092,6 @@ module.exports = (io) => {
                 const purchased_hints = JSON.parse(member.purchased_hints || '[]');
                 const base_hints = JSON.parse(room.base_hints || '[]');
 
-                // Logic updated: Proper individual save tracking
                 if (!purchased_hints.includes(index) && !base_hints.includes(index)) {
                     purchased_hints.push(index);
                     member.purchased_hints = JSON.stringify(purchased_hints);
