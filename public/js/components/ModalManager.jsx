@@ -468,23 +468,20 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
     } else if (modal.type === 'chat_action') {
         title = 'Message Options';
         
-        // Grab style correctly, supporting the explicitly passed `modal.styleClass` 
-        // as well as the fallback mapping to systemConfig and roomData if needed.
-        const styleClass = modal.styleClass || window.getStyleClass(modal.message.equipped_style || roomData?.styles?.[modal.message.user_id], systemConfig) || 'text-dark';
+        // Properly load user's equipped style or fallback to roomData style mapping
+        const styleClass = window.getStyleClass(modal.message.equipped_style || roomData?.styles?.[modal.message.user_id], systemConfig) || 'text-dark';
         
         // Ensure name extraction uses proper order of properties available
         const id = modal.message.user_id;
-        const displayMsgName = modal.displayName || getDisplayName(id, modal.message.name, modal.message.username);
+        const name = modal.message.name;
+        const username = modal.message.username;
+        const displayMsgName = getDisplayName(id, name, username);
         
         content = (
             <div className="d-flex flex-column gap-2">
                 <div className="mb-3 text-center">
-                    <div className="small text-muted mb-2">Message from:</div>
-                    <div className={`fw-bold fs-4 ${styleClass} mb-2`} data-name={displayMsgName}>{displayMsgName}</div>
-                    <div className="text-dark bg-light p-3 rounded-3 border text-break font-monospace small position-relative shadow-sm text-start">
-                        <i className="fas fa-quote-left text-muted opacity-50 position-absolute" style={{ top: '8px', left: '10px', fontSize: '0.7rem' }}></i>
-                        <span className="ms-3">{modal.message.message}</span>
-                    </div>
+                    <div className="small text-muted mb-1">Message from:</div>
+                    <div className={`fw-bold fs-5 ${styleClass}`} data-name={displayMsgName}>{displayMsgName}</div>
                 </div>
                 {modal.message.user_id !== window.tgId && (
                     <button className="btn btn-danger rounded-pill w-100 fw-bold" onClick={() => setModal({ type: 'report_input', context: 'chat', reported_id: modal.message.user_id, snapshot_data: modal.message.message })}>
