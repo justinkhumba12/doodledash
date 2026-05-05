@@ -78,6 +78,13 @@ module.exports = (io) => {
                 if (oRoom) {
                     oRoom.members = oRoom.members.filter(m => m.user_id !== userId);
                     await saveRoom(oRoom);
+                    
+                    const cId = await redis.incr('global_chat_id');
+                    const sysChat = { id: cId, room_id: oldRoom, user_id: userId, message: 'left the room.', is_system: true, created_at: new Date() };
+                    await redis.rpush(`room:${oldRoom}:chats`, JSON.stringify(sysChat));
+                    await redis.ltrim(`room:${oldRoom}:chats`, -50, -1);
+                    io.to(`room_${oldRoom}`).emit('new_chat', sysChat);
+
                     await checkRoomReset(oldRoom);
                 }
             }
@@ -102,6 +109,12 @@ module.exports = (io) => {
             socket.leave('lobby');
             socket.emit('join_success', roomIdNum);
             
+            const cId = await redis.incr('global_chat_id');
+            const sysChat = { id: cId, room_id: roomIdNum, user_id: userId, message: 'joined the room.', is_system: true, created_at: new Date() };
+            await redis.rpush(`room:${roomIdNum}:chats`, JSON.stringify(sysChat));
+            await redis.ltrim(`room:${roomIdNum}:chats`, -50, -1);
+            io.to(`room_${roomIdNum}`).emit('new_chat', sysChat);
+
             if (oldRoom) await syncRoom(oldRoom, io);
             await syncRoom(roomIdNum, io);
             await broadcastRooms(io);
@@ -178,7 +191,6 @@ module.exports = (io) => {
                 const maxRoomsRaw = await redis.get('config_max_rooms');
                 const roomLimitsRaw = await redis.get('config_room_limits');
                 
-                // Fetch name styles to pass to the client
                 const [nameStyles] = await db.query('SELECT * FROM name_styles');
 
                 const systemConfig = {
@@ -204,7 +216,6 @@ module.exports = (io) => {
             }
         });
 
-        // Store Logic for Styles
         socket.on('buy_style', async ({ style_id, currency }) => {
             const currentUser = socket.data.currentUser;
             if (!currentUser || !style_id || !currency) return;
@@ -284,7 +295,7 @@ module.exports = (io) => {
                         const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
                         room.current_drawer_id = room.members[nextIndex].user_id;
 
-                        room.round_end_time = null; // Timer completely removed for drawing as requested
+                        room.round_end_time = null; 
                         room.break_end_time = null;
                         room.word_to_draw = null;
                         room.base_hints = '[]';
@@ -292,7 +303,6 @@ module.exports = (io) => {
                         room.end_reason = null;
                         room.last_winner_id = null;
                         
-                        // Clean up round-specific data for all members
                         room.members.forEach(m => { 
                             m.has_given_up = 0; 
                             m.purchased_hints = '[]';
@@ -408,7 +418,6 @@ module.exports = (io) => {
 
         socket.on('get_donators_leaderboard', async () => {
             try {
-                // To keep live equipped styles, we dynamically fetch them
                 const [rows] = await db.query(`
                     SELECT d.tg_id, d.total_donated, u.avatar_url, u.gender, u.name, u.equipped_style
                     FROM donations d
@@ -433,7 +442,6 @@ module.exports = (io) => {
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                // Ensure we check it is not null AND not empty string.
                 if (rows[0].gender !== null && rows[0].gender !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change gender.');
@@ -459,7 +467,6 @@ module.exports = (io) => {
                 if (rows.length === 0) return;
                 
                 let cost = 0;
-                // Ensure we check it is not null AND not empty string.
                 if (rows[0].name !== null && rows[0].name !== '') {
                     cost = 5;
                     if (rows[0].credits < 5) return socket.emit('create_error', 'Not enough credits to change name.');
@@ -617,11 +624,10 @@ module.exports = (io) => {
                 let maxMem = parseInt(data.max_members) || 6;
                 const expireHours = parseFloat(data.expire_hours) || 0.5;
 
-                // Adjust based on limits
                 if (!isPriv) {
-                    maxMem = roomLimits.publicMax; // Force fixed size for public
+                    maxMem = roomLimits.publicMax; 
                 } else {
-                    maxMem = Math.min(maxMem, roomLimits.privateMax); // Cap private
+                    maxMem = Math.min(maxMem, roomLimits.privateMax); 
                 }
 
                 let cost = 0;
@@ -709,6 +715,13 @@ module.exports = (io) => {
                 if (room) {
                     room.members = room.members.filter(m => m.user_id !== currentUser);
                     await saveRoom(room);
+                    
+                    const cId = await redis.incr('global_chat_id');
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'left the room.', is_system: true, created_at: new Date() };
+                    await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                    await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                    io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+
                     await checkRoomReset(currentRoom);
                     await syncRoom(currentRoom, io);
                     await broadcastRooms(io);
@@ -776,7 +789,6 @@ module.exports = (io) => {
                 room.status = 'DRAWING';
                 room.round_end_time = null;
 
-                // Server-Side Default Hint Logic implementation
                 const lettersOnly = actualWord.replace(/ /g, '');
                 const len = lettersOnly.length;
                 let hintCount = 0;
@@ -793,14 +805,13 @@ module.exports = (io) => {
                     if (actualWord[i] !== ' ') nonSpaceIndices.push(i);
                 }
 
-                // Shuffle array to pick random default hints
                 for (let i = nonSpaceIndices.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [nonSpaceIndices[i], nonSpaceIndices[j]] = [nonSpaceIndices[j], nonSpaceIndices[i]];
                 }
                 
                 const selectedHints = nonSpaceIndices.slice(0, hintCount);
-                room.base_hints = JSON.stringify(selectedHints); // Store hints securely inside the room
+                room.base_hints = JSON.stringify(selectedHints);
 
                 room.masked_word = actualWord.split('').map((c, i) => ({
                     char: c,
@@ -823,7 +834,6 @@ module.exports = (io) => {
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
                 const drawObj = { lines: data.lines, color: 'black' };
                 await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
-                // Clear redo queue since new drawing action invalidates future redos
                 await redis.del(`room:${currentRoom}:redo`);
                 
                 let strokeLength = calculateStrokeLength(data.lines);
@@ -961,6 +971,12 @@ module.exports = (io) => {
             io.to(`room_${currentRoom}`).emit('new_guess', guessObj);
 
             if (isCorrect) {
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'has guessed the word!', is_system: true, created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+
                 room.status = 'REVEAL';
                 room.last_winner_id = currentUser;
                 room.break_end_time = new Date(Date.now() + 5000);
@@ -1025,7 +1041,6 @@ module.exports = (io) => {
 
                     await saveRoom(room);
                     
-                    // Force a full room sync so the client-side state correctly updates the capacity
                     await syncRoom(currentRoom, io);
                     
                     io.to(`room_${currentRoom}`).emit('update_ink_capacity', { user_id: currentUser, extra: member.ink_extra });
@@ -1129,6 +1144,12 @@ module.exports = (io) => {
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'gave up their turn.', is_system: true, created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+
                 room.status = 'REVEAL';
                 room.end_reason = 'drawer_gave_up';
                 room.break_end_time = new Date(Date.now() + 5000);
@@ -1150,6 +1171,12 @@ module.exports = (io) => {
                     member.has_given_up = 1;
                     await saveRoom(room);
                     
+                    const cId = await redis.incr('global_chat_id');
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'voted to give up.', is_system: true, created_at: new Date() };
+                    await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                    await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                    io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+
                     const activeGuessers = room.members.filter(m => m.user_id !== room.current_drawer_id);
                     const allGivenUp = activeGuessers.length > 0 && activeGuessers.every(m => m.has_given_up);
                     
@@ -1179,6 +1206,12 @@ module.exports = (io) => {
                 }
                 await saveRoom(room);
                 
+                const cId = await redis.incr('global_chat_id');
+                const sysChat = { id: cId, room_id: currentRoom, user_id: target_id, message: 'was kicked from the room.', is_system: true, created_at: new Date() };
+                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+
                 const targetSocket = await io.in(`room_${currentRoom}`).fetchSockets().then(sockets => sockets.find(s => s.data.currentUser === target_id));
                 if (targetSocket) {
                     targetSocket.leave(`room_${currentRoom}`);

@@ -162,11 +162,9 @@ async function syncRoom(roomId, io) {
                 
                 masked_word = actual_word.split('').map((char, index) => {
                     if (char === ' ') return { char: ' ', index, revealed: true };
-                    // Drawer sees everything, reveal answers on REVEAL, and display active hints.
                     if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
                         return { char, index, revealed: true };
                     }
-                    // Server-Side hint feature: Safely replace all unrevealed letters with underscores securely on the server!
                     return { char: '_', index, revealed: false };
                 });
             }

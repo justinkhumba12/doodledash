@@ -68,9 +68,16 @@ module.exports = (io) => {
                                 room.members.forEach(m => { m.is_ready = 0; });
                                 
                                 const cId = await redis.incr('global_chat_id');
-                                const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer disconnected.', created_at: new Date() };
+                                const sysChat = { id: cId, room_id: roomId, user_id: userId, message: 'disconnected while drawing.', is_system: true, created_at: new Date() };
                                 await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
                                 await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                                io.to(`room_${roomId}`).emit('new_chat', sysChat);
+                            } else {
+                                const cId = await redis.incr('global_chat_id');
+                                const sysChat = { id: cId, room_id: roomId, user_id: userId, message: 'disconnected.', is_system: true, created_at: new Date() };
+                                await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
+                                await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                                io.to(`room_${roomId}`).emit('new_chat', sysChat);
                             }
                             room.members = room.members.filter(m => m.user_id !== userId);
                             await saveRoom(room);
@@ -103,9 +110,10 @@ module.exports = (io) => {
                     room.members.forEach(m => { m.is_ready = 0; });
                     
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: roomId, user_id: 'System', message: 'Drawer failed to choose a word in time. Turn skipped.', created_at: new Date() };
+                    const sysChat = { id: cId, room_id: roomId, user_id: room.current_drawer_id, message: 'failed to choose a word in time. Turn skipped.', is_system: true, created_at: new Date() };
                     await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                    io.to(`room_${roomId}`).emit('new_chat', sysChat);
                     needsSync = true;
                 }
 
@@ -180,6 +188,12 @@ module.exports = (io) => {
                                 room.round_end_time = null;
                                 room.members.forEach(m => { m.is_ready = 0; });
                             }
+
+                            const cId = await redis.incr('global_chat_id');
+                            const sysChat = { id: cId, room_id: roomId, user_id: s.data.currentUser, message: 'was kicked for being idle.', is_system: true, created_at: new Date() };
+                            await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
+                            await redis.ltrim(`room:${roomId}:chats`, -30, -1);
+                            io.to(`room_${roomId}`).emit('new_chat', sysChat);
 
                             room.members = room.members.filter(m => m.user_id !== s.data.currentUser);
                             await saveRoom(room);

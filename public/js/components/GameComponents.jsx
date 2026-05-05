@@ -539,37 +539,48 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                 {chats.map(c => {
                     const photo = roomData?.photos?.[c.user_id];
                     const isDeleted = c.message === '[Deleted by admin]' || c.message === '[Deleted by room creator]';
-                    const isSystem = c.user_id === 'System';
-                    const displayName = isSystem ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
-                    const styleClass = isSystem ? '' : window.getStyleClass(roomData?.styles?.[c.user_id], systemConfig);
+                    
+                    const isSystemOld = c.user_id === 'System';
+                    const isSystemAction = c.is_system;
+                    
+                    const displayName = isSystemOld ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
+                    const styleClass = isSystemOld ? '' : window.getStyleClass(roomData?.styles?.[c.user_id], systemConfig);
                     
                     return (
                         <div key={c.id} 
-                             className={`msg-box d-flex gap-2 ${isSystem ? 'sys' : ''}`} 
+                             className={`msg-box d-flex gap-2 ${isSystemOld ? 'sys' : ''}`} 
                              style={{ 
-                                 borderLeft: c.user_id === tgId ? '4px solid var(--primary)' : '', 
-                                 cursor: (!isSystem && !isDeleted) ? 'pointer' : 'default' 
+                                 borderLeft: c.user_id === tgId && !isSystemAction ? '4px solid var(--primary)' : '', 
+                                 cursor: (!isSystemOld && !isDeleted) ? 'pointer' : 'default',
+                                 backgroundColor: isSystemAction ? 'rgba(16, 185, 129, 0.05)' : ''
                              }}
                              onClick={() => {
-                                 if (isSystem || isDeleted) return;
+                                 if (isSystemOld || isDeleted) return;
                                  if (setModal) {
                                      if (c.user_id !== tgId || isCreator) {
                                          setModal({ type: 'chat_action', message: c, isCreator });
                                      }
                                  }
                              }}>
-                            {!isSystem && (
+                            {!isSystemOld && (
                                 photo ? 
                                     <img src={photo} className="rounded-circle flex-shrink-0 border" width="28" height="28" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="User"/> : 
                                     <i className="fas fa-user-circle fs-4 text-secondary flex-shrink-0 mt-1 bg-white rounded-circle"></i>
                             )}
                             <div className="d-flex flex-column w-100">
                                 <small className={`fw-bold ${styleClass || ''}`} 
-                                       style={styleClass ? {fontSize: '0.85rem'} : {fontSize: '0.75rem', color: (c.user_id === tgId || isSystem) ? 'var(--primary)' : '#64748b', lineHeight: '1'}}
+                                       style={styleClass ? {fontSize: '0.85rem'} : {fontSize: '0.75rem', color: (c.user_id === tgId || isSystemOld) ? 'var(--primary)' : '#64748b', lineHeight: '1'}}
                                        data-name={displayName}>
                                     {displayName}
                                 </small>
-                                <span style={{marginTop: '2px', fontStyle: isDeleted ? 'italic' : 'normal', color: isDeleted ? '#94a3b8' : 'inherit'}}>{c.message}</span>
+                                <span style={{
+                                    marginTop: '2px', 
+                                    fontStyle: (isDeleted || isSystemAction) ? 'italic' : 'normal', 
+                                    color: isDeleted ? '#94a3b8' : (isSystemAction ? '#059669' : 'inherit'),
+                                    fontWeight: isSystemAction ? '600' : 'normal'
+                                }}>
+                                    {c.message}
+                                </span>
                             </div>
                         </div>
                     );
