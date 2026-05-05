@@ -1014,16 +1014,18 @@ module.exports = (io) => {
                     const currentUsed = member.ink_used[color] || 0;
                     
                     // 1. Calculate remaining ink (e.g., 2500 free + 0 extra - 2490 used = 10 remaining)
-                    const currentRemaining = Math.max(0, inkConfig.free + currentExtra - currentUsed);
+                    const currentRemaining = Math.max(0, (inkConfig.free + currentExtra) - currentUsed);
                     
-                    // 2. Add bought ink to the remaining ink (e.g., 10 remaining + 2500 bought = 2510 new remaining)
+                    // 2. Add bought ink with the remaining ink (e.g., 10 remaining + 2500 bought = 2510 new remaining)
                     const boughtInk = inkConfig.extra;
                     const newRemaining = currentRemaining + boughtInk;
                     
-                    // 3. Calculate new total capacity (e.g., 2490 used + 2510 new remaining = 5000 total capacity)
+                    // 3. The new total capacity is the ink already used plus the new remaining ink
+                    // (e.g., 2490 used + 2510 new remaining = 5000 total capacity)
                     const newTotalCapacity = currentUsed + newRemaining;
                     
-                    // 4. Set the extra ink modifier (e.g., 5000 total - 2500 free base = 2500 extra)
+                    // 4. Update extra ink so the frontend capacity (free + extra) equals the new total capacity
+                    // (e.g., 5000 total - 2500 free base = 2500 extra)
                     member.ink_extra[color] = newTotalCapacity - inkConfig.free;
                     member.ink_buys[color] = buysMade + 1;
 
