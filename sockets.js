@@ -303,6 +303,7 @@ module.exports = (io) => {
                         room.masked_word = null;
                         room.end_reason = null;
                         room.last_winner_id = null;
+                        room.winner_style = null;
                         
                         room.members.forEach(m => { 
                             m.has_given_up = 0; 
@@ -963,11 +964,16 @@ module.exports = (io) => {
             if (myGuesses.length >= allowedGuesses) return socket.emit('create_error', 'Out of guesses. Please buy more.');
 
             const isCorrect = data.guess.toUpperCase() === room.word_to_draw;
+            
+            const [uRows] = await db.query('SELECT equipped_style FROM users WHERE tg_id = ?', [currentUser]);
+            const equippedStyle = uRows.length ? uRows[0].equipped_style : null;
+
             const guessObj = {
                 id: Date.now(),
                 user_id: currentUser,
                 guess_text: isCorrect ? 'Correct guess!' : data.guess.toUpperCase(),
-                is_correct: isCorrect
+                is_correct: isCorrect,
+                equipped_style: equippedStyle
             };
 
             await redis.rpush(`room:${currentRoom}:guesses`, JSON.stringify(guessObj));
@@ -975,13 +981,22 @@ module.exports = (io) => {
 
             if (isCorrect) {
                 const cId = await redis.incr('global_chat_id');
-                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'has guessed the word!', is_system: true, created_at: new Date() };
+                const sysChat = { 
+                    id: cId, 
+                    room_id: currentRoom, 
+                    user_id: currentUser, 
+                    message: 'has guessed the word!', 
+                    is_system: true, 
+                    created_at: new Date(),
+                    equipped_style: equippedStyle
+                };
                 await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                 await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
                 io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
 
                 room.status = 'REVEAL';
                 room.last_winner_id = currentUser;
+                room.winner_style = equippedStyle;
                 room.break_end_time = new Date(Date.now() + 5000);
                 room.members.forEach(m => { m.is_ready = 0; });
                 await saveRoom(room);

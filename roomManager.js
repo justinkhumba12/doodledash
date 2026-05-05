@@ -62,6 +62,8 @@ async function checkRoomReset(roomId) {
             room.break_end_time = null;
             room.round_end_time = null;
             room.end_reason = null;
+            room.last_winner_id = null;
+            room.winner_style = null;
             room.base_hints = '[]';
             room.members.forEach(m => { 
                 m.has_given_up = 0; 
@@ -82,6 +84,8 @@ async function checkRoomReset(roomId) {
         room.break_end_time = null;
         room.round_end_time = null;
         room.end_reason = null;
+        room.last_winner_id = null;
+        room.winner_style = null;
         room.base_hints = '[]';
         room.members.forEach(m => { 
             m.has_given_up = 0; 

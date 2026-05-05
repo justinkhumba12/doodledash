@@ -431,7 +431,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                                         ) : (
                                             <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
                                         )}
-                                        <span className="fs-5"><b>{window.getDisplayName(room.last_winner_id, roomData?.names)}</b> guessed it!</span>
+                                        <span className="fs-5">
+                                            <b className={window.getStyleClass(room.winner_style || roomData?.styles?.[room.last_winner_id], systemConfig) || ''}>
+                                                {window.getDisplayName(room.last_winner_id, roomData?.names)}
+                                            </b> guessed it!
+                                        </span>
                                     </div>
                                 ) : (
                                     <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
@@ -544,7 +548,7 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                     const isSystemAction = c.is_system;
                     
                     const displayName = isSystemOld ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
-                    const styleClass = isSystemOld ? '' : window.getStyleClass(roomData?.styles?.[c.user_id], systemConfig);
+                    const styleClass = isSystemOld ? '' : window.getStyleClass(c.equipped_style || roomData?.styles?.[c.user_id], systemConfig);
                     
                     return (
                         <div key={c.id} 
@@ -722,7 +726,7 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
                 {guesses.map(g => {
                     const photo = roomData?.photos?.[g.user_id];
                     const displayName = window.getDisplayName(g.user_id, roomData?.names);
-                    const styleClass = window.getStyleClass(roomData?.styles?.[g.user_id], systemConfig);
+                    const styleClass = window.getStyleClass(g.equipped_style || roomData?.styles?.[g.user_id], systemConfig);
                     
                     return (
                         <div key={g.id} className={`msg-box d-flex gap-2 ${g.is_correct ? 'guess-correct' : 'bg-light'}`} style={{ borderLeft: g.user_id === tgId && !g.is_correct ? '4px solid var(--primary)' : '' }}>
