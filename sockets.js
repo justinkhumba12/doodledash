@@ -1006,33 +1006,27 @@ module.exports = (io) => {
                     await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [inkConfig.cost, currentUser]);
                     await redis.hincrbyfloat('user_credits', currentUser, -inkConfig.cost);
                     
-                    // --- APPLYING YOUR EXACT MATH LOGIC ---
                     member.ink_extra = member.ink_extra || {};
                     member.ink_used = member.ink_used || {};
                     
-                    const currentExtra = member.ink_extra[color] || 0;
+                    const currentCapacity = inkConfig.free + (member.ink_extra[color] || 0);
                     const currentUsed = member.ink_used[color] || 0;
-                    
-                    // 1. Calculate remaining ink (e.g., 2500 free + 0 extra - 2490 used = 10 remaining)
-                    const currentRemaining = Math.max(0, (inkConfig.free + currentExtra) - currentUsed);
-                    
-                    // 2. Add bought ink with the remaining ink (e.g., 10 remaining + 2500 bought = 2510 new remaining)
-                    const boughtInk = inkConfig.extra;
-                    const newRemaining = currentRemaining + boughtInk;
-                    
-                    // 3. The new total capacity is the ink already used plus the new remaining ink
-                    // (e.g., 2490 used + 2510 new remaining = 5000 total capacity)
-                    const newTotalCapacity = currentUsed + newRemaining;
-                    
-                    // 4. Update extra ink so the frontend capacity (free + extra) equals the new total capacity
-                    // (e.g., 5000 total - 2500 free base = 2500 extra)
-                    member.ink_extra[color] = newTotalCapacity - inkConfig.free;
+                    const boughtInkAmount = inkConfig.extra;
+
+                    // 1. Add the recent unused available ink with the bought ink amount for new available unused ink
+                    const unusedAvailableInk = Math.max(0, currentCapacity - currentUsed);
+                    const newAvailableUnusedInk = unusedAvailableInk + boughtInkAmount;
+
+                    // 2. Only add the current ink amount (capacity) with the bought amount for capacity
+                    const newCapacity = currentCapacity + boughtInkAmount;
+
+                    // Update the extra value based on the exact calculations above
+                    member.ink_extra[color] = newCapacity - inkConfig.free;
                     member.ink_buys[color] = buysMade + 1;
 
                     await saveRoom(room);
                     
                     io.to(`room_${currentRoom}`).emit('update_ink_capacity', { user_id: currentUser, extra: member.ink_extra });
-                    // Notice we do NOT reset ink_used here, keeping your exact remaining ink math intact on frontend
                     
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
