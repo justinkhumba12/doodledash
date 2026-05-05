@@ -208,6 +208,14 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         });
     }, []);
 
+    // Clear Canvas and Reset Drawings Automatically at the Start/End of New Rounds
+    useEffect(() => {
+        if (room.status === 'PRE_DRAW' || room.status === 'WAITING' || room.status === 'BREAK') {
+            initialDrawingsRef.current = [];
+            redraw();
+        }
+    }, [room.status, redraw]);
+
     useEffect(() => { 
         redraw(); 
         if (socket) socket.emit('request_initial_drawings');
@@ -340,25 +348,42 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
     return (
         <div className="w-100 d-flex flex-column align-items-center">
-            {isDrawingPhase && isDrawer && (
-                <div className="w-100 mb-2 px-2" style={{maxWidth: '500px'}}>
-                    <div className="d-flex justify-content-between small fw-bold mb-1">
-                        <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
-                        <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
+            {/* Header toolbar for Canvas controls (Ink Level and Report Button) */}
+            <div className="w-100 d-flex justify-content-between align-items-end mb-2 px-2" style={{maxWidth: '500px'}}>
+                {isDrawingPhase && isDrawer && (
+                    <div className="w-100">
+                        <div className="d-flex justify-content-between small fw-bold mb-1">
+                            <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                            <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
+                        </div>
+                        <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
+                            <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                                 style={{width: '100%', transition: 'width 0.1s'}}></div>
+                        </div>
+                        <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
+                            <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
+                                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
+                            }}>
+                                <i className="fas fa-plus-circle"></i> Refill Ink ({inkConfig.cost} Cred)
+                            </button>
+                        </div>
                     </div>
-                    <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
-                        <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
-                             style={{width: '100%', transition: 'width 0.1s'}}></div>
-                    </div>
-                    <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                        <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                            setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
-                        }}>
-                            <i className="fas fa-plus-circle"></i> Refill Ink ({inkConfig.cost} Cred)
+                )}
+                
+                {room.status === 'DRAWING' && !isDrawer && (
+                    <div className="w-100 d-flex justify-content-end">
+                        <button 
+                            className="btn btn-sm btn-outline-danger shadow-sm rounded-pill fw-bold report-drawing-btn bg-white" 
+                            onClick={() => {
+                                setModal({ type: 'report_input', context: 'drawing', reported_id: room.current_drawer_id, snapshot_data: JSON.stringify(initialDrawingsRef.current) });
+                            }}
+                            title="Report Inappropriate Drawing"
+                        >
+                            <i className="fas fa-flag"></i> Report Drawing
                         </button>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
 
             <div className="whiteboard-container">
                 <canvas 
@@ -370,19 +395,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                     onPointerOut={stopDraw}
                     onPointerCancel={stopDraw}
                 />
-                
-                {room.status === 'DRAWING' && !isDrawer && (
-                    <button 
-                        className="btn btn-light text-danger shadow-sm rounded-circle position-absolute" 
-                        style={{top: '10px', right: '10px', zIndex: 100, width: '36px', height: '36px'}}
-                        onClick={() => {
-                            setModal({ type: 'report_input', context: 'drawing', reported_id: room.current_drawer_id, snapshot_data: JSON.stringify(initialDrawingsRef.current) });
-                        }}
-                        title="Report Inappropriate Drawing"
-                    >
-                        <i className="fas fa-flag"></i>
-                    </button>
-                )}
                 
                 {room.status === 'PRE_DRAW' && isDrawer && (
                     <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.95)', padding: '10px'}}>

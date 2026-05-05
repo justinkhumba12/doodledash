@@ -52,6 +52,10 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .nav-item i { font-size: 1.25rem; margin-bottom: 4px; transition: transform 0.2s; }
 .nav-item.active i { transform: scale(1.15); }
 
+/* Report Drawing Button Hover Effect */
+.report-drawing-btn { transition: all 0.2s ease-in-out; }
+.report-drawing-btn:hover { background-color: #dc3545 !important; color: #fff !important; }
+
 /* Utility Ext. */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

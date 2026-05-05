@@ -467,7 +467,9 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
         );
     } else if (modal.type === 'chat_action') {
         title = 'Message Options';
-        const styleClass = window.getStyleClass(modal.message.style, systemConfig) || 'text-dark';
+        
+        // Properly load user's equipped style or fallback to roomData style mapping
+        const styleClass = window.getStyleClass(modal.message.equipped_style || roomData?.styles?.[modal.message.user_id], systemConfig) || 'text-dark';
         
         // Ensure name extraction uses proper order of properties available
         const id = modal.message.user_id;
