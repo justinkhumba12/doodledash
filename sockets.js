@@ -981,7 +981,7 @@ module.exports = (io) => {
             }
         });
 
-        socket.on('buy_ink', async ({ color }) => {
+        socket.on('buy_ink', async (data) => {
             const currentUser = socket.data.currentUser;
             const currentRoom = socket.data.currentRoom;
             if (!currentUser || !currentRoom) return;
@@ -994,8 +994,10 @@ module.exports = (io) => {
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (!member) return;
                 
+                const inkColor = data?.color || 'black';
+                
                 member.ink_buys = member.ink_buys || {};
-                const buysMade = member.ink_buys[color] || 0;
+                const buysMade = member.ink_buys[inkColor] || 0;
                 
                 if (buysMade >= inkConfig.max_buys) {
                     return socket.emit('create_error', 'Maximum ink refills reached for this round.');
@@ -1010,23 +1012,28 @@ module.exports = (io) => {
                     member.ink_used = member.ink_used || {};
                     
                     const baseFreeInk = inkConfig.free;
-                    const currentInkExtra = member.ink_extra[color] || 0;
-                    const currentInkUsed = member.ink_used[color] || 0;
+                    const currentInkExtra = member.ink_extra[inkColor] || 0;
+                    const currentInkUsed = member.ink_used[inkColor] || 0;
                     const newlyPurchasedInk = inkConfig.extra;
 
-                    const currentRemaining = baseFreeInk + currentInkExtra - currentInkUsed;
+                    const currentRemaining = Math.max(0, baseFreeInk + currentInkExtra - currentInkUsed);
                     const newRemaining = currentRemaining + newlyPurchasedInk;
                     const newTotalCapacity = newRemaining + currentInkUsed;
                     
-                    member.ink_extra[color] = newTotalCapacity - baseFreeInk;
-                    member.ink_buys[color] = buysMade + 1;
+                    member.ink_extra[inkColor] = newTotalCapacity - baseFreeInk;
+                    member.ink_buys[inkColor] = buysMade + 1;
 
                     await saveRoom(room);
+                    
+                    // Force a full room sync so the client-side state correctly updates the capacity
+                    await syncRoom(currentRoom, io);
                     
                     io.to(`room_${currentRoom}`).emit('update_ink_capacity', { user_id: currentUser, extra: member.ink_extra });
                     
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
+                    
+                    socket.emit('reward_success', 'Ink refilled successfully!');
                 } else {
                     socket.emit('create_error', 'Not enough credits to buy ink.');
                 }
