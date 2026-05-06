@@ -80,7 +80,7 @@ module.exports = (io) => {
                     await saveRoom(oRoom);
                     
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: oldRoom, user_id: userId, message: 'left the room.', is_system: true, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: oldRoom, user_id: userId, message: 'left the room.', is_system: true, action_type: 'left', created_at: new Date() };
                     await redis.rpush(`room:${oldRoom}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${oldRoom}:chats`, -50, -1);
                     io.to(`room_${oldRoom}`).emit('new_chat', sysChat);
@@ -111,7 +111,7 @@ module.exports = (io) => {
             socket.emit('join_success', roomIdNum);
             
             const cId = await redis.incr('global_chat_id');
-            const sysChat = { id: cId, room_id: roomIdNum, user_id: userId, message: 'joined the room.', is_system: true, created_at: new Date() };
+            const sysChat = { id: cId, room_id: roomIdNum, user_id: userId, message: 'joined the room.', is_system: true, action_type: 'join', created_at: new Date() };
             await redis.rpush(`room:${roomIdNum}:chats`, JSON.stringify(sysChat));
             await redis.ltrim(`room:${roomIdNum}:chats`, -50, -1);
             io.to(`room_${roomIdNum}`).emit('new_chat', sysChat);
@@ -266,7 +266,7 @@ module.exports = (io) => {
             } else {
                 const [inv] = await db.query('SELECT * FROM user_styles_inventory WHERE tg_id = ? AND style_id = ?', [currentUser, style_id]);
                 if (inv.length === 0) return socket.emit('create_error', 'You do not own this style.');
-                await db.query('UPDATE users SET equipped_style = ? WHERE tg_id = ?', [style_id, currentUser]);
+                await db.query('UPDATE users SET equipped_style = ? WHERE tg_id = ?', [currentUser, currentUser]);
             }
 
             const currentRoom = socket.data.currentRoom;
@@ -807,7 +807,7 @@ module.exports = (io) => {
                     await saveRoom(room);
                     
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'left the room.', is_system: true, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'left the room.', is_system: true, action_type: 'left', created_at: new Date() };
                     await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
                     io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
@@ -1074,6 +1074,7 @@ module.exports = (io) => {
                     user_id: currentUser, 
                     message: 'has guessed the word!', 
                     is_system: true, 
+                    action_type: 'correct_guess',
                     created_at: new Date(),
                     equipped_style: equippedStyle
                 };
@@ -1186,6 +1187,12 @@ module.exports = (io) => {
                         
                         purchased_hints.push(index);
                         member.purchased_hints = JSON.stringify(purchased_hints);
+
+                        const cId = await redis.incr('global_chat_id');
+                        const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'used a hint.', is_system: true, action_type: 'hint', created_at: new Date() };
+                        await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                        await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                        io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
                         
                         await saveRoom(room);
                         await syncRoom(currentRoom, io);
@@ -1218,6 +1225,12 @@ module.exports = (io) => {
                 if (!purchased_hints.includes(index) && !base_hints.includes(index)) {
                     purchased_hints.push(index);
                     member.purchased_hints = JSON.stringify(purchased_hints);
+
+                    const cId = await redis.incr('global_chat_id');
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'used a hint.', is_system: true, action_type: 'hint', created_at: new Date() };
+                    await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+                    await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+                    io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
                     
                     await saveRoom(room);
                     await syncRoom(currentRoom, io);
@@ -1263,7 +1276,7 @@ module.exports = (io) => {
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
                 const cId = await redis.incr('global_chat_id');
-                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'gave up their turn.', is_system: true, created_at: new Date() };
+                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'gave up their turn.', is_system: true, action_type: 'give_up', created_at: new Date() };
                 await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                 await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
                 io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
@@ -1290,7 +1303,7 @@ module.exports = (io) => {
                     await saveRoom(room);
                     
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'voted to give up.', is_system: true, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'voted to give up.', is_system: true, action_type: 'give_up', created_at: new Date() };
                     await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
                     io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
@@ -1325,7 +1338,7 @@ module.exports = (io) => {
                 await saveRoom(room);
                 
                 const cId = await redis.incr('global_chat_id');
-                const sysChat = { id: cId, room_id: currentRoom, user_id: target_id, message: 'was kicked from the room.', is_system: true, created_at: new Date() };
+                const sysChat = { id: cId, room_id: currentRoom, user_id: target_id, message: 'was kicked from the room.', is_system: true, action_type: 'kicked', created_at: new Date() };
                 await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
                 await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
                 io.to(`room_${currentRoom}`).emit('new_chat', sysChat);

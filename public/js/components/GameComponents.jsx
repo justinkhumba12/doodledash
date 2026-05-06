@@ -560,6 +560,22 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                     const isSystemAction = c.is_system;
                     
                     const displayName = isSystemOld ? 'System' : window.getDisplayName(c.user_id, roomData?.names);
+                    
+                    if (isSystemAction) {
+                        let sysColor = '#6c757d'; 
+                        if (c.action_type === 'join' || c.action_type === 'hint') sysColor = '#3b82f6'; 
+                        else if (c.action_type === 'left' || c.action_type === 'kicked') sysColor = '#ef4444'; 
+                        else if (c.action_type === 'correct_guess') sysColor = '#10b981'; 
+
+                        return (
+                            <div key={c.id} className="text-center my-1" style={{ fontSize: '0.85rem' }}>
+                                <span style={{ color: sysColor }}>
+                                    {displayName} {c.message}
+                                </span>
+                            </div>
+                        );
+                    }
+                    
                     const styleClass = isSystemOld ? '' : window.getStyleClass(c.equipped_style || roomData?.styles?.[c.user_id], systemConfig);
                     
                     return (
@@ -567,8 +583,7 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                              className={`msg-box d-flex gap-2 ${isSystemOld ? 'sys' : ''}`} 
                              style={{ 
                                  borderLeft: c.user_id === tgId && !isSystemAction ? '4px solid var(--primary)' : '', 
-                                 cursor: (!isSystemOld && !isDeleted) ? 'pointer' : 'default',
-                                 backgroundColor: isSystemAction ? 'rgba(16, 185, 129, 0.05)' : ''
+                                 cursor: (!isSystemOld && !isDeleted) ? 'pointer' : 'default'
                              }}
                              onClick={() => {
                                  if (isSystemOld || isDeleted) return;
@@ -591,9 +606,9 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                                 </small>
                                 <span style={{
                                     marginTop: '2px', 
-                                    fontStyle: (isDeleted || isSystemAction) ? 'italic' : 'normal', 
-                                    color: isDeleted ? '#94a3b8' : (isSystemAction ? '#059669' : 'inherit'),
-                                    fontWeight: isSystemAction ? '600' : 'normal'
+                                    fontStyle: isDeleted ? 'italic' : 'normal', 
+                                    color: isDeleted ? '#94a3b8' : 'inherit',
+                                    fontWeight: 'normal'
                                 }}>
                                     {c.message}
                                 </span>
