@@ -40,7 +40,10 @@ if (cluster.isPrimary) {
                     name VARCHAR(50) DEFAULT NULL,
                     avatar_url VARCHAR(255) DEFAULT NULL,
                     ban_count INT DEFAULT 0,
-                    equipped_style VARCHAR(50) DEFAULT NULL
+                    equipped_style VARCHAR(50) DEFAULT NULL,
+                    daily_correct_guesses INT DEFAULT 0,
+                    last_correct_guess_date DATE,
+                    last_guess_reward_claim DATE
                 )
             `);
 

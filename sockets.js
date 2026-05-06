@@ -191,6 +191,7 @@ module.exports = (io) => {
                 const inkConfigRaw = await redis.get('config_ink');
                 const maxRoomsRaw = await redis.get('config_max_rooms');
                 const roomLimitsRaw = await redis.get('config_room_limits');
+                const guessRewardRaw = await redis.get('config_guess_reward');
                 
                 const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
                 const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
@@ -210,7 +211,8 @@ module.exports = (io) => {
                     inkConfig: inkConfigRaw ? JSON.parse(inkConfigRaw) : { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 },
                     maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250,
                     roomLimits,
-                    nameStyles
+                    nameStyles,
+                    guessReward: guessRewardRaw ? JSON.parse(guessRewardRaw) : { required: 5, reward: 10 }
                 };
 
                 socket.emit('lobby_data', { user: userState, rooms: roomsList, currentRoom: socket.data.currentRoom, systemConfig });
@@ -588,6 +590,28 @@ module.exports = (io) => {
                             success = true; msg = 'Invite reward claimed! +5 Credits';
                         } else {
                             msg = 'Invite requirement not met or already claimed.';
+                        }
+                    }
+                } else if (type === 'daily_guess') {
+                    const guessRewardRaw = await redis.get('config_guess_reward');
+                    const guessReward = guessRewardRaw ? JSON.parse(guessRewardRaw) : { required: 5, reward: 10 };
+                    
+                    const [uRows] = await db.query(`SELECT daily_correct_guesses, 
+                        (DATE_FORMAT(last_correct_guess_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as guess_date_is_today,
+                        (DATE_FORMAT(last_guess_reward_claim, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as guess_reward_claimed_today
+                        FROM users WHERE tg_id = ?`, [currentUser]);
+                        
+                    if (uRows.length > 0) {
+                        const u = uRows[0];
+                        const validGuesses = u.guess_date_is_today ? u.daily_correct_guesses : 0;
+                        
+                        if (validGuesses >= guessReward.required && !u.guess_reward_claimed_today) {
+                            rewardAmount = guessReward.reward;
+                            await db.query(`UPDATE users SET credits = credits + ?, last_guess_reward_claim = UTC_DATE() WHERE tg_id = ?`, [rewardAmount, currentUser]);
+                            success = true; 
+                            msg = `Daily Guess Reward claimed! +${rewardAmount} Credits`;
+                        } else {
+                            msg = 'Requirement not met or already claimed today.';
                         }
                     }
                 }
@@ -1011,6 +1035,8 @@ module.exports = (io) => {
                 await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [room.current_drawer_id]);
                 await redis.hincrbyfloat('user_credits', currentUser, 2);
                 await redis.hincrbyfloat('user_credits', room.current_drawer_id, 1);
+                
+                await db.query(`UPDATE users SET daily_correct_guesses = IF(DATE_FORMAT(last_correct_guess_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'), daily_correct_guesses + 1, 1), last_correct_guess_date = UTC_DATE() WHERE tg_id = ?`, [currentUser]);
 
                 const weekKey = getWeekKey();
                 await db.query(`INSERT INTO user_weekly_stats (tg_id, week_key, guesses, guesses_updated_at) VALUES (?, ?, 1, NOW()) ON DUPLICATE KEY UPDATE guesses = guesses + 1, guesses_updated_at = NOW()`, [currentUser, weekKey]);

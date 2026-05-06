@@ -15,7 +15,7 @@
     <style>
         body { background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; }
         .sidebar { background: #0f172a; color: #cbd5e1; box-shadow: 2px 0 10px rgba(0,0,0,0.1); flex-shrink: 0; }
-        .nav-item { cursor: pointer; transition: 0.2s; font-weight: 500; border-radius: 8px; }
+        .nav-item { cursor: pointer; transition: 0.2s; font-weight: 500; border-radius: 8px; flex-shrink: 0; }
         .nav-item:hover { background: #1e293b; color: white; }
         .nav-item.active { background: #3b82f6; color: white; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
         .card { border: none; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 20px; overflow: hidden; }
@@ -33,13 +33,16 @@
         }
         @media (max-width: 768px) {
             .app-container { flex-direction: column-reverse !important; height: 100vh; }
-            .sidebar { width: 100% !important; min-height: auto !important; flex-direction: row !important; flex-wrap: nowrap; overflow-x: auto; padding: 10px 5px !important; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 100; justify-content: space-around; }
-            .nav-item { flex: 1; text-align: center; padding: 8px 2px; margin: 0 2px; font-size: 0.75rem; white-space: nowrap; }
+            .sidebar { width: 100% !important; min-height: auto !important; flex-direction: row !important; flex-wrap: nowrap; overflow-x: auto; padding: 10px 5px !important; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 100; justify-content: flex-start; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
+            .nav-item { flex: 0 0 auto; text-align: center; padding: 8px 12px; margin: 0 4px; font-size: 0.8rem; white-space: nowrap; }
             .nav-item i { display: block; font-size: 1.2rem; margin-bottom: 4px; margin-right: 0 !important; width: 100%; }
             .sidebar-header, .sidebar-footer { display: none !important; }
             .main-content { height: calc(100vh - 60px) !important; flex-grow: 1; overflow-y: auto; }
             .card-header { padding: 10px; font-size: 0.95rem; }
         }
+        /* Hide scrollbar for sidebar on mobile */
+        .sidebar::-webkit-scrollbar { display: none; }
+        .sidebar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
 <body>
@@ -784,6 +787,47 @@
             );
         };
 
+        const Rewards = ({ apiFetch }) => {
+            const [guessRewardConfig, setGuessRewardConfig] = useState({ required: 5, reward: 10 });
+            
+            useEffect(() => {
+                apiFetch('/config').then(c => {
+                    if (c.guessRewardConfig) setGuessRewardConfig(c.guessRewardConfig);
+                });
+            }, []);
+            
+            const saveRewards = async () => {
+                await apiFetch('/config/rewards', 'POST', { guessRewardConfig });
+                alert('Rewards Configuration Saved.');
+            };
+            
+            return (
+                <div className="p-3 p-md-4">
+                    <h3 className="fw-bold mb-4">Task Rewards Settings</h3>
+                    <div className="card border-0 shadow-sm">
+                        <div className="card-header bg-white fw-bold"><i className="fas fa-gift me-2 text-primary"></i>Daily Guess Task</div>
+                        <div className="card-body">
+                            <div className="row g-3">
+                                <div className="col-12 col-md-6">
+                                    <label className="form-label small fw-bold">Correct Guesses Required</label>
+                                    <input type="number" className="form-control" value={guessRewardConfig.required} onChange={e => setGuessRewardConfig({...guessRewardConfig, required: parseInt(e.target.value) || 0})} />
+                                    <div className="form-text text-muted small">How many words user needs to guess correctly to claim the reward.</div>
+                                </div>
+                                <div className="col-12 col-md-6">
+                                    <label className="form-label small fw-bold">Reward (Credits)</label>
+                                    <input type="number" className="form-control" value={guessRewardConfig.reward} onChange={e => setGuessRewardConfig({...guessRewardConfig, reward: parseInt(e.target.value) || 0})} />
+                                    <div className="form-text text-muted small">Credits given upon completing the task.</div>
+                                </div>
+                                <div className="col-12">
+                                    <button className="btn btn-primary fw-bold px-4 shadow-sm" onClick={saveRewards}><i className="fas fa-save me-1"></i> Save Reward Settings</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const ServerControl = ({ apiFetch }) => {
             const [maint, setMaint] = useState(false);
             const [maintDuration, setMaintDuration] = useState(1);
@@ -1014,6 +1058,7 @@
                         <div className={`nav-item ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}><i className="fas fa-chart-pie me-2 w-15"></i> Dashboard</div>
                         <div className={`nav-item ${tab === 'moderation' ? 'active' : ''}`} onClick={() => setTab('moderation')}><i className="fas fa-shield-alt me-2 w-15"></i> Moderation</div>
                         <div className={`nav-item ${tab === 'economy' ? 'active' : ''}`} onClick={() => setTab('economy')}><i className="fas fa-coins me-2 w-15"></i> Economy</div>
+                        <div className={`nav-item ${tab === 'rewards' ? 'active' : ''}`} onClick={() => setTab('rewards')}><i className="fas fa-gift me-2 w-15"></i> Rewards</div>
                         <div className={`nav-item ${tab === 'styles' ? 'active' : ''}`} onClick={() => setTab('styles')}><i className="fas fa-font me-2 w-15"></i> Styles</div>
                         <div className={`nav-item ${tab === 'server' ? 'active' : ''}`} onClick={() => setTab('server')}><i className="fas fa-server me-2 w-15"></i> Settings</div>
                         
@@ -1025,6 +1070,7 @@
                         {tab === 'dashboard' && <Dashboard apiFetch={apiFetch} />}
                         {tab === 'moderation' && <Moderation apiFetch={apiFetch} />}
                         {tab === 'economy' && <Economy apiFetch={apiFetch} />}
+                        {tab === 'rewards' && <Rewards apiFetch={apiFetch} />}
                         {tab === 'styles' && <StylesManager apiFetch={apiFetch} />}
                         {tab === 'server' && <ServerControl apiFetch={apiFetch} />}
                     </div>

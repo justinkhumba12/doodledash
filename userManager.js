@@ -17,13 +17,20 @@ async function getUserState(tg_id) {
         GREATEST(0, 10 - IFNULL(TIMESTAMPDIFF(MINUTE, last_ad2_claim_time, UTC_TIMESTAMP()), 10)) as ad2_wait_mins,
         (DATE_FORMAT(last_ad_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad1_is_today,
         (DATE_FORMAT(last_ad2_claim_time, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as ad2_is_today,
-        (last_invite_claim_week = ?) as invite_claimed_this_week
+        (last_invite_claim_week = ?) as invite_claimed_this_week,
+        (DATE_FORMAT(last_correct_guess_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as guess_date_is_today,
+        (DATE_FORMAT(last_guess_reward_claim, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d')) as guess_reward_claimed_today
         FROM users WHERE tg_id = ?
     `, [weekKey, tg_id]);
 
     if (rows.length === 0) return null;
     let u = rows[0];
     
+    // Reset virtual count if not today
+    if (!u.guess_date_is_today) {
+        u.daily_correct_guesses = 0;
+    }
+
     // Attach DB weekly invites
     u.weekly_invites = weeklyInvites;
 

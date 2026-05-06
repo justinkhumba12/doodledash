@@ -272,6 +272,9 @@ async function setupAdminPanel(app, io) {
         const roomLimitsRaw = await redis.get('config_room_limits');
         const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
         const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
+        
+        const guessRewardRaw = await redis.get('config_guess_reward');
+        const guessRewardConfig = guessRewardRaw ? JSON.parse(guessRewardRaw) : { required: 5, reward: 10 };
 
         res.json({
             maintenance: maintenance === '1',
@@ -283,7 +286,8 @@ async function setupAdminPanel(app, io) {
             unbanCost: parseInt(unbanCost),
             unmuteCost: parseInt(unmuteCost),
             maxRooms: maxRooms ? parseInt(maxRooms) : 1250,
-            roomLimits
+            roomLimits,
+            guessRewardConfig
         });
     });
 
@@ -296,6 +300,13 @@ async function setupAdminPanel(app, io) {
         if (unmuteCost) await redis.set('config_unmute_cost', unmuteCost.toString());
         
         await logAdminAction(req.adminId, 'UPDATE_ECONOMY_CONFIG', { unbanCost, unmuteCost });
+        res.json({ success: true });
+    });
+    
+    adminRouter.post('/config/rewards', async (req, res) => {
+        const { guessRewardConfig } = req.body;
+        if (guessRewardConfig) await redis.set('config_guess_reward', JSON.stringify(guessRewardConfig));
+        await logAdminAction(req.adminId, 'UPDATE_REWARDS_CONFIG', { guessRewardConfig });
         res.json({ success: true });
     });
 

@@ -60,7 +60,10 @@ const initWorkerDB = async () => {
                 name VARCHAR(50) DEFAULT NULL,
                 avatar_url VARCHAR(255) DEFAULT NULL,
                 ban_count INT DEFAULT 0,
-                equipped_style VARCHAR(50) DEFAULT NULL
+                equipped_style VARCHAR(50) DEFAULT NULL,
+                daily_correct_guesses INT DEFAULT 0,
+                last_correct_guess_date DATE,
+                last_guess_reward_claim DATE
             )
         `);
         
@@ -104,7 +107,6 @@ const initWorkerDB = async () => {
             )
         `);
 
-        // NEW: Dynamic Style Tables
         await db.query(`
             CREATE TABLE IF NOT EXISTS name_styles (
                 id VARCHAR(50) PRIMARY KEY,
@@ -141,6 +143,9 @@ const initWorkerDB = async () => {
             "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL",
             "ALTER TABLE users ADD COLUMN ban_count INT DEFAULT 0",
             "ALTER TABLE users ADD COLUMN equipped_style VARCHAR(50) DEFAULT NULL",
+            "ALTER TABLE users ADD COLUMN daily_correct_guesses INT DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN last_correct_guess_date DATE",
+            "ALTER TABLE users ADD COLUMN last_guess_reward_claim DATE",
             "ALTER TABLE users DROP COLUMN username",
             "ALTER TABLE users DROP COLUMN tg_username",
             "ALTER TABLE referrals CHANGE created_at updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
@@ -150,7 +155,6 @@ const initWorkerDB = async () => {
             try { await db.query(q); } catch(e) { /* Ignore existing columns / drops */ }
         }
 
-        // Seed Default Styles
         const seedStyles = [
             { id: 'style-neon', class_name: 'style-neon', font_family: 'Righteous', css_content: `.style-neon { font-family: 'Righteous', cursive; color: #4f46e5; animation: neon-pulse 2s infinite alternate; display: inline-block; } @keyframes neon-pulse { 0% { text-shadow: 0 0 5px rgba(79, 70, 229, 0.2); } 100% { text-shadow: 0 0 15px rgba(79, 70, 229, 0.8); } }`, credit_price: 50, gem_price: 10, is_premium: false },
             { id: 'style-comic', class_name: 'style-comic', font_family: 'Bangers', css_content: `.style-comic { font-family: 'Bangers', cursive; color: #fde047; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 3px 4px 0 #ef4444; letter-spacing: 1px; animation: comic-pop 2s infinite alternate; display: inline-block; } @keyframes comic-pop { 0% { transform: scale(1) rotate(-2deg); } 100% { transform: scale(1.05) rotate(2deg); } }`, credit_price: 100, gem_price: 20, is_premium: false },

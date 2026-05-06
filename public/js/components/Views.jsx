@@ -330,7 +330,7 @@ const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab })
     );
 };
 
-const TasksView = ({ user, socket, setModal }) => {
+const TasksView = ({ user, socket, setModal, systemConfig }) => {
 const [adState, setAdState] = useState({ show: false });
 
 const inviteCount = user?.weekly_invites || 0;
@@ -340,6 +340,12 @@ const hasClaimed = user?.invite_claimed_this_week;
 
 const streakCount = user?.streak_count || 0;
 const currentDay = Math.min((user?.daily_available ? streakCount + 1 : streakCount) || 1, 7);
+
+const guessConfig = systemConfig?.guessReward || { required: 5, reward: 10 };
+const dailyGuesses = user?.daily_correct_guesses || 0;
+const guessGoal = guessConfig.required;
+const guessCompleted = dailyGuesses >= guessGoal;
+const guessClaimed = user?.guess_reward_claimed_today;
 
 const handleInvite = () => {
     const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
@@ -460,6 +466,35 @@ return (
                 <button className={`btn w-100 rounded-pill fw-bold ${user?.daily_available ? 'btn-success shadow-sm' : 'btn-light text-muted border'}`} disabled={!user?.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
                     {user?.daily_available ? `Claim Day ${currentDay} Reward` : 'Come back tomorrow'}
                 </button>
+            </div>
+        </div>
+
+        {/* Daily Guesser */}
+        <div className="card bg-white rounded-4 border shadow-sm mb-3">
+            <div className="card-body p-3">
+                <div className="d-flex align-items-center gap-3 mb-3">
+                    <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%)'}}>
+                        <i className="fas fa-lightbulb fs-5"></i>
+                    </div>
+                    <div>
+                        <h6 className="fw-bold mb-1">Daily Guesser</h6>
+                        <p className="text-muted small mb-0">Correctly guess {guessGoal} words today for {guessConfig.reward} Credits!</p>
+                    </div>
+                </div>
+                <div className="mb-3">
+                    <div className="d-flex justify-content-between small fw-bold mb-1">
+                        <span className="text-secondary">Progress</span>
+                        <span className={guessCompleted ? 'text-success' : 'text-primary'}>{dailyGuesses} / {guessGoal}</span>
+                    </div>
+                    <div className="progress rounded-pill bg-light border shadow-sm" style={{height: '8px'}}>
+                        <div className={`progress-bar rounded-pill ${guessCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${Math.min((dailyGuesses / guessGoal) * 100, 100)}%`}}></div>
+                    </div>
+                </div>
+                <div className="d-flex gap-2">
+                    <button className={`btn w-100 rounded-pill fw-bold shadow-sm py-2 btn-sm ${guessCompleted && !guessClaimed ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!guessCompleted || guessClaimed} onClick={() => { if(guessCompleted && !guessClaimed) socket.emit('claim_reward', {type: 'daily_guess'}) }}>
+                        {guessClaimed ? 'Claimed' : `Claim ${guessConfig.reward} Credits`}
+                    </button>
+                </div>
             </div>
         </div>
 
