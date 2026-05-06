@@ -2,7 +2,6 @@ const { useState } = React;
 
 const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted, systemConfig, roomData }) => {
     const [pwd, setPwd] = useState('');
-    const [isPriv, setIsPriv] = useState(false);
     const [expireMinutes, setExpireMinutes] = useState(30);
     const [adLoading, setAdLoading] = useState(false);
     const [reason, setReason] = useState('');
@@ -33,7 +32,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
     if (!modal) return null;
 
-    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setExpireMinutes(30); setReason(''); };
+    const close = () => { setModal(null); setPwd(''); setExpireMinutes(30); setReason(''); };
 
     // robust display name resolution prioritizing explicitly passed fallbackName (modal.name) over other lookups.
     const getDisplayName = (id, fallbackName, fallbackUsername) => {
@@ -168,76 +167,54 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             activeTimeOption = timeOptions[0];
         }
 
-        let baseRoomCost = isPriv ? ((Number(roomLimits.privateBaseCost) || 0) + (activeTimeOption ? Number(activeTimeOption.cost) : 0)) : 0; 
+        let baseRoomCost = (Number(roomLimits.privateBaseCost) || 0) + (activeTimeOption ? Number(activeTimeOption.cost) : 0); 
 
         content = (
             <>
-                <div className="d-flex justify-content-between align-items-center p-3 mb-3 border rounded-3 bg-light" onClick={() => setIsPriv(!isPriv)} style={{cursor: 'pointer'}}>
-                    <div>
-                        <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-lock text-danger me-2"></i>Private Room</h6>
-                        <small className="text-muted">Require password</small>
-                    </div>
-                    <div className="form-check form-switch fs-4 mb-0">
-                        <input className="form-check-input mt-0 cursor-pointer shadow-none" type="checkbox" checked={isPriv} readOnly />
-                    </div>
+                <div className="mb-4 text-center">
+                    <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-lock text-danger me-2"></i>Create Private Room</h6>
+                    <small className="text-muted">A password is required for private rooms</small>
                 </div>
 
-                {isPriv && (
-                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password (6-10 digits)..." value={pwd} onChange={e => {
-                        const val = e.target.value.replace(/[^0-9]/g, '');
-                        setPwd(val.slice(0, 10));
-                    }} />
-                )}
+                <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password (6-10 digits)..." value={pwd} onChange={e => {
+                    const val = e.target.value.replace(/[^0-9]/g, '');
+                    setPwd(val.slice(0, 10));
+                }} />
 
                 <div className="mb-3">
                     <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
-                    {isPriv ? (
-                        <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
-                            <i className="fas fa-info-circle me-1"></i> Private rooms hold up to <b>{roomLimits.privateMax}</b> players.
-                        </div>
-                    ) : (
-                        <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
-                            <i className="fas fa-info-circle me-1"></i> Public rooms hold up to <b>{roomLimits.publicMax}</b> players.
-                        </div>
-                    )}
+                    <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
+                        <i className="fas fa-info-circle me-1"></i> Private rooms hold up to <b>{roomLimits.privateMax}</b> players.
+                    </div>
                 </div>
 
-                {isPriv ? (
-                    <div className="mb-3">
-                        <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
-                        <div className="d-flex flex-wrap gap-2">
-                            {timeOptions.map((opt, idx) => {
-                                const isSelected = activeTimeOption?.minutes === opt.minutes;
-                                return (
-                                    <div key={idx}
-                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setExpireMinutes(opt.minutes)} style={{transition: 'all 0.2s', minWidth: '40%'}}>
-                                        <div className="fw-bold fs-6">{opt.minutes} mins</div>
-                                        <div style={{fontSize:'0.75rem', opacity: isSelected ? 0.9 : 0.6}}>{opt.cost} Cred{opt.cost !== 1 ? 's' : ''}</div>
-                                    </div>
-                                )
-                            })}
-                        </div>
+                <div className="mb-3">
+                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
+                    <div className="d-flex flex-wrap gap-2">
+                        {timeOptions.map((opt, idx) => {
+                            const isSelected = activeTimeOption?.minutes === opt.minutes;
+                            return (
+                                <div key={idx}
+                                     className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                     onClick={() => setExpireMinutes(opt.minutes)} style={{transition: 'all 0.2s', minWidth: '40%'}}>
+                                    <div className="fw-bold fs-6">{opt.minutes} mins</div>
+                                    <div style={{fontSize:'0.75rem', opacity: isSelected ? 0.9 : 0.6}}>{opt.cost} Cred{opt.cost !== 1 ? 's' : ''}</div>
+                                </div>
+                            )
+                        })}
                     </div>
-                ) : (
-                    <div className="alert alert-success py-2 small mb-3 shadow-sm border border-success">
-                        <i className="fas fa-check-circle me-1"></i> Creating a public room is FREE!<br/>
-                        <span className="text-muted" style={{fontSize: '0.75rem'}}>* Anyone can join for free</span>
-                    </div>
-                )}
+                </div>
 
-                {(isPriv) && (
-                    <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between">
-                        <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
-                        <span>{baseRoomCost} Credits</span>
-                    </div>
-                )}
+                <div className="alert alert-warning py-2 small mb-3 fw-bold d-flex justify-content-between">
+                    <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
+                    <span>{baseRoomCost} Credits</span>
+                </div>
 
                 <div className="d-flex gap-2">
                     <button className="btn btn-light w-50 rounded-pill fw-bold border" onClick={close}>Cancel</button>
-                    <button className="btn btn-primary w-50 rounded-pill fw-bold shadow-sm" disabled={isPriv && (pwd.length < 6 || pwd.length > 10)} onClick={() => { 
+                    <button className="btn btn-primary w-50 rounded-pill fw-bold shadow-sm" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { 
                         socket.emit('create_room', { 
-                            is_private: isPriv, 
+                            is_private: true, 
                             password: pwd, 
                             expire_minutes: activeTimeOption ? activeTimeOption.minutes : 30, 
                             auto_join: true 

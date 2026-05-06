@@ -870,7 +870,7 @@ return (
                             <h5 className="fw-bold text-dark mb-2">Ready to Dash?</h5>
                             <p className="text-muted small mb-3">Jump right into the action with a random public lobby!</p>
                             <button
-                                className="btn btn-lg rounded-pill fw-bold shadow-sm px-5 py-2 hover-up"
+                                className="btn rounded-pill fw-bold shadow-sm px-4 py-2 hover-up"
                                 style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', border: 'none' }}
                                 onClick={() => socket.emit('join_random_public')}
                                 disabled={!hasProfileSetup}
@@ -890,7 +890,7 @@ return (
                             <h5 className="fw-bold text-dark mb-2">Host a Game</h5>
                             <p className="text-muted small mb-3">Create a private room to play with your friends.</p>
                             <button
-                                className="btn btn-lg rounded-pill fw-bold shadow-sm px-5 py-2 hover-up"
+                                className="btn rounded-pill fw-bold shadow-sm px-4 py-2 hover-up"
                                 style={{ background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', color: 'white', border: 'none' }}
                                 onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}
                                 disabled={!hasProfileSetup || isRoomLimitReached}
