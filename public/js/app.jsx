@@ -148,6 +148,7 @@ const App = () => {
     const prevChatsCount = useRef(0);
     const prevGuessesCount = useRef(0);
     const lastKnownRoomRef = useRef(null);
+    const autoJoinAttempted = useRef(false);
 
     const [idleTimer, setIdleTimer] = useState(30);
 
@@ -333,26 +334,6 @@ const App = () => {
             setIsDisconnected(false);
             setIsReloading(false);
             newSocket.emit('auth', { initData: window.initData, photoUrl: window.profilePic });
-            
-            let joinedViaToken = false;
-            const startParam = window.tg?.initDataUnsafe?.start_param;
-            if (startParam && startParam.startsWith('join_')) {
-                const parts = startParam.split('_');
-                if (parts.length === 3) {
-                    const roomId = parts[1];
-                    const token = parts[2];
-                    joinedViaToken = true;
-                    setTimeout(() => {
-                        newSocket.emit('join_room_via_token', { room_id: roomId, token });
-                    }, 500);
-                }
-            }
-
-            if (!joinedViaToken && lastKnownRoomRef.current) {
-                setTimeout(() => {
-                    newSocket.emit('join_room', { room_id: lastKnownRoomRef.current });
-                }, 500);
-            }
         });
 
         newSocket.on('connect_error', (err) => {
@@ -378,6 +359,33 @@ const App = () => {
             setCurrentRoomId(data.currentRoom || null);
             setSystemConfig(data.systemConfig);
             if(!data.currentRoom) setRoomData(null);
+
+            // Execute auto-join logic safely AFTER auth is fully complete on server
+            if (!autoJoinAttempted.current) {
+                autoJoinAttempted.current = true;
+                
+                let startParam = window.tg?.initDataUnsafe?.start_param;
+                
+                // Fallback to checking URL search params directly if Telegram didn't populate initDataUnsafe
+                if (!startParam) {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    startParam = urlParams.get('tgWebAppStartParam') || urlParams.get('startapp');
+                }
+
+                if (startParam && startParam.startsWith('join_')) {
+                    const parts = startParam.split('_');
+                    if (parts.length === 3) {
+                        const roomId = parts[1];
+                        const token = parts[2];
+                        newSocket.emit('join_room_via_token', { room_id: roomId, token });
+                        return; // Skip lastKnownRoomRef check
+                    }
+                }
+
+                if (lastKnownRoomRef.current && !data.currentRoom) {
+                    newSocket.emit('join_room', { room_id: lastKnownRoomRef.current });
+                }
+            }
         });
         
         newSocket.on('maintenance_update', (data) => {
