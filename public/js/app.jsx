@@ -334,7 +334,21 @@ const App = () => {
             setIsReloading(false);
             newSocket.emit('auth', { initData: window.initData, photoUrl: window.profilePic });
             
-            if (lastKnownRoomRef.current) {
+            let joinedViaToken = false;
+            const startParam = window.tg?.initDataUnsafe?.start_param;
+            if (startParam && startParam.startsWith('join_')) {
+                const parts = startParam.split('_');
+                if (parts.length === 3) {
+                    const roomId = parts[1];
+                    const token = parts[2];
+                    joinedViaToken = true;
+                    setTimeout(() => {
+                        newSocket.emit('join_room_via_token', { room_id: roomId, token });
+                    }, 500);
+                }
+            }
+
+            if (!joinedViaToken && lastKnownRoomRef.current) {
                 setTimeout(() => {
                     newSocket.emit('join_room', { room_id: lastKnownRoomRef.current });
                 }, 500);
@@ -624,6 +638,16 @@ const App = () => {
                                                 {timeLeftText ? <span className="badge bg-warning text-dark"><i className="fas fa-hourglass-half"></i> {timeLeftText}</span> : null}
                                                 {roomData.room.is_private === 1 && roomData.room.creator_id === window.tgId ? (
                                                     <>
+                                                        <button className="btn btn-sm btn-outline-info py-1 px-2 rounded-circle shadow-none fw-bold" title="Copy Invite Link" onClick={() => {
+                                                            const inviteLink = `https://t.me/doodledashbot?start=join_${roomData.room.id}_${roomData.room.invite_token || ''}`;
+                                                            const el = document.createElement('textarea');
+                                                            el.value = inviteLink;
+                                                            document.body.appendChild(el);
+                                                            el.select();
+                                                            document.execCommand('copy');
+                                                            document.body.removeChild(el);
+                                                            setModal({ type: 'success', title: 'Invite Copied!', content: 'Invite link copied to clipboard.' });
+                                                        }}><i className="fas fa-link"></i></button>
                                                         {timeLeftText && !roomData.room.has_been_extended ? <button className="btn btn-sm btn-outline-success py-1 px-2 rounded-circle shadow-none fw-bold" title="Extend Room Time" onClick={() => setModal({type: 'extend_room', title: 'Extend Room Time'})}><i className="fas fa-clock"></i></button> : null}
                                                         <button className="btn btn-sm btn-outline-primary py-1 px-2 rounded-circle shadow-none fw-bold" title="Change Password" onClick={() => setModal({type: 'change_password', title: 'Change Room Password'})}><i className="fas fa-key"></i></button>
                                                         <button className="btn btn-sm btn-outline-danger py-1 px-2 rounded-circle shadow-none fw-bold" title="Delete Room" onClick={() => setModal({type: 'confirm_delete_room', title: 'Delete Room'})}><i className="fas fa-trash"></i></button>

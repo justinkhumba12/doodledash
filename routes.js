@@ -2,6 +2,7 @@ const rateLimit = require('express-rate-limit');
 const { db, redis } = require('./database');
 const { validateInitData, tgApiCall, sendMsg, getWeekKey } = require('./utils');
 const { getUserState } = require('./userManager');
+const { getRoom } = require('./roomManager');
 const config = require('./config');
 
 const authLimiter = rateLimit({
@@ -310,10 +311,39 @@ module.exports = (app, io) => {
 
                 const [userRows] = await db.query('SELECT accepted_policy FROM users WHERE tg_id = ?', [tgId]);
                 const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
+                const parts = text.split(' ');
+
+                // Handle Private Room Invite parsing
+                if (parts.length > 1 && parts[1].startsWith('join_')) {
+                    const joinParts = parts[1].split('_');
+                    if (joinParts.length === 3) {
+                        const roomId = joinParts[1];
+                        const token = joinParts[2];
+                        const room = await getRoom(roomId);
+                        
+                        if (room && room.is_private && room.invite_token === token) {
+                            const urlWithParams = `${webAppUrl}?tgWebAppStartParam=${parts[1]}`;
+                            
+                            if (!hasAccepted) {
+                                sendMsg(chatId, "📜 *Welcome to DoodleDash!*\n\nYou've been invited to a private room! Please read and accept our Privacy Policy to join.", {
+                                    inline_keyboard: [[{ text: "✅ I've read and accept", callback_data: `accept_policy_${parts[1]}` }]]
+                                }, { parse_mode: 'Markdown' });
+                                return;
+                            }
+                            
+                            sendMsg(chatId, "You have been invited to a private room!", {
+                                inline_keyboard: [[{ text: '🎮 Join Private Room', web_app: { url: urlWithParams } }]]
+                            });
+                            return;
+                        } else {
+                            sendMsg(chatId, "This room has expired or does not exist.");
+                            return;
+                        }
+                    }
+                }
 
                 if (!hasAccepted) {
                     let inviterId = 'none';
-                    const parts = text.split(' ');
                     if (parts.length > 1 && parts[1].startsWith('invite_')) {
                         inviterId = parts[1].replace('invite_', '');
                     }
@@ -360,7 +390,18 @@ module.exports = (app, io) => {
             }
 
             if (query.data.startsWith('accept_policy_')) {
-                const inviterId = query.data.replace('accept_policy_', '');
+                const payload = query.data.replace('accept_policy_', '');
+                
+                let inviterId = 'none';
+                let joinParam = '';
+                
+                if (payload.startsWith('invite_')) {
+                    inviterId = payload.replace('invite_', '');
+                } else if (payload.startsWith('join_')) {
+                    joinParam = payload;
+                } else if (payload !== 'none') {
+                    inviterId = payload; 
+                }
 
                 try {
                     await db.query(`
@@ -386,12 +427,17 @@ module.exports = (app, io) => {
                         }
                     }
 
+                    let finalUrl = `${webAppUrl}`;
+                    if (joinParam) {
+                        finalUrl += `?tgWebAppStartParam=${joinParam}`;
+                    }
+
                     tgApiCall('editMessageText', {
                         chat_id: chatId,
                         message_id: query.message.message_id,
                         text: "✅ Privacy Policy Accepted!\n\nWelcome to DoodleDash. Click below to play.",
                         reply_markup: {
-                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: `${webAppUrl}` } }]]
+                            inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: finalUrl } }]]
                         }
                     });
                     tgApiCall('answerCallbackQuery', { callback_query_id: query.id });

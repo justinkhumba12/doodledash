@@ -100,7 +100,7 @@ module.exports = (io) => {
                 purchased_guesses: 0,
                 ink_used: {},      
                 ink_extra: {},     
-                ink_buys: {},     
+                ink_buys: {},      
                 joined_at: Date.now() 
             });
 
@@ -688,6 +688,7 @@ module.exports = (io) => {
                     creator_id: currentUser,
                     is_private: isPriv ? 1 : 0,
                     password: isPriv ? hashPassword(pwd) : '',
+                    invite_token: isPriv ? crypto.randomBytes(3).toString('hex') : null,
                     max_members: maxMem,
                     status: 'WAITING',
                     created_at: Date.now(),
@@ -712,6 +713,21 @@ module.exports = (io) => {
                 const currentUser = socket.data.currentUser;
                 if (!currentUser) return;
                 await performJoinRoom(currentUser, data.room_id, data.password || '');
+            });
+        });
+
+        socket.on('join_room_via_token', async (data) => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                if (!currentUser) return;
+                const { room_id, token } = data;
+                
+                const room = await getRoom(room_id);
+                if (!room || !room.is_private || room.invite_token !== token) {
+                    return socket.emit('join_error', 'Invalid or expired private room invite link.');
+                }
+                
+                await performJoinRoom(currentUser, room_id, '', true);
             });
         });
 
@@ -757,6 +773,7 @@ module.exports = (io) => {
                     creator_id: currentUser,
                     is_private: 0,
                     password: '',
+                    invite_token: null,
                     max_members: roomLimits.publicMax,
                     status: 'WAITING',
                     created_at: Date.now(),
@@ -785,8 +802,10 @@ module.exports = (io) => {
                         return socket.emit('create_error', 'Password must be a numeric value between 6 and 10 digits.');
                     }
                     room.password = hashPassword(pwd);
+                    room.invite_token = crypto.randomBytes(3).toString('hex');
                     await saveRoom(room);
-                    socket.emit('reward_success', 'Room password updated successfully.');
+                    socket.emit('reward_success', 'Room password and invite link updated successfully.');
+                    await syncRoom(currentRoom, io);
                 }
             });
         });
