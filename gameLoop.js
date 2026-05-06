@@ -100,20 +100,46 @@ module.exports = (io) => {
                 let needsSync = false;
 
                 if (room.status === 'PRE_DRAW' && room.round_end_time && now >= room.round_end_time.getTime()) {
-                    room.status = 'BREAK';
-                    room.end_reason = 'timeout_predraw';
-                    room.break_end_time = new Date(now + 5000); 
-                    room.word_to_draw = null;
-                    room.base_hints = '[]';
-                    room.masked_word = null;
-                    room.round_end_time = null;
-                    room.members.forEach(m => { m.is_ready = 0; });
-                    
                     const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: roomId, user_id: room.current_drawer_id, message: 'failed to choose a word in time. Turn skipped.', is_system: true, created_at: new Date() };
+                    const sysChat = { id: cId, room_id: roomId, user_id: room.current_drawer_id, message: 'took too long to choose a word. Skipping turn!', is_system: true, created_at: new Date() };
                     await redis.rpush(`room:${roomId}:chats`, JSON.stringify(sysChat));
                     await redis.ltrim(`room:${roomId}:chats`, -30, -1);
                     io.to(`room_${roomId}`).emit('new_chat', sysChat);
+
+                    if (room.members.length >= 2) {
+                        room.round = (room.round || 0) + 1;
+                        const currentIndex = room.members.findIndex(m => m.user_id === room.current_drawer_id);
+                        const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
+                        room.current_drawer_id = room.members[nextIndex].user_id;
+
+                        room.round_end_time = new Date(now + 30000); 
+                        room.break_end_time = null;
+                        room.word_to_draw = null;
+                        room.base_hints = '[]';
+                        room.masked_word = null;
+                        room.end_reason = null;
+                        room.last_winner_id = null;
+                        room.winner_style = null;
+                        
+                        room.members.forEach(m => { 
+                            m.has_given_up = 0; 
+                            m.purchased_hints = '[]';
+                            m.purchased_guesses = 0;
+                            m.ink_extra = {};
+                            m.ink_buys = {};
+                            m.ink_used = {};
+                        });
+                        await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`, `room:${roomId}:guesses`);
+                    } else {
+                        room.status = 'WAITING';
+                        room.break_end_time = null;
+                        room.word_to_draw = null;
+                        room.base_hints = '[]';
+                        room.masked_word = null;
+                        room.round_end_time = null;
+                        room.members.forEach(m => { m.is_ready = 0; m.has_given_up = 0; });
+                    }
+                    
                     needsSync = true;
                 }
 

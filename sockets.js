@@ -301,7 +301,7 @@ module.exports = (io) => {
                         const nextIndex = currentIndex >= 0 && currentIndex + 1 < room.members.length ? currentIndex + 1 : 0;
                         room.current_drawer_id = room.members[nextIndex].user_id;
 
-                        room.round_end_time = null; 
+                        room.round_end_time = new Date(Date.now() + 30000); 
                         room.break_end_time = null;
                         room.word_to_draw = null;
                         room.base_hints = '[]';
@@ -726,7 +726,6 @@ module.exports = (io) => {
                 for (const id of activeRooms) {
                     const room = await getRoom(id);
                     if (room && !room.is_private && room.members.length < room.max_members) {
-                        // Skip if the user has been banned from this room
                         if (room.banned_members && room.banned_members.includes(currentUser)) continue;
                         
                         if (!bestRoom || room.members.length > bestRoom.members.length) {
@@ -739,7 +738,6 @@ module.exports = (io) => {
                     return await performJoinRoom(currentUser, bestRoom.id, '', true);
                 }
 
-                // If no available public room was found, auto-create a new one and join it
                 const maxRoomsRaw = await redis.get('config_max_rooms');
                 const maxRooms = maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250;
                 if (activeRooms.length >= maxRooms) {
@@ -751,7 +749,7 @@ module.exports = (io) => {
                 const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
 
                 const newRoomIdNum = await redis.incr('next_room_id');
-                const expireMinutes = 60; // 1-hour expiry for auto-created public matches
+                const expireMinutes = 60; 
                 const expiryTime = Date.now() + (expireMinutes * 60000);
 
                 const roomObj = {
@@ -770,7 +768,6 @@ module.exports = (io) => {
                 await saveRoom(roomObj);
                 await redis.sadd('active_rooms', newRoomIdNum);
 
-                // Auto-join the newly created public room, bypassing any checks or costs
                 await performJoinRoom(currentUser, newRoomIdNum, '', true);
             });
         });
