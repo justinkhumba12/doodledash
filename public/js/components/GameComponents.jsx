@@ -570,7 +570,7 @@ const ChatBox = ({ chats, socket, tgId, user, roomData, setModal, systemConfig }
                         return (
                             <div key={c.id} className="text-center my-1" style={{ fontSize: '0.85rem' }}>
                                 <span style={{ color: sysColor }}>
-                                    {displayName} {c.message}
+                                    <span className="fw-bold">{displayName}</span> {c.message}
                                 </span>
                             </div>
                         );
@@ -895,7 +895,9 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
                         {sortedMembers.map(m => {
                             const photo = roomData?.photos?.[m.user_id];
-                            const isDrawer = room.current_drawer_id === m.user_id;
+                            
+                            const isDrawer = room.current_drawer_id === m.user_id && (room.status === 'DRAWING' || room.status === 'PRE_DRAW');
+                            
                             const styleClass = window.getStyleClass(roomData.styles?.[m.user_id], systemConfig) || 'text-dark';
                             const displayName = window.getDisplayName(m.user_id, roomData?.names);
 
@@ -934,11 +936,17 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                             <button className="btn btn-sm btn-outline-danger py-0 px-1 rounded" title="Kick Player" onClick={() => setModal({type: 'kick_player', target_id: m.user_id})}><i className="fas fa-times"></i></button>
                                         )}
                                         {isDrawer ? (
-                                            <span className="badge bg-primary shadow-sm" title="Drawing"><i className="fas fa-paint-brush"></i></span>
+                                            <span className="badge rounded-circle bg-primary shadow-sm d-flex align-items-center justify-content-center" style={{width: '22px', height: '22px', padding: 0, fontSize: '0.65rem'}} title="Drawing">
+                                                <i className="fas fa-paint-brush"></i>
+                                            </span>
                                         ) : m.is_ready ? (
-                                            <span className="badge bg-success shadow-sm" title="Ready"><i className="fas fa-check"></i></span>
+                                            <span className="badge rounded-circle bg-success shadow-sm d-flex align-items-center justify-content-center" style={{width: '22px', height: '22px', padding: 0, fontSize: '0.65rem'}} title="Ready">
+                                                <i className="fas fa-check"></i>
+                                            </span>
                                         ) : (
-                                            <span className="badge bg-secondary shadow-sm" title="Waiting"><i className="fas fa-hourglass-half"></i></span>
+                                            <span className="badge rounded-circle bg-secondary shadow-sm d-flex align-items-center justify-content-center" style={{width: '22px', height: '22px', padding: 0, fontSize: '0.65rem'}} title="Waiting">
+                                                <i className="fas fa-hourglass-half"></i>
+                                            </span>
                                         )}
                                     </div>
                                 </div>
