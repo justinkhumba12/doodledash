@@ -822,11 +822,7 @@ return (
         
         <div className="d-flex justify-content-between align-items-center mb-3">
             <h3 className="fw-bold m-0">Game Lobbies</h3>
-            {!isRoomLimitReached ? (
-                <button className="btn btn-primary shadow-sm rounded-pill px-4" disabled={!hasProfileSetup} onClick={() => { if(hasProfileSetup) setModal({ type: 'create_room', title: 'Create Room' }) }}>
-                    <i className="fas fa-plus"></i> Create
-                </button>
-            ) : (
+            {isRoomLimitReached && (
                 <div className="text-muted small fw-bold text-end">
                     <i className="fas fa-ban text-danger"></i> Server Full.
                 </div>
