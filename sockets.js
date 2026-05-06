@@ -667,7 +667,7 @@ module.exports = (io) => {
                     max_members: maxMem,
                     status: 'WAITING',
                     created_at: Date.now(),
-                    expires_at: expiryTime,
+                    expire_at: expiryTime,
                     round: 0,
                     members: []
                 };
