@@ -3,8 +3,7 @@ const { useState } = React;
 const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, setSoundPolicyAccepted, systemConfig, roomData }) => {
     const [pwd, setPwd] = useState('');
     const [isPriv, setIsPriv] = useState(false);
-    const [maxMembers, setMaxMembers] = useState(6);
-    const [expireHours, setExpireHours] = useState(0.5);
+    const [expireMinutes, setExpireMinutes] = useState(30);
     const [adLoading, setAdLoading] = useState(false);
     const [reason, setReason] = useState('');
 
@@ -34,7 +33,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
 
     if (!modal) return null;
 
-    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setMaxMembers(6); setExpireHours(0.5); setReason(''); };
+    const close = () => { setModal(null); setPwd(''); setIsPriv(false); setExpireMinutes(30); setReason(''); };
 
     // robust display name resolution prioritizing explicitly passed fallbackName (modal.name) over other lookups.
     const getDisplayName = (id, fallbackName, fallbackUsername) => {
@@ -160,10 +159,16 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             </>
         );
     } else if (modal.type === 'create_room') {
-        const roomLimits = systemConfig?.roomLimits || { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+        const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+        const roomLimits = systemConfig?.roomLimits || defaultRoomLimits;
+        const timeOptions = roomLimits.timeOptions || defaultRoomLimits.timeOptions;
         
-        let extraUsers = Math.max(0, maxMembers - roomLimits.privateFree);
-        let baseRoomCost = isPriv ? ((extraUsers * roomLimits.privateExtraCost) + (expireHours === 1 ? 2 : 1)) : 0; 
+        let activeTimeOption = timeOptions.find(o => o.minutes === expireMinutes);
+        if (!activeTimeOption && timeOptions.length > 0) {
+            activeTimeOption = timeOptions[0];
+        }
+
+        let baseRoomCost = isPriv ? ((Number(roomLimits.privateBaseCost) || 0) + (activeTimeOption ? Number(activeTimeOption.cost) : 0)) : 0; 
 
         content = (
             <>
@@ -185,43 +190,33 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 )}
 
                 <div className="mb-3">
-                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players {isPriv ? `(Free up to ${roomLimits.privateFree}, then ${roomLimits.privateExtraCost} Cred/Player)` : ''}</label>
+                    <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-users text-primary me-1"></i> Max Players</label>
                     {isPriv ? (
-                        <div className="d-flex gap-2 overflow-auto pb-3 px-2 hide-scrollbar">
-                            {Array.from({length: Math.max(1, roomLimits.privateMax - 1)}, (_, i) => i + 2).map(num => {
-                                const isSelected = maxMembers === num;
-                                const extra = Math.max(0, num - roomLimits.privateFree);
-                                const cost = extra * roomLimits.privateExtraCost;
-                                return (
-                                    <div key={num}
-                                         className={`flex-shrink-0 text-center border rounded-3 py-3 px-3 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow' : 'bg-white text-muted border-light shadow-sm'}`}
-                                         onClick={() => setMaxMembers(num)} style={{transition: 'all 0.2s', minWidth: '70px'}}>
-                                        <div className="fw-bold fs-5">{num}</div>
-                                        <div style={{fontSize: '0.65rem', opacity: isSelected ? 0.9 : 0.6}}>
-                                            <i className="fas fa-coins me-1"></i>{cost}
-                                        </div>
-                                    </div>
-                                )
-                            })}
+                        <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
+                            <i className="fas fa-info-circle me-1"></i> Private rooms hold up to <b>{roomLimits.privateMax}</b> players.
                         </div>
                     ) : (
                         <div className="alert alert-info py-2 small mb-0 shadow-sm border border-info">
-                            <i className="fas fa-info-circle me-1"></i> Public rooms are fixed at <b>{roomLimits.publicMax}</b> players.
+                            <i className="fas fa-info-circle me-1"></i> Public rooms hold up to <b>{roomLimits.publicMax}</b> players.
                         </div>
                     )}
                 </div>
 
                 {isPriv ? (
                     <div className="mb-3">
-                        <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration (Time Cost)</label>
-                        <div className="d-flex gap-2">
-                            {[0.5, 1].map(hours => (
-                                <div key={hours}
-                                     className={`flex-fill text-center border rounded-3 py-1 cursor-pointer ${expireHours === hours ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
-                                     onClick={() => setExpireHours(hours)} style={{transition: 'all 0.2s'}}>
-                                    <div className="fw-bold fs-6">{hours === 0.5 ? '30' : '1'} <span style={{fontSize:'0.7rem'}}>{hours === 0.5 ? 'mins (1 Cred)' : 'hr (2 Cred)'}</span></div>
-                                </div>
-                            ))}
+                        <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-clock text-primary me-1"></i> Room Duration</label>
+                        <div className="d-flex flex-wrap gap-2">
+                            {timeOptions.map((opt, idx) => {
+                                const isSelected = activeTimeOption?.minutes === opt.minutes;
+                                return (
+                                    <div key={idx}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setExpireMinutes(opt.minutes)} style={{transition: 'all 0.2s', minWidth: '40%'}}>
+                                        <div className="fw-bold fs-6">{opt.minutes} mins</div>
+                                        <div style={{fontSize:'0.75rem', opacity: isSelected ? 0.9 : 0.6}}>{opt.cost} Cred{opt.cost !== 1 ? 's' : ''}</div>
+                                    </div>
+                                )
+                            })}
                         </div>
                     </div>
                 ) : (
@@ -244,8 +239,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         socket.emit('create_room', { 
                             is_private: isPriv, 
                             password: pwd, 
-                            max_members: maxMembers, 
-                            expire_hours: expireHours, 
+                            expire_minutes: activeTimeOption ? activeTimeOption.minutes : 30, 
                             auto_join: true 
                         }); 
                         close(); 

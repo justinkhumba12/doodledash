@@ -192,6 +192,9 @@ module.exports = (io) => {
                 const maxRoomsRaw = await redis.get('config_max_rooms');
                 const roomLimitsRaw = await redis.get('config_room_limits');
                 
+                const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+                const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
+
                 const [nameStyles] = await db.query('SELECT * FROM name_styles');
 
                 const systemConfig = {
@@ -206,7 +209,7 @@ module.exports = (io) => {
                     ],
                     inkConfig: inkConfigRaw ? JSON.parse(inkConfigRaw) : { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 },
                     maxRooms: maxRoomsRaw ? parseInt(maxRoomsRaw) : 1250,
-                    roomLimits: roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 },
+                    roomLimits,
                     nameStyles
                 };
 
@@ -615,7 +618,8 @@ module.exports = (io) => {
                 }
 
                 const roomLimitsRaw = await redis.get('config_room_limits');
-                const roomLimits = roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+                const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+                const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
 
                 const isPriv = Boolean(data.is_private);
                 const pwd = data.password ? data.password.toString() : '';
@@ -624,19 +628,21 @@ module.exports = (io) => {
                     return socket.emit('create_error', 'Password must be a numeric value between 6 and 10 digits.');
                 }
 
-                let maxMem = parseInt(data.max_members) || 6;
-                const expireHours = parseFloat(data.expire_hours) || 0.5;
-
-                if (!isPriv) {
-                    maxMem = roomLimits.publicMax; 
-                } else {
-                    maxMem = Math.min(maxMem, roomLimits.privateMax); 
-                }
-
+                let maxMem = roomLimits.publicMax;
+                let expireMinutes = 30;
                 let cost = 0;
+
                 if (isPriv) {
-                    const extraUsers = Math.max(0, maxMem - roomLimits.privateFree);
-                    cost = (extraUsers * roomLimits.privateExtraCost) + (expireHours === 1 ? 2 : 1);
+                    maxMem = roomLimits.privateMax;
+                    
+                    const timeOpts = roomLimits.timeOptions || defaultRoomLimits.timeOptions;
+                    let requestedMinutes = parseInt(data.expire_minutes) || timeOpts[0].minutes;
+                    
+                    const timeOption = timeOpts.find(opt => opt.minutes === requestedMinutes) || timeOpts[0];
+                    expireMinutes = timeOption.minutes;
+
+                    const baseCost = Number(roomLimits.privateBaseCost) || 0;
+                    cost = baseCost + Number(timeOption.cost);
                 }
 
                 if (cost > 0) {
@@ -651,7 +657,7 @@ module.exports = (io) => {
                 }
 
                 const newRoomIdNum = await redis.incr('next_room_id');
-                const expiryTime = Date.now() + (expireHours * 3600000);
+                const expiryTime = Date.now() + (expireMinutes * 60000);
                 
                 const roomObj = {
                     id: newRoomIdNum,

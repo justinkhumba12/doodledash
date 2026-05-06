@@ -791,14 +791,19 @@
             const [msg, setMsg] = useState('');
             const [rooms, setRooms] = useState([]);
             const [maxRooms, setMaxRooms] = useState(1250);
-            const [roomLimits, setRoomLimits] = useState({ publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 });
+            const [roomLimits, setRoomLimits] = useState({ publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] });
 
             const load = () => {
                 apiFetch('/config').then(c => { 
                     setMaint(c.maintenance); 
                     setDict(c.dictionary.join(', ')); 
                     if(c.maxRooms) setMaxRooms(c.maxRooms);
-                    if(c.roomLimits) setRoomLimits(c.roomLimits);
+                    if(c.roomLimits) {
+                        const limits = c.roomLimits;
+                        if (!limits.timeOptions) limits.timeOptions = [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }];
+                        if (typeof limits.privateBaseCost === 'undefined') limits.privateBaseCost = 0;
+                        setRoomLimits(limits);
+                    }
                 });
                 apiFetch('/rooms').then(setRooms);
             };
@@ -859,29 +864,48 @@
 
                     <div className="card mb-4">
                         <div className="card-header bg-dark text-white"><i className="fas fa-users-cog me-2"></i>Room Configurations (Users & Cost)</div>
-                        <div className="card-body">
+                        <div className="card-body border-bottom">
                             <div className="row g-2 mb-3">
-                                <div className="col-6 col-md-3">
+                                <div className="col-4">
                                     <label className="form-label small fw-bold">Public Max Users</label>
                                     <input type="number" className="form-control form-control-sm" value={roomLimits.publicMax} onChange={e=>setRoomLimits({...roomLimits, publicMax: parseInt(e.target.value)})} />
-                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Fixed size</small>
                                 </div>
-                                <div className="col-6 col-md-3">
+                                <div className="col-4">
                                     <label className="form-label small fw-bold">Private Max Users</label>
                                     <input type="number" className="form-control form-control-sm" value={roomLimits.privateMax} onChange={e=>setRoomLimits({...roomLimits, privateMax: parseInt(e.target.value)})} />
-                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Allowed limit</small>
                                 </div>
-                                <div className="col-6 col-md-3">
-                                    <label className="form-label small fw-bold">Private Free Users</label>
-                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateFree} onChange={e=>setRoomLimits({...roomLimits, privateFree: parseInt(e.target.value)})} />
-                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Zero cost up to</small>
-                                </div>
-                                <div className="col-6 col-md-3">
-                                    <label className="form-label small fw-bold">Private Extra Cost</label>
-                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateExtraCost} onChange={e=>setRoomLimits({...roomLimits, privateExtraCost: parseInt(e.target.value)})} />
-                                    <small className="text-muted" style={{fontSize: '0.7rem'}}>Cred per user</small>
+                                <div className="col-4">
+                                    <label className="form-label small fw-bold">Private Base Cost</label>
+                                    <input type="number" className="form-control form-control-sm" value={roomLimits.privateBaseCost || 0} onChange={e=>setRoomLimits({...roomLimits, privateBaseCost: parseInt(e.target.value)})} />
                                 </div>
                             </div>
+                            
+                            <div className="mb-2 mt-3"><label className="form-label small fw-bold text-info"><i className="fas fa-clock me-1"></i> Private Room Expiration Times & Costs</label></div>
+                            {(roomLimits.timeOptions || []).map((opt, index) => (
+                                <div key={index} className="d-flex gap-2 mb-2 align-items-center">
+                                    <input type="number" className="form-control form-control-sm text-center fw-bold" value={opt.minutes} onChange={e => {
+                                        const newOpts = [...roomLimits.timeOptions];
+                                        newOpts[index].minutes = Number(e.target.value);
+                                        setRoomLimits({...roomLimits, timeOptions: newOpts});
+                                    }} /> 
+                                    <span className="small fw-bold text-muted">Mins =</span>
+                                    <input type="number" className="form-control form-control-sm text-center fw-bold" value={opt.cost} onChange={e => {
+                                        const newOpts = [...roomLimits.timeOptions];
+                                        newOpts[index].cost = Number(e.target.value);
+                                        setRoomLimits({...roomLimits, timeOptions: newOpts});
+                                    }} /> 
+                                    <span className="small fw-bold text-muted">Creds</span>
+                                    <button className="btn btn-sm btn-danger shadow-sm" onClick={() => {
+                                        const newOpts = [...roomLimits.timeOptions];
+                                        newOpts.splice(index, 1);
+                                        setRoomLimits({...roomLimits, timeOptions: newOpts});
+                                    }}><i className="fas fa-times"></i></button>
+                                </div>
+                            ))}
+                            <button className="btn btn-sm btn-outline-info mt-2 mb-3 w-100 fw-bold border-dashed" onClick={() => {
+                                setRoomLimits({...roomLimits, timeOptions: [...(roomLimits.timeOptions || []), { minutes: 30, cost: 1 }]});
+                            }}>+ Add Time Option</button>
+
                             <button className="btn btn-primary btn-sm fw-bold w-100" onClick={async () => { await apiFetch('/config/server_limits', 'POST', { maxRooms, roomLimits }); alert('Room configurations saved!'); }}>Save Room Configuration</button>
                         </div>
                     </div>

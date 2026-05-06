@@ -1,4 +1,3 @@
-// justinkhumba12/doodledash/doodledash-e07c74cd6e295c9333392b96f16fd395722cf21d/adminBackend.js
 const express = require('express');
 const { db, redis } = require('./database');
 const { validateInitData, sendMsg } = require('./utils');
@@ -271,7 +270,8 @@ async function setupAdminPanel(app, io) {
         const unmuteCost = await redis.get('config_unmute_cost') || 25;
 
         const roomLimitsRaw = await redis.get('config_room_limits');
-        const roomLimits = roomLimitsRaw ? JSON.parse(roomLimitsRaw) : { publicMax: 8, privateMax: 10, privateFree: 4, privateExtraCost: 1 };
+        const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+        const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
 
         res.json({
             maintenance: maintenance === '1',
