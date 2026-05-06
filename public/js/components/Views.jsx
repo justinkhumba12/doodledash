@@ -866,6 +866,46 @@ return (
                 <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} disabled={!hasProfileSetup} />
             </div>
 
+            {activeTab === 'public' && (
+                <div className="mb-4">
+                    <div className="card bg-white border-0 shadow-sm rounded-4 overflow-hidden position-relative">
+                        <div className="position-absolute top-0 start-0 w-100 h-100" style={{background: 'linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(5,150,105,0.05) 100%)', zIndex: 0}}></div>
+                        <div className="card-body p-4 text-center position-relative" style={{zIndex: 1}}>
+                            <h5 className="fw-bold text-dark mb-2">Ready to Dash?</h5>
+                            <p className="text-muted small mb-3">Jump right into the action with a random public lobby!</p>
+                            <button
+                                className="btn btn-lg rounded-pill fw-bold shadow-sm px-5 py-2 hover-up"
+                                style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', border: 'none' }}
+                                onClick={() => socket.emit('join_random_public')}
+                                disabled={!hasProfileSetup}
+                            >
+                                <i className="fas fa-play me-2"></i> Play Now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {activeTab === 'private' && (
+                <div className="mb-4">
+                    <div className="card bg-white border-0 shadow-sm rounded-4 overflow-hidden position-relative">
+                        <div className="position-absolute top-0 start-0 w-100 h-100" style={{background: 'linear-gradient(135deg, rgba(244,63,94,0.1) 0%, rgba(225,29,72,0.05) 100%)', zIndex: 0}}></div>
+                        <div className="card-body p-4 text-center position-relative" style={{zIndex: 1}}>
+                            <h5 className="fw-bold text-dark mb-2">Host a Game</h5>
+                            <p className="text-muted small mb-3">Create a private room to play with your friends.</p>
+                            <button
+                                className="btn btn-lg rounded-pill fw-bold shadow-sm px-5 py-2 hover-up"
+                                style={{ background: 'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)', color: 'white', border: 'none' }}
+                                onClick={() => setModal({ type: 'create_room', title: 'Create Room' })}
+                                disabled={!hasProfileSetup || isRoomLimitReached}
+                            >
+                                <i className="fas fa-user-friends me-2"></i> Play with Friends
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="row g-3">
                 {filteredRooms.length > 0 ? filteredRooms.map(r => {
                     const isFull = r.member_count >= r.max_members;
