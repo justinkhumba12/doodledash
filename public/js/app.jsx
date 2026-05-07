@@ -191,7 +191,6 @@ const App = () => {
             } else {
                 if (data.error === 'not_registered') {
                     setLoadingState('not_registered');
-                    executeBotRedirect(); // Automatically trigger bot redirect and close
                 } else if (data.error === 'banned') {
                     setLoadingState('You are banned. Check the bot for details. Closing...');
                     if (window.tg) {
