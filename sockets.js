@@ -801,6 +801,50 @@ module.exports = (io) => {
                 }
             });
         });
+        
+        socket.on('extend_room', async (data) => {
+            queuedAction(async () => {
+                const currentUser = socket.data.currentUser;
+                const currentRoom = socket.data.currentRoom;
+                if (!currentUser || !currentRoom) return;
+
+                const room = await getRoom(currentRoom);
+                if (room && room.is_private && room.creator_id === currentUser) {
+                    const roomLimitsRaw = await redis.get('config_room_limits');
+                    const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+                    const roomLimits = roomLimitsRaw ? { ...defaultRoomLimits, ...JSON.parse(roomLimitsRaw) } : defaultRoomLimits;
+                    const timeOpts = roomLimits.timeOptions || defaultRoomLimits.timeOptions;
+
+                    let requestedMinutes = data && data.expire_minutes ? parseInt(data.expire_minutes) : timeOpts[0].minutes;
+                    const timeOption = timeOpts.find(opt => opt.minutes === requestedMinutes) || timeOpts[0];
+
+                    const baseCost = Number(roomLimits.privateBaseCost) || 0;
+                    const totalCost = baseCost + Number(timeOption.cost);
+
+                    if (totalCost > 0) {
+                        const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+                        if (!userRows.length || userRows[0].credits < totalCost) {
+                            return socket.emit('create_error', `Not enough credits. Need ${totalCost} Credits.`);
+                        }
+                        await db.query('UPDATE users SET credits = credits - ? WHERE tg_id = ?', [totalCost, currentUser]);
+                        await redis.hincrbyfloat('user_credits', currentUser, -totalCost);
+                    }
+
+                    // Extend expiry time
+                    const currentExpiry = room.expire_at ? new Date(room.expire_at).getTime() : Date.now();
+                    room.expire_at = new Date(currentExpiry + (timeOption.minutes * 60000));
+                    room.has_been_extended = true;
+
+                    await saveRoom(room);
+                    socket.emit('reward_success', `Room extended by ${timeOption.minutes} minutes!`);
+                    
+                    const userState = await getUserState(currentUser);
+                    if (userState) socket.emit('user_update', userState);
+
+                    await syncRoom(currentRoom, io);
+                }
+            });
+        });
 
         socket.on('join_room', async (data) => {
             queuedAction(async () => {
