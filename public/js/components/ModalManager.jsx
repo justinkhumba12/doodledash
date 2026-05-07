@@ -347,12 +347,53 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                 </>
             );
         } else if (modal.type === 'extend_room') {
+            const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
+            const roomLimits = systemConfig?.roomLimits || defaultRoomLimits;
+            const timeOptions = roomLimits.timeOptions || defaultRoomLimits.timeOptions;
+            
+            let activeTimeOption = timeOptions.find(o => o.minutes === expireMinutes);
+            if (!activeTimeOption && timeOptions.length > 0) {
+                activeTimeOption = timeOptions[0];
+            }
+
+            let baseRoomCost = (Number(roomLimits.privateBaseCost) || 0) + (activeTimeOption ? Number(activeTimeOption.cost) : 0);
+
+            title = 'Extend Room Time';
             content = (
                 <>
-                    <div className="alert alert-info py-2 small mb-3">Extending adds 30 minutes. Cost: 5 Credits.</div>
+                    <div className="mb-3 text-center">
+                        <h6 className="mb-0 fw-bold text-dark"><i className="fas fa-clock text-success me-2"></i>Extend Private Room</h6>
+                        <small className="text-muted">Add more time to your private room before it expires.</small>
+                    </div>
+
+                    <div className="mb-3">
+                        <label className="form-label text-muted small mb-2 fw-bold"><i className="fas fa-hourglass-half text-primary me-1"></i> Extension Duration</label>
+                        <div className="d-flex flex-wrap gap-2">
+                            {timeOptions.map((opt, idx) => {
+                                const isSelected = activeTimeOption?.minutes === opt.minutes;
+                                return (
+                                    <div key={idx}
+                                         className={`flex-fill text-center border rounded-3 py-2 cursor-pointer ${isSelected ? 'bg-primary border-primary text-white shadow-sm' : 'bg-white text-muted border-light shadow-sm'}`}
+                                         onClick={() => setExpireMinutes(opt.minutes)} style={{transition: 'all 0.2s', minWidth: '40%'}}>
+                                        <div className="fw-bold fs-6">{opt.minutes} mins</div>
+                                        <div style={{fontSize:'0.75rem', opacity: isSelected ? 0.9 : 0.6}}>{opt.cost} Cred{opt.cost !== 1 ? 's' : ''}</div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="alert alert-warning py-2 small mb-4 fw-bold d-flex justify-content-between">
+                        <span><i className="fas fa-coins text-warning me-1"></i> Total Cost:</span>
+                        <span>{baseRoomCost} Credits</span>
+                    </div>
+
                     <div className="d-flex gap-2">
-                        <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
-                        <button className="btn btn-success w-50 rounded-pill" onClick={() => { socket.emit('extend_room'); close(); }}>Extend</button>
+                        <button className="btn btn-light w-50 rounded-pill fw-bold border" onClick={close}>Cancel</button>
+                        <button className="btn btn-success w-50 rounded-pill fw-bold shadow-sm" onClick={() => { 
+                            socket.emit('extend_room', { expire_minutes: activeTimeOption ? activeTimeOption.minutes : 30 }); 
+                            close(); 
+                        }}>Extend</button>
                     </div>
                 </>
             );
