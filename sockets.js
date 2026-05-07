@@ -581,16 +581,35 @@ module.exports = (io) => {
                             msg = 'Ad reward not ready yet or max claims reached.';
                         }
                     }
-                } else if (type === 'invite_3') {
-                    const [userRows] = await db.query(`SELECT weekly_invites, invite_claimed_this_week FROM users WHERE tg_id = ?`, [currentUser]);
-                    if (userRows.length > 0) {
-                        if (userRows[0].weekly_invites >= 3 && !userRows[0].invite_claimed_this_week) {
+                } else if (type === 'invite_reward') {
+                    const weekKey = getWeekKey();
+                    
+                    const [statsRows] = await db.query(
+                        `SELECT invites FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?`, 
+                        [currentUser, weekKey]
+                    );
+                    
+                    const invitesThisWeek = statsRows.length > 0 ? statsRows[0].invites : 0;
+                    
+                    if (invitesThisWeek >= 3) {
+                        const [userRows] = await db.query(
+                            `SELECT last_invite_claim_week FROM users WHERE tg_id = ?`, 
+                            [currentUser]
+                        );
+                        
+                        if (userRows.length > 0 && userRows[0].last_invite_claim_week !== weekKey) {
                             rewardAmount = 5;
-                            await db.query(`UPDATE users SET credits = credits + ?, invite_claimed_this_week = 1 WHERE tg_id = ?`, [rewardAmount, currentUser]);
-                            success = true; msg = 'Invite reward claimed! +5 Credits';
+                            await db.query(
+                                `UPDATE users SET credits = credits + ?, last_invite_claim_week = ? WHERE tg_id = ?`, 
+                                [rewardAmount, weekKey, currentUser]
+                            );
+                            success = true; 
+                            msg = 'Invite reward claimed! +5 Credits';
                         } else {
-                            msg = 'Invite requirement not met or already claimed.';
+                            msg = 'Invite reward already claimed for this week.';
                         }
+                    } else {
+                        msg = 'Invite requirement not met (requires 3 invites this week).';
                     }
                 } else if (type === 'daily_guess') {
                     const guessRewardRaw = await redis.get('config_guess_reward');
