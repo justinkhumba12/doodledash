@@ -333,11 +333,6 @@ const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab })
 const TasksView = ({ user, socket, setModal, systemConfig }) => {
 const [adState, setAdState] = useState({ show: false });
 
-const inviteCount = user?.weekly_invites || 0;
-const goal = 3;
-const isCompleted = inviteCount >= goal;
-const hasClaimed = user?.invite_claimed_this_week;
-
 const streakCount = user?.streak_count || 0;
 const currentDay = Math.min((user?.daily_available ? streakCount + 1 : streakCount) || 1, 7);
 
@@ -346,25 +341,6 @@ const dailyGuesses = user?.daily_correct_guesses || 0;
 const guessGoal = guessConfig.required;
 const guessCompleted = dailyGuesses >= guessGoal;
 const guessClaimed = user?.guess_reward_claimed_today;
-
-const handleInvite = () => {
-    const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
-    if (window.tg && window.tg.openTelegramLink) {
-        try {
-            window.tg.openTelegramLink(botLink);
-        } catch (e) {
-            window.open(botLink, '_blank');
-        }
-    } else {
-        window.open(botLink, '_blank');
-    }
-};
-
-const handleClaim = () => {
-    if (socket && isCompleted && !hasClaimed) {
-        socket.emit('claim_reward', { type: 'invite_3' });
-    }
-};
 
 const triggerAd = (adNum, prefix) => {
     setAdState({ show: true });
@@ -517,38 +493,6 @@ return (
             </div>
         </div>
 
-        {/* Invite Friends */}
-        <div className="card bg-white rounded-4 border shadow-sm mb-3">
-            <div className="card-body p-3">
-                <div className="d-flex align-items-center gap-3 mb-3">
-                    <div className="text-white rounded-circle d-flex align-items-center justify-content-center shadow-sm flex-shrink-0" style={{width: '45px', height: '45px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)'}}>
-                        <i className="fas fa-user-friends fs-5"></i>
-                    </div>
-                    <div>
-                        <h6 className="fw-bold mb-1">Invite Friends</h6>
-                        <p className="text-muted small mb-0">Invite 3 friends for 5 Credits!</p>
-                    </div>
-                </div>
-                <div className="mb-3">
-                    <div className="d-flex justify-content-between small fw-bold mb-1">
-                        <span className="text-secondary">Progress</span>
-                        <span className={isCompleted ? 'text-success' : 'text-primary'}>{inviteCount} / {goal}</span>
-                    </div>
-                    <div className="progress rounded-pill bg-light border shadow-sm" style={{height: '8px'}}>
-                        <div className={`progress-bar rounded-pill ${isCompleted ? 'bg-success' : 'bg-primary'}`} style={{width: `${Math.min((inviteCount / goal) * 100, 100)}%`}}></div>
-                    </div>
-                </div>
-                <div className="d-flex gap-2">
-                    <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm" onClick={handleInvite}>
-                        <i className="fas fa-paper-plane me-1"></i> Share Link
-                    </button>
-                    <button className={`btn flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm ${isCompleted && !hasClaimed ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!isCompleted || hasClaimed} onClick={handleClaim}>
-                        {hasClaimed ? 'Claimed' : 'Claim 5 Credits'}
-                    </button>
-                </div>
-            </div>
-        </div>
-
         {adState.show && (
             <div className="wb-overlay" style={{zIndex: 9999, background: 'rgba(0,0,0,0.92)', position: 'fixed'}}>
                 <h2 className="text-white mb-4 fw-bold">Loading Advertisement</h2>
@@ -625,18 +569,21 @@ const renderList = (dataList, type, isPrevious = false) => {
     return (
         <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white ${isPrevious ? 'opacity-75' : ''}`}>
             {dataList.map((l, index) => {
+                const explicitRank = l.rank || (index + 1);
                 let rankStyle = "bg-primary text-white";
-                if (index === 0) rankStyle = "bg-warning text-dark";
-                if (index === 1) rankStyle = "bg-secondary text-white";
-                if (index === 2) rankStyle = "bg-danger text-white";
+                if (explicitRank === 1) rankStyle = "bg-warning text-dark";
+                if (explicitRank === 2) rankStyle = "bg-secondary text-white";
+                if (explicitRank === 3) rankStyle = "bg-danger text-white";
+                if (explicitRank > 5) rankStyle = "bg-dark text-white";
                 
                 const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
+                const isAppendedUser = explicitRank > 5;
 
                 return (
-                    <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                    <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${explicitRank === 1 && !isPrevious ? 'bg-warning' : ''} ${isAppendedUser ? 'bg-light border-top border-primary mt-2 rounded shadow-sm' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
                         <div className="d-flex align-items-center gap-2">
-                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '24px', height: '24px', fontSize: '0.75rem', zIndex: 1}}>
-                                {index + 1}
+                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: isAppendedUser ? '28px' : '24px', height: isAppendedUser ? '28px' : '24px', fontSize: isAppendedUser ? '0.85rem' : '0.75rem', zIndex: 1}}>
+                                {explicitRank}
                             </div>
                             {l.avatar_url ? (
                                 <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
@@ -722,6 +669,21 @@ return (
                         <div className="mt-4">
                             <h6 className="fw-bold text-secondary mb-3"><i className="fas fa-history me-2"></i>Last Week's Top 5</h6>
                             {renderList(activeTab === 'inviters' ? prevInviters : prevGuessers, activeTab, true)}
+
+                            {activeTab === 'inviters' && (
+                                <div className="card bg-white mt-3 border shadow-sm rounded-4 text-center p-3 mb-2 hover-up">
+                                    <div className="d-flex justify-content-center align-items-center mb-2">
+                                        <div className="bg-warning bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center" style={{width: '60px', height: '60px'}}>
+                                            <i className="fas fa-gift text-warning fs-1"></i>
+                                        </div>
+                                    </div>
+                                    <h6 className="fw-bold">Previous Week Reward</h6>
+                                    <p className="small text-muted mb-3">Top 5 inviters can claim 5 Gems!</p>
+                                    <button className="btn btn-warning rounded-pill fw-bold shadow-sm w-100" onClick={() => socket.emit('claim_reward', { type: 'prev_week_inviter' })}>
+                                        <i className="fas fa-gem me-1"></i> Claim 5 Gems
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
                 </>
