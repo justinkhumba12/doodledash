@@ -362,7 +362,7 @@ const handleInvite = () => {
 
 const handleClaim = () => {
     if (socket && isCompleted && !hasClaimed) {
-        socket.emit('claim_reward', { type: 'invite_3' });
+        socket.emit('claim_reward', { type: 'invite_reward' });
     }
 };
 
@@ -621,22 +621,46 @@ useEffect(() => {
 }, [socket, activeTab]);
 
 const renderList = (dataList, type, isPrevious = false) => {
+    if (dataList.length === 1 && dataList[0].isCurrentUserAppend && (!dataList[0].score || dataList[0].score === 0)) {
+        const l = dataList[0];
+        return (
+            <div className="card rounded-4 shadow-sm border overflow-hidden bg-white text-center p-4 mt-2">
+                <div className="d-flex justify-content-center mb-3">
+                    {l.avatar_url ? (
+                        <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white border-primary border-2" style={{ width: '60px', height: '60px', objectFit: 'cover' }} alt="User"/>
+                    ) : (
+                        <div className="rounded-circle shadow-sm border bg-white border-primary border-2 d-flex align-items-center justify-content-center text-secondary" style={{ width: '60px', height: '60px' }}>
+                            <i className="fas fa-user fs-3"></i>
+                        </div>
+                    )}
+                </div>
+                <h5 className="fw-bold text-dark">{l.name || 'You'}</h5>
+                <p className="text-muted small mt-2 mb-0">The leaderboard is empty right now.</p>
+                <p className="text-primary fw-bold small mt-1">Be the first to {type === 'inviters' ? 'invite friends' : 'guess words'} and secure the #1 spot!</p>
+            </div>
+        );
+    }
+
     if (dataList.length === 0) return null;
     return (
         <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white ${isPrevious ? 'opacity-75' : ''}`}>
             {dataList.map((l, index) => {
+                const isAppended = l.isCurrentUserAppend;
+                const rankDisplay = isAppended ? l.actualRank : (index + 1);
+                
                 let rankStyle = "bg-primary text-white";
-                if (index === 0) rankStyle = "bg-warning text-dark";
-                if (index === 1) rankStyle = "bg-secondary text-white";
-                if (index === 2) rankStyle = "bg-danger text-white";
+                if (rankDisplay === 1) rankStyle = "bg-warning text-dark";
+                else if (rankDisplay === 2) rankStyle = "bg-secondary text-white";
+                else if (rankDisplay === 3) rankStyle = "bg-danger text-white";
+                else if (isAppended) rankStyle = "bg-dark text-white"; 
                 
                 const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
 
                 return (
-                    <div key={l.tg_id} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious ? 'bg-warning' : ''}`} style={{ '--bs-bg-opacity': '.1' }}>
+                    <div key={l.tg_id + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light border-top border-2 border-primary' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
                         <div className="d-flex align-items-center gap-2">
-                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '24px', height: '24px', fontSize: '0.75rem', zIndex: 1}}>
-                                {index + 1}
+                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '28px', height: '28px', fontSize: '0.75rem', zIndex: 1}}>
+                                {rankDisplay}
                             </div>
                             {l.avatar_url ? (
                                 <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
@@ -650,7 +674,9 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 </div>
                             )}
                             <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                <span className={`fw-bold ${styleClass || 'text-dark'}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>{l.name || window.toHex(l.tg_id)}</span>
+                                <span className={`fw-bold ${styleClass || 'text-dark'} ${isAppended ? 'text-primary' : ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
+                                    {l.name || window.toHex(l.tg_id)} {isAppended ? <span className="badge bg-primary ms-1" style={{fontSize:'0.6rem'}}>YOU</span> : null}
+                                </span>
                                 {l.username && l.username !== 'unset' ? (
                                     <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
                                         @{l.username}
@@ -658,9 +684,9 @@ const renderList = (dataList, type, isPrevious = false) => {
                                 ) : null}
                             </div>
                         </div>
-                        <div className="badge bg-light text-dark px-2 py-1 rounded-pill shadow-sm" style={{ fontSize: '0.85rem' }}>
-                            {type === 'guessers' ? <i className="fas fa-check-circle text-success me-1"></i> : null}
-                            {type === 'inviters' ? <i className="fas fa-user-plus text-primary me-1"></i> : null}
+                        <div className={`badge ${isAppended ? 'bg-primary text-white' : 'bg-light text-dark'} px-2 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
+                            {type === 'guessers' ? <i className="fas fa-check-circle me-1"></i> : null}
+                            {type === 'inviters' ? <i className="fas fa-user-plus me-1"></i> : null}
                             {type === 'donators' ? <i className="fas fa-star me-1" style={{color: '#d946ef'}}></i> : null}
                             {l.score || l.total_donated}
                         </div>
@@ -722,6 +748,19 @@ return (
                         <div className="mt-4">
                             <h6 className="fw-bold text-secondary mb-3"><i className="fas fa-history me-2"></i>Last Week's Top 5</h6>
                             {renderList(activeTab === 'inviters' ? prevInviters : prevGuessers, activeTab, true)}
+                            
+                            {activeTab === 'inviters' && (
+                                <div className="card bg-white rounded-4 shadow-sm border mt-3 text-center p-3 hover-up cursor-pointer" onClick={() => socket.emit('claim_top_inviter_reward')} style={{ background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', borderColor: '#bbf7d0' }}>
+                                    <div className="d-flex flex-column align-items-center justify-content-center py-2">
+                                        <div className="position-relative mb-2">
+                                            <i className="fas fa-gift text-success" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.15))' }}></i>
+                                            <i className="fas fa-gem position-absolute top-0 start-100 translate-middle text-info" style={{ fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}></i>
+                                        </div>
+                                        <h6 className="fw-bold text-dark mb-1">Weekly Top Inviter Reward</h6>
+                                        <p className="small text-muted mb-0">Finished in last week's Top 5? Click to claim 5 Gems!</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </>
