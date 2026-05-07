@@ -561,7 +561,7 @@ return (
 
 };
 
-const LeaderboardView = ({ socket, setModal, setProfileModal, systemConfig }) => {
+const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig }) => {
 const [activeTab, setActiveTab] = useState('inviters');
 const [inviters, setInviters] = useState([]);
 const [guessers, setGuessers] = useState([]);
@@ -621,81 +621,115 @@ useEffect(() => {
 }, [socket, activeTab]);
 
 const renderList = (dataList, type, isPrevious = false) => {
-    if (dataList.length === 1 && dataList[0].isCurrentUserAppend && (!dataList[0].score || dataList[0].score === 0)) {
-        const l = dataList[0];
-        return (
-            <div className="card rounded-4 shadow-sm border overflow-hidden bg-white text-center p-4 mt-2">
-                <div className="d-flex justify-content-center mb-3">
-                    {l.avatar_url ? (
-                        <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white border-primary border-2" style={{ width: '60px', height: '60px', objectFit: 'cover' }} alt="User"/>
-                    ) : (
-                        <div className="rounded-circle shadow-sm border bg-white border-primary border-2 d-flex align-items-center justify-content-center text-secondary" style={{ width: '60px', height: '60px' }}>
-                            <i className="fas fa-user fs-3"></i>
-                        </div>
-                    )}
+    let displayList = dataList;
+
+    if (isPrevious) {
+        displayList = dataList.filter(l => !l.isCurrentUserAppend);
+        if (displayList.length === 0) {
+            return (
+                <div className="card rounded-4 shadow-sm border bg-white text-center p-4 mt-2 opacity-75">
+                    <i className="fas fa-history fs-3 mb-2 text-secondary opacity-50"></i>
+                    <p className="small mb-0 text-muted">No data is available for last week.</p>
                 </div>
-                <h5 className="fw-bold text-dark">{l.name || 'You'}</h5>
-                <p className="text-muted small mt-2 mb-0">The leaderboard is empty right now.</p>
-                <p className="text-primary fw-bold small mt-1">Be the first to {type === 'inviters' ? 'invite friends' : 'guess words'} and secure the #1 spot!</p>
-            </div>
-        );
+            );
+        }
     }
 
-    if (dataList.length === 0) return null;
-    return (
-        <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white ${isPrevious ? 'opacity-75' : ''}`}>
-            {dataList.map((l, index) => {
-                const isAppended = l.isCurrentUserAppend;
-                const rankDisplay = isAppended ? l.actualRank : (index + 1);
-                
-                let rankStyle = "bg-primary text-white";
-                if (rankDisplay === 1) rankStyle = "bg-warning text-dark";
-                else if (rankDisplay === 2) rankStyle = "bg-secondary text-white";
-                else if (rankDisplay === 3) rankStyle = "bg-danger text-white";
-                else if (isAppended) rankStyle = "bg-dark text-white"; 
-                
-                const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
+    const mainList = displayList.filter(l => !l.isCurrentUserAppend);
+    const appendedUser = displayList.find(l => l.isCurrentUserAppend);
 
-                return (
-                    <div key={l.tg_id + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 border-bottom ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light border-top border-2 border-primary' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
-                        <div className="d-flex align-items-center gap-2">
-                            <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '28px', height: '28px', fontSize: '0.75rem', zIndex: 1}}>
-                                {rankDisplay}
-                            </div>
-                            {l.avatar_url ? (
-                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
-                                    <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
-                                </div>
-                            ) : (
-                                <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: null, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
-                                    <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
-                                        <i className="fas fa-user fs-5"></i>
-                                    </div>
-                                </div>
-                            )}
-                            <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
-                                <span className={`fw-bold ${styleClass || 'text-dark'} ${isAppended ? 'text-primary' : ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
-                                    {l.name || window.toHex(l.tg_id)} {isAppended ? <span className="badge bg-primary ms-1" style={{fontSize:'0.6rem'}}>YOU</span> : null}
-                                </span>
-                                {l.username && l.username !== 'unset' ? (
-                                    <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
-                                        @{l.username}
-                                    </a>
-                                ) : null}
-                            </div>
-                        </div>
-                        <div className={`badge ${isAppended ? 'bg-primary text-white' : 'bg-light text-dark'} px-2 py-1 rounded-pill shadow-sm`} style={{ fontSize: '0.85rem' }}>
-                            {type === 'guessers' ? <i className="fas fa-check-circle me-1"></i> : null}
-                            {type === 'inviters' ? <i className="fas fa-user-plus me-1"></i> : null}
-                            {type === 'donators' ? <i className="fas fa-star me-1" style={{color: '#d946ef'}}></i> : null}
-                            {l.score || l.total_donated}
-                        </div>
+    const renderRow = (l, index, isAppended) => {
+        const rankDisplay = isAppended ? '-' : (index + 1);
+        
+        let rankStyle = "bg-primary text-white";
+        if (!isAppended) {
+            if (rankDisplay === 1) rankStyle = "bg-warning text-dark";
+            else if (rankDisplay === 2) rankStyle = "bg-secondary text-white";
+            else if (rankDisplay === 3) rankStyle = "bg-danger text-white";
+        } else {
+            rankStyle = "bg-dark text-white"; 
+        }
+        
+        const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
+        const displayScore = (l.score !== undefined && l.score !== null) ? l.score : ((l.total_donated !== undefined && l.total_donated !== null) ? l.total_donated : 0);
+
+        return (
+            <div key={l.tg_id + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 ${!isAppended && index < mainList.length - 1 ? 'border-bottom' : ''} ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
+                <div className="d-flex align-items-center gap-2">
+                    <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '28px', height: '28px', fontSize: '0.75rem', zIndex: 1}}>
+                        {rankDisplay}
                     </div>
-                );
-            })}
+                    {l.avatar_url ? (
+                        <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
+                            <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
+                        </div>
+                    ) : (
+                        <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: null, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
+                            <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
+                                <i className="fas fa-user fs-5"></i>
+                            </div>
+                        </div>
+                    )}
+                    <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
+                        <span className={`fw-bold ${styleClass || 'text-dark'} ${isAppended ? 'text-primary' : ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
+                            {l.name || window.toHex(l.tg_id)} {isAppended ? <span className="badge bg-primary ms-2 rounded-pill shadow-sm" style={{fontSize:'0.55rem', padding:'0.35em 0.6em', verticalAlign: 'text-top'}}>YOU</span> : null}
+                        </span>
+                        {l.username && l.username !== 'unset' ? (
+                            <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
+                                @{l.username}
+                            </a>
+                        ) : null}
+                    </div>
+                </div>
+                <div className={`badge ${isAppended ? 'bg-primary text-white' : 'bg-light text-dark'} px-2 py-1 rounded-pill shadow-sm d-flex align-items-center gap-1`} style={{ fontSize: '0.75rem' }}>
+                    {type === 'guessers' ? <i className="fas fa-check-circle" style={{fontSize: '0.7rem'}}></i> : null}
+                    {type === 'inviters' ? <i className="fas fa-user-plus" style={{fontSize: '0.7rem'}}></i> : null}
+                    {type === 'donators' ? <i className="fas fa-star" style={{color: '#d946ef', fontSize: '0.7rem'}}></i> : null}
+                    <span>{displayScore}</span>
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className={`d-flex flex-column ${isPrevious ? 'opacity-75' : ''}`}>
+            {mainList.length > 0 && (
+                <div className="card rounded-4 shadow-sm border overflow-hidden bg-white">
+                    {mainList.map((l, index) => renderRow(l, index, false))}
+                </div>
+            )}
+            {appendedUser && (
+                <div className={`card rounded-4 shadow-sm border overflow-hidden bg-white border-2 border-primary ${mainList.length > 0 ? 'mt-3' : ''}`}>
+                    {renderRow(appendedUser, 0, true)}
+                </div>
+            )}
         </div>
     );
 };
+
+const isEligibleForInviterReward = prevInviters.some(p => p.tg_id === user?.tg_id);
+const hasClaimedInviterReward = user?.top_inviter_claimed;
+
+let rewardCardStyle = {};
+let rewardIconClass = "fas fa-box-open";
+let rewardIconColor = "text-success";
+let titleColor = "text-dark";
+let subtitleText = "Finished in last week's Top 5? Click to claim 5 Gems!";
+
+if (hasClaimedInviterReward) {
+    rewardCardStyle = { background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', borderColor: '#bbf7d0', opacity: 0.7, cursor: 'default' };
+    rewardIconColor = "text-success opacity-50";
+    titleColor = "text-success";
+    subtitleText = "You have already claimed this reward!";
+} else if (!isEligibleForInviterReward) {
+    rewardCardStyle = { background: '#f8f9fa', borderColor: '#dee2e6', cursor: 'default' };
+    rewardIconColor = "text-secondary opacity-50";
+    titleColor = "text-muted";
+    subtitleText = "Reach Top 5 next week to claim this reward!";
+} else {
+    rewardCardStyle = { background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', borderColor: '#bbf7d0', cursor: 'pointer' };
+    rewardIconColor = "text-success";
+}
 
 return (
     <div className="container mt-4 pb-5" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} style={{ minHeight: '80vh' }}>
@@ -750,14 +784,16 @@ return (
                             {renderList(activeTab === 'inviters' ? prevInviters : prevGuessers, activeTab, true)}
                             
                             {activeTab === 'inviters' && (
-                                <div className="card bg-white rounded-4 shadow-sm border mt-3 text-center p-3 hover-up cursor-pointer" onClick={() => socket.emit('claim_top_inviter_reward')} style={{ background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)', borderColor: '#bbf7d0' }}>
+                                <div className={`card rounded-4 shadow-sm border mt-3 text-center p-3 ${isEligibleForInviterReward && !hasClaimedInviterReward ? 'hover-up cursor-pointer' : ''}`} onClick={() => { if(isEligibleForInviterReward && !hasClaimedInviterReward) socket.emit('claim_top_inviter_reward'); }} style={rewardCardStyle}>
                                     <div className="d-flex flex-column align-items-center justify-content-center py-2">
                                         <div className="position-relative mb-2">
-                                            <i className="fas fa-gift text-success" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.15))' }}></i>
-                                            <i className="fas fa-gem position-absolute top-0 start-100 translate-middle text-info" style={{ fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}></i>
+                                            <i className={`${rewardIconClass} ${rewardIconColor}`} style={{ fontSize: '3rem', filter: isEligibleForInviterReward && !hasClaimedInviterReward ? 'drop-shadow(0 4px 6px rgba(0,0,0,0.15))' : 'none' }}></i>
+                                            {(!hasClaimedInviterReward && isEligibleForInviterReward) && (
+                                                <i className="fas fa-gem position-absolute top-0 start-100 translate-middle text-info" style={{ fontSize: '1.5rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))' }}></i>
+                                            )}
                                         </div>
-                                        <h6 className="fw-bold text-dark mb-1">Weekly Top Inviter Reward</h6>
-                                        <p className="small text-muted mb-0">Finished in last week's Top 5? Click to claim 5 Gems!</p>
+                                        <h6 className={`fw-bold mb-1 ${titleColor}`}>Weekly Top Inviter Reward</h6>
+                                        <p className={`small mb-0 ${hasClaimedInviterReward ? 'text-success opacity-75' : 'text-muted'}`}>{subtitleText}</p>
                                     </div>
                                 </div>
                             )}
