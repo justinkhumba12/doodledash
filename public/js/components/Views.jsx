@@ -657,17 +657,6 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
         const appendedUser = displayList.find(l => l.isCurrentUserAppend);
 
         const renderRow = (l, index, isAppended) => {
-            const rankDisplay = isAppended ? '-' : (index + 1);
-            
-            let rankStyle = "bg-primary text-white";
-            if (!isAppended) {
-                if (rankDisplay === 1) rankStyle = "bg-warning text-dark";
-                else if (rankDisplay === 2) rankStyle = "bg-secondary text-white";
-                else if (rankDisplay === 3) rankStyle = "bg-danger text-white";
-            } else {
-                rankStyle = "bg-dark text-white"; 
-            }
-            
             const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
             const displayScore = (l.score !== undefined && l.score !== null) ? l.score : ((l.total_donated !== undefined && l.total_donated !== null) ? l.total_donated : 0);
             
@@ -678,9 +667,6 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
             return (
                 <div key={(rowUserId || index) + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 ${!isAppended && index < mainList.length - 1 ? 'border-bottom' : ''} ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
                     <div className="d-flex align-items-center gap-2">
-                        <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '28px', height: '28px', fontSize: '0.75rem', zIndex: 1}}>
-                            {rankDisplay}
-                        </div>
                         {l.avatar_url ? (
                             <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: rowUserId, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
                                 <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
