@@ -141,7 +141,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     <h6 className="fw-bold text-dark"><i className="fas fa-info-circle text-primary"></i> Leaderboard Rules</h6>
                     <div className="small text-muted text-start mt-3 ps-1">
                         {modal.activeTab === 'inviters' && (
-                            <p className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters of the previous week can claim a 5 Gems reward from the chest below the previous week's leaderboard!</p>
+                            <p className="mb-2"><b>Top Inviters:</b> Resets every week. The top 5 inviters receive an automated message from the bot to claim their credits (1 Friend = 1 Credit).</p>
                         )}
                         {modal.activeTab === 'guessers' && (
                             <p className="mb-2"><b>Top Guessers:</b> Resets every week. Showcases players with the most correct guesses! In case of a tie, the player who reached the score first is ranked higher.</p>

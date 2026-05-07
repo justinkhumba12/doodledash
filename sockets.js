@@ -366,38 +366,15 @@ module.exports = (io) => {
 
         socket.on('get_leaderboard', async () => {
             try {
-                const currentUser = socket.data.currentUser;
                 const weekKey = getWeekKey();
                 
-                // Get Current Week Top 5 Inviters
                 const [inviterRows] = await db.query(`
-                    SELECT s.tg_id, s.invites, s.invites_updated_at
+                    SELECT s.tg_id, s.invites
                     FROM user_weekly_stats s
                     WHERE s.week_key = ? AND s.invites > 0 
-                    ORDER BY s.invites DESC, s.invites_updated_at ASC LIMIT 5
+                    ORDER BY s.invites DESC, s.invites_updated_at ASC LIMIT 50
                 `, [weekKey]);
                 
-                inviterRows.forEach((r, i) => r.rank = i + 1);
-
-                // Append current user to inviters if not in top 5
-                if (currentUser && !inviterRows.some(r => String(r.tg_id) === String(currentUser))) {
-                    const [uStats] = await db.query(`SELECT invites, invites_updated_at FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?`, [currentUser, weekKey]);
-                    if (uStats.length > 0 && uStats[0].invites > 0) {
-                        const [rankRows] = await db.query(`
-                            SELECT COUNT(*) + 1 as rank FROM user_weekly_stats 
-                            WHERE week_key = ? AND invites > 0 AND (invites > ? OR (invites = ? AND invites_updated_at < ?))
-                        `, [weekKey, uStats[0].invites, uStats[0].invites, uStats[0].invites_updated_at]);
-                        
-                        inviterRows.push({
-                            tg_id: currentUser,
-                            invites: uStats[0].invites,
-                            invites_updated_at: uStats[0].invites_updated_at,
-                            rank: rankRows[0].rank
-                        });
-                    }
-                }
-                
-                // Get Current Week Top 50 Guessers (Remains at 50)
                 const [guesserRows] = await db.query(`
                     SELECT s.tg_id, s.guesses
                     FROM user_weekly_stats s
@@ -425,16 +402,7 @@ module.exports = (io) => {
                     for (const row of rows) {
                         const id = row.tg_id;
                         const username = await redis.hget('user_usernames', id) || 'unset';
-                        result.push({ 
-                            tg_id: id, 
-                            score: row[scoreField], 
-                            rank: row.rank, 
-                            username, 
-                            avatar_url: avatarMap[id], 
-                            gender: genderMap[id], 
-                            name: nameMap[id], 
-                            equipped_style: styleMap[id] 
-                        });
+                        result.push({ tg_id: id, score: row[scoreField], username, avatar_url: avatarMap[id], gender: genderMap[id], name: nameMap[id], equipped_style: styleMap[id] });
                     }
                     return result;
                 };
@@ -442,43 +410,12 @@ module.exports = (io) => {
                 const inviters = await populateProfiles(inviterRows, 'invites');
                 const guessers = await populateProfiles(guesserRows, 'guesses');
                 
-                // Get Previous Week Top 5 Inviters via DB for accurate ranks
-                const [prevWeekRows] = await db.query(`SELECT DISTINCT week_key FROM user_weekly_stats WHERE week_key != ? ORDER BY week_key DESC LIMIT 1`, [weekKey]);
-                let prevInviters = [];
-                if (prevWeekRows.length > 0) {
-                    const prevWeekKey = prevWeekRows[0].week_key;
-                    const [pRows] = await db.query(`
-                        SELECT s.tg_id, s.invites, s.invites_updated_at
-                        FROM user_weekly_stats s
-                        WHERE s.week_key = ? AND s.invites > 0 
-                        ORDER BY s.invites DESC, s.invites_updated_at ASC LIMIT 5
-                    `, [prevWeekKey]);
-                    
-                    pRows.forEach((r, i) => r.rank = i + 1);
-
-                    // Append current user to previous week inviters if not in top 5
-                    if (currentUser && !pRows.some(r => String(r.tg_id) === String(currentUser))) {
-                        const [userPrevStats] = await db.query(`SELECT invites, invites_updated_at FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?`, [currentUser, prevWeekKey]);
-                        if (userPrevStats.length > 0 && userPrevStats[0].invites > 0) {
-                            const [rankRows] = await db.query(`
-                                SELECT COUNT(*) + 1 as rank FROM user_weekly_stats 
-                                WHERE week_key = ? AND invites > 0 AND (invites > ? OR (invites = ? AND invites_updated_at < ?))
-                            `, [prevWeekKey, userPrevStats[0].invites, userPrevStats[0].invites, userPrevStats[0].invites_updated_at]);
-                            
-                            pRows.push({
-                                tg_id: currentUser,
-                                invites: userPrevStats[0].invites,
-                                invites_updated_at: userPrevStats[0].invites_updated_at,
-                                rank: rankRows[0].rank
-                            });
-                        }
-                    }
-                    prevInviters = await populateProfiles(pRows, 'invites');
-                }
-
-                // Get Previous Week Guessers from Redis Cache (Remains Top 50)
+                const prevInvitersRaw = await redis.get('previous_week_top_inviters');
                 const prevGuessersRaw = await redis.get('previous_week_top_guessers');
+                const prevInvitersData = prevInvitersRaw ? JSON.parse(prevInvitersRaw) : [];
                 const prevGuessersData = prevGuessersRaw ? JSON.parse(prevGuessersRaw) : [];
+
+                const prevInviters = await populateProfiles(prevInvitersData, 'invites');
                 const prevGuessers = await populateProfiles(prevGuessersData, 'guesses');
 
                 socket.emit('leaderboard_data', { inviters, guessers, prevInviters, prevGuessers });
@@ -644,43 +581,31 @@ module.exports = (io) => {
                             msg = 'Ad reward not ready yet or max claims reached.';
                         }
                     }
-                } else if (type === 'prev_week_inviter') {
+                } else if (type === 'invite_reward') {
                     const weekKey = getWeekKey();
-                    const [prevWeekKeys] = await db.query(`SELECT DISTINCT week_key FROM user_weekly_stats WHERE week_key != ? ORDER BY week_key DESC LIMIT 1`, [weekKey]);
                     
-                    if (prevWeekKeys.length > 0) {
-                        const prevWeekKey = prevWeekKeys[0].week_key;
+                    const [statsRows] = await db.query(
+                        `SELECT invites FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?`, 
+                        [currentUser, weekKey]
+                    );
+                    
+                    const invitesThisWeek = statsRows.length > 0 ? statsRows[0].invites : 0;
+                    
+                    if (invitesThisWeek >= 3) {
+                        rewardAmount = 5;
+                        const [updateResult] = await db.query(
+                            `UPDATE users SET credits = credits + ?, last_invite_claim_week = ? WHERE tg_id = ? AND (last_invite_claim_week != ? OR last_invite_claim_week IS NULL)`, 
+                            [rewardAmount, weekKey, currentUser, weekKey]
+                        );
                         
-                        const [top5] = await db.query(`
-                            SELECT tg_id FROM user_weekly_stats 
-                            WHERE week_key = ? AND invites > 0 
-                            ORDER BY invites DESC, invites_updated_at ASC LIMIT 5
-                        `, [prevWeekKey]);
-                        
-                        const isTop5 = top5.some(r => String(r.tg_id) === String(currentUser));
-                        if (isTop5) {
-                            const [userRows] = await db.query(`SELECT last_invite_claim_week FROM users WHERE tg_id = ?`, [currentUser]);
-                            if (userRows.length > 0 && userRows[0].last_invite_claim_week !== prevWeekKey) {
-                                rewardAmount = 5; // Reward is 5 Gems
-                                const [updateResult] = await db.query(
-                                    `UPDATE users SET gems = gems + ?, last_invite_claim_week = ? WHERE tg_id = ?`, 
-                                    [rewardAmount, prevWeekKey, currentUser]
-                                );
-                                
-                                if (updateResult.affectedRows > 0) {
-                                    success = true; 
-                                    msg = 'Previous week top inviter reward claimed! +5 Gems';
-                                } else {
-                                    msg = 'Failed to process reward claim.';
-                                }
-                            } else {
-                                msg = 'Reward already claimed for the previous week.';
-                            }
+                        if (updateResult.affectedRows > 0) {
+                            success = true; 
+                            msg = 'Invite reward claimed! +5 Credits';
                         } else {
-                            msg = 'You were not in the top 5 inviters for the previous week.';
+                            msg = 'Invite reward already claimed for this week.';
                         }
                     } else {
-                        msg = 'No previous week data available.';
+                        msg = 'Invite requirement not met (requires 3 invites this week).';
                     }
                 } else if (type === 'daily_guess') {
                     const guessRewardRaw = await redis.get('config_guess_reward');
@@ -707,10 +632,7 @@ module.exports = (io) => {
                 }
 
                 if (success) {
-                    if (type !== 'prev_week_inviter') {
-                        // Only increment credits for non-gem rewards
-                        await redis.hincrbyfloat('user_credits', currentUser, rewardAmount);
-                    }
+                    await redis.hincrbyfloat('user_credits', currentUser, rewardAmount);
                     socket.emit('reward_success', msg);
                     const userState = await getUserState(currentUser);
                     if (userState) socket.emit('user_update', userState);
