@@ -203,7 +203,7 @@ module.exports = (app, io) => {
 
                     if (alreadyActive) {
                         const unbanCostStr = await redis.get('config_unban_cost') || '50';
-                        const refundCredits = parseInt(unbanCostStr);
+                        const refundCredits = parseInt(unbanCostStr); // Base 1-to-1 fallback refund rate
                         await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [refundCredits, buyerId]);
                         await redis.hincrbyfloat('user_credits', buyerId, refundCredits);
                         sendMsg(update.message.chat.id, `✅ *You were already unbanned!* Your payment of ${unbanCostStr} stars has been converted to ${refundCredits} Credits.`, null, { parse_mode: 'Markdown' });
@@ -313,6 +313,7 @@ module.exports = (app, io) => {
                 const hasAccepted = userRows.length > 0 && userRows[0].accepted_policy;
                 const parts = text.split(' ');
 
+                // Handle Private Room Invite parsing
                 if (parts.length > 1 && parts[1].startsWith('join_')) {
                     const joinParts = parts[1].split('_');
                     if (joinParts.length === 3) {
@@ -352,6 +353,7 @@ module.exports = (app, io) => {
                     return;
                 }
 
+                // Normal app start
                 const urlWithParams = `${webAppUrl}`;
                 sendMsg(chatId, 'Welcome back to DoodleDash! Click below to play.', {
                     inline_keyboard: [[{ text: '🎮 Play Now', web_app: { url: urlWithParams } }]]
@@ -364,6 +366,28 @@ module.exports = (app, io) => {
             const query = update.callback_query;
             const chatId = query.message.chat.id;
             const tgId = query.from.id.toString();
+
+            if (query.data.startsWith('claim_weekly_')) {
+                const parts = query.data.split('_');
+                const week = parts[2];
+                const amount = parseInt(parts[3]);
+                
+                const lockKey = `claimed_weekly_${week}_${tgId}`;
+                const locked = await redis.set(lockKey, '1', 'EX', 86400 * 30, 'NX'); 
+                if (locked) {
+                    await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amount, tgId]);
+                    await redis.hincrbyfloat('user_credits', tgId, amount);
+                    
+                    tgApiCall('deleteMessage', { chat_id: chatId, message_id: query.message.message_id });
+                    sendMsg(chatId, `✅ You successfully claimed ${amount} credits for the weekly challenge!`);
+                    
+                    const userState = await getUserState(tgId);
+                    if (userState) io.to(`user_${tgId}`).emit('user_update', userState);
+                } else {
+                    tgApiCall('answerCallbackQuery', { callback_query_id: query.id, text: "Already claimed!", show_alert: true });
+                }
+                return;
+            }
 
             if (query.data.startsWith('accept_policy_')) {
                 const payload = query.data.replace('accept_policy_', '');
