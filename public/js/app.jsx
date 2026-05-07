@@ -617,6 +617,8 @@ const App = () => {
         }
     }
 
+    const hasProfileSetup = user ? (!!user.gender && !!user.name) : false;
+
     return (
         <div onClick={handleGlobalInteraction} onTouchStart={handleGlobalInteraction} className="w-100 h-100 d-flex flex-column" style={{ minHeight: '100vh' }}>
             
@@ -638,30 +640,26 @@ const App = () => {
                         {mainPageTab === 'home' && <LobbyView user={user} rooms={rooms} setModal={setModal} socket={socket} systemConfig={systemConfig} />}
                         {mainPageTab === 'tasks' && <TasksView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
                         {mainPageTab === 'shop' && <ShopView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} />}
-                        {mainPageTab === 'leaderboard' && <LeaderboardView socket={socket} setModal={setModal} setProfileModal={setProfileModal} systemConfig={systemConfig} />}
+                        {mainPageTab === 'leaderboard' && <LeaderboardView user={user} socket={socket} setModal={setModal} setProfileModal={setProfileModal} systemConfig={systemConfig} />}
                         {mainPageTab === 'profile' && <ProfileView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} setMainPageTab={setMainPageTab} />}
                         {mainPageTab === 'inventory' && <InventoryView user={user} socket={socket} setModal={setModal} systemConfig={systemConfig} setMainPageTab={setMainPageTab} />}
                         
                         <div className="bottom-nav">
                             <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
                                 <i className="fas fa-gamepad"></i><span>Home</span>
-                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'tasks' ? 'active' : ''}`} onClick={() => setMainPageTab('tasks')}>
                                 <i className="fas fa-tasks"></i><span>Tasks</span>
-                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'shop' ? 'active' : ''}`} onClick={() => setMainPageTab('shop')}>
                                 <i className="fas fa-store"></i><span>Shop</span>
-                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
                                 <i className="fas fa-trophy"></i><span>Ranks</span>
-                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${['profile', 'inventory'].includes(mainPageTab) ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                 <i className="fas fa-user"></i><span>Profile</span>
-                                <span className="notification-dot"></span>
+                                {!hasProfileSetup && <span className="notification-dot"></span>}
                             </div>
                         </div>
                     </div>

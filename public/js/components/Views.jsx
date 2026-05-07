@@ -1,13 +1,24 @@
 const { useState, useEffect } = React;
 
+const ProfileLockedOverlay = ({ text = "Please set your Name and Gender in your Profile tab to unlock features." }) => (
+    <div className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center pt-5 mt-2" style={{zIndex: 50, background: 'rgba(248, 250, 252, 0.9)', backdropFilter: 'blur(4px)', borderRadius: '16px', border: '1px solid #e2e8f0'}}>
+        <i className="fas fa-lock text-danger mb-3" style={{fontSize: '3rem'}}></i>
+        <h5 className="fw-bold text-dark">Profile Locked</h5>
+        <p className="text-muted small text-center px-4">{text}</p>
+    </div>
+);
+
 const ShopView = ({ user, socket, setModal, systemConfig }) => {
+    const hasProfileSetup = !!user?.gender && !!user?.name;
     const gemPackages = systemConfig?.gemPackages || [];
     const starPackages = systemConfig?.starPackages || [];
     const nameStyles = systemConfig?.nameStyles || [];
     const ownedStyleIds = user?.owned_styles || [];
 
     return (
-        <div className="container mt-4 pb-5 text-center">
+        <div className="container mt-4 pb-5 text-center position-relative">
+            {!hasProfileSetup && <ProfileLockedOverlay />}
+            
             {/* Inline styles for horizontal scrollable UI */}
             <style dangerouslySetInnerHTML={{__html: `
                 .scrollable-row::-webkit-scrollbar { display: none; }
@@ -57,11 +68,11 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                                                 ) : (
                                                     <>
                                                         {style.is_premium ? (
-                                                            <button className="btn btn-info text-white rounded-pill w-100 fw-bold shadow-sm hover-up" onClick={(e) => { e.stopPropagation(); socket.emit('buy_style', { style_id: style.id, currency: 'gems' }); }}>
+                                                            <button className="btn btn-info text-white rounded-pill w-100 fw-bold shadow-sm hover-up" disabled={!hasProfileSetup} onClick={(e) => { e.stopPropagation(); if(hasProfileSetup) socket.emit('buy_style', { style_id: style.id, currency: 'gems' }); }}>
                                                                 <i className="fas fa-gem me-1"></i> {style.gem_price} Gems
                                                             </button>
                                                         ) : (
-                                                            <button className="btn btn-warning text-dark rounded-pill w-100 fw-bold shadow-sm hover-up" onClick={(e) => { e.stopPropagation(); socket.emit('buy_style', { style_id: style.id, currency: 'credits' }); }}>
+                                                            <button className="btn btn-warning text-dark rounded-pill w-100 fw-bold shadow-sm hover-up" disabled={!hasProfileSetup} onClick={(e) => { e.stopPropagation(); if(hasProfileSetup) socket.emit('buy_style', { style_id: style.id, currency: 'credits' }); }}>
                                                                 <i className="fas fa-coins me-1"></i> {style.credit_price} Credits
                                                             </button>
                                                         )}
@@ -84,14 +95,14 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                         
                         <div className="d-flex flex-row gap-3 overflow-auto pb-3 scrollable-row w-100 px-1 pt-2">
                             {starPackages.map(pkg => (
-                                <div key={pkg.id} className="shop-pkg-card card bg-light rounded-4 shadow border-0 text-center flex-shrink-0 cursor-pointer" onClick={() => setModal({ type: 'item_description', itemType: 'gems', pkg })} style={{ width: '130px' }}>
+                                <div key={pkg.id} className={`shop-pkg-card card bg-light rounded-4 shadow border-0 text-center flex-shrink-0 ${hasProfileSetup ? 'cursor-pointer' : ''}`} onClick={() => { if(hasProfileSetup) setModal({ type: 'item_description', itemType: 'gems', pkg }) }} style={{ width: '130px' }}>
                                     <div className="card-body p-2 d-flex flex-column align-items-center justify-content-center h-100">
                                         <div className="bg-info bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2 shop-pkg-icon">
                                             <i className="fas fa-gem text-info"></i>
                                         </div>
                                         <h4 className="fw-bold mb-0 text-dark">{pkg.gems}</h4>
                                         <small className="text-muted mb-2 fw-bold">Gems</small>
-                                        <button className="btn btn-vibrant-gradient rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1" onClick={(e) => { e.stopPropagation(); setModal({ type: 'confirm_buy_gems', pkg }); }}>
+                                        <button className="btn btn-vibrant-gradient rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1" disabled={!hasProfileSetup} onClick={(e) => { e.stopPropagation(); if(hasProfileSetup) setModal({ type: 'confirm_buy_gems', pkg }); }}>
                                             <i className="fas fa-star" style={{color: '#fef08a'}}></i> {pkg.stars} Stars
                                         </button>
                                     </div>
@@ -111,14 +122,14 @@ const ShopView = ({ user, socket, setModal, systemConfig }) => {
                             {gemPackages.map(pkg => {
                                 const canAfford = user?.gems >= pkg.gems;
                                 return (
-                                    <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow border-0 text-center flex-shrink-0 ${canAfford ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => setModal({ type: 'item_description', itemType: 'credits', pkg, canAfford })} style={{ width: '130px' }}>
+                                    <div key={pkg.id} className={`shop-pkg-card card rounded-4 shadow border-0 text-center flex-shrink-0 ${canAfford && hasProfileSetup ? 'bg-light cursor-pointer' : 'bg-light opacity-50'}`} onClick={() => { if(hasProfileSetup) setModal({ type: 'item_description', itemType: 'credits', pkg, canAfford }) }} style={{ width: '130px' }}>
                                         <div className="card-body p-2 d-flex flex-column align-items-center justify-content-center h-100">
                                             <div className="bg-warning bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center mb-2 shop-pkg-icon">
                                                 <i className="fas fa-coins text-warning"></i>
                                             </div>
                                             <h4 className="fw-bold mb-0 text-dark">{pkg.credits}</h4>
                                             <small className="text-muted mb-2 fw-bold">Credits</small>
-                                            <button className={`btn rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1 ${canAfford ? 'btn-success-gradient' : 'btn-disabled-style opacity-50'}`} disabled={!canAfford} onClick={(e) => { e.stopPropagation(); canAfford && setModal({ type: 'confirm_exchange_gems', pkg }); }}>
+                                            <button className={`btn rounded-pill w-100 fw-bold mt-auto d-flex justify-content-center align-items-center gap-1 ${canAfford && hasProfileSetup ? 'btn-success-gradient' : 'btn-disabled-style opacity-50'}`} disabled={!canAfford || !hasProfileSetup} onClick={(e) => { e.stopPropagation(); if(canAfford && hasProfileSetup) setModal({ type: 'confirm_exchange_gems', pkg }); }}>
                                                 <i className="fas fa-gem" style={{color: canAfford ? '#cffafe' : '#94a3b8'}}></i> {pkg.gems} Gems
                                             </button>
                                         </div>
@@ -270,13 +281,16 @@ const ProfileView = ({ user, socket, setModal, systemConfig, setMainPageTab }) =
 };
 
 const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab }) => {
+    const hasProfileSetup = !!user?.gender && !!user?.name;
     const ownedStyleIds = user?.owned_styles || [];
     const nameStyles = systemConfig?.nameStyles || [];
     const ownedStyles = nameStyles.filter(s => ownedStyleIds.includes(s.id));
     const equippedStyle = user?.equipped_style;
 
     return (
-        <div className="container mt-4 pb-5">
+        <div className="container mt-4 pb-5 position-relative">
+            {!hasProfileSetup && <ProfileLockedOverlay />}
+            
             <div className="d-flex align-items-center mb-4">
                 <button className="btn btn-light rounded-circle shadow-sm me-3 border" onClick={() => setMainPageTab('profile')}><i className="fas fa-arrow-left"></i></button>
                 <h3 className="fw-bold mb-0">Inventory</h3>
@@ -310,7 +324,8 @@ const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab })
                                                     <span className="small fw-bold text-muted">{s.is_premium ? 'Premium' : 'Standard'} Style</span>
                                                     <button 
                                                         className={`btn rounded-pill fw-bold px-4 btn-sm shadow-sm ${isEquipped ? 'btn-danger' : 'btn-success'}`}
-                                                        onClick={() => socket.emit('equip_style', { style_id: isEquipped ? null : s.id })}
+                                                        disabled={!hasProfileSetup}
+                                                        onClick={() => { if(hasProfileSetup) socket.emit('equip_style', { style_id: isEquipped ? null : s.id }) }}
                                                     >
                                                         {isEquipped ? <><i className="fas fa-times me-1"></i> Unequip</> : <><i className="fas fa-check me-1"></i> Equip</>}
                                                     </button>
@@ -329,6 +344,7 @@ const InventoryView = ({ user, socket, setModal, systemConfig, setMainPageTab })
 };
 
 const TasksView = ({ user, socket, setModal, systemConfig }) => {
+    const hasProfileSetup = !!user?.gender && !!user?.name;
     const [adState, setAdState] = useState({ show: false });
 
     const inviteCount = user?.weekly_invites || 0;
@@ -346,6 +362,7 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
     const guessClaimed = user?.guess_reward_claimed_today;
 
     const handleInvite = () => {
+        if (!hasProfileSetup) return;
         const botLink = `https://t.me/share/url?url=https://t.me/doodledashbot?start=invite_${user?.tg_id}&text=Play%20DoodleDash%20with%20me!`;
         if (window.tg && window.tg.openTelegramLink) {
             try {
@@ -359,12 +376,13 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
     };
 
     const handleClaim = () => {
-        if (socket && isCompleted && !hasClaimed) {
+        if (socket && isCompleted && !hasClaimed && hasProfileSetup) {
             socket.emit('claim_reward', { type: 'invite_reward' });
         }
     };
 
     const triggerAd = (adNum, prefix) => {
+        if (!hasProfileSetup) return;
         setAdState({ show: true });
         
         if (typeof window.show_10812134 !== 'function') {
@@ -404,7 +422,7 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
         const maxClaims = adNum === 1 ? 3 : 5;
 
         let btnText = `Watch ad (${claims}/${maxClaims})`;
-        let disabled = false;
+        let disabled = !hasProfileSetup;
         
         if (!isAvailable) {
             disabled = true;
@@ -425,7 +443,9 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
     };
 
     return (
-        <div className="container mt-4 pb-5">
+        <div className="container mt-4 pb-5 position-relative">
+            {!hasProfileSetup && <ProfileLockedOverlay />}
+            
             <h3 className="fw-bold mb-4 text-center">Tasks & Rewards</h3>
 
             {/* Daily Streak Claim System */}
@@ -461,7 +481,7 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
                         })}
                     </div>
                     
-                    <button className={`btn w-100 rounded-pill fw-bold ${user?.daily_available ? 'btn-success shadow-sm' : 'btn-light text-muted border'}`} disabled={!user?.daily_available} onClick={() => socket.emit('claim_reward', {type: 'daily'})}>
+                    <button className={`btn w-100 rounded-pill fw-bold ${user?.daily_available && hasProfileSetup ? 'btn-success shadow-sm' : 'btn-light text-muted border'}`} disabled={!user?.daily_available || !hasProfileSetup} onClick={() => { if(hasProfileSetup) socket.emit('claim_reward', {type: 'daily'})}}>
                         {user?.daily_available ? `Claim Day ${currentDay} Reward` : 'Come back tomorrow'}
                     </button>
                 </div>
@@ -489,7 +509,7 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
                         </div>
                     </div>
                     <div className="d-flex gap-2">
-                        <button className={`btn w-100 rounded-pill fw-bold shadow-sm py-2 btn-sm ${guessCompleted && !guessClaimed ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!guessCompleted || guessClaimed} onClick={() => { if(guessCompleted && !guessClaimed) socket.emit('claim_reward', {type: 'daily_guess'}) }}>
+                        <button className={`btn w-100 rounded-pill fw-bold shadow-sm py-2 btn-sm ${guessCompleted && !guessClaimed && hasProfileSetup ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!guessCompleted || guessClaimed || !hasProfileSetup} onClick={() => { if(guessCompleted && !guessClaimed && hasProfileSetup) socket.emit('claim_reward', {type: 'daily_guess'}) }}>
                             {guessClaimed ? 'Claimed' : `Claim ${guessConfig.reward} Credits`}
                         </button>
                     </div>
@@ -537,10 +557,10 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
                         </div>
                     </div>
                     <div className="d-flex gap-2">
-                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm" onClick={handleInvite}>
+                        <button className="btn btn-primary flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm" disabled={!hasProfileSetup} onClick={handleInvite}>
                             <i className="fas fa-paper-plane me-1"></i> Share Link
                         </button>
-                        <button className={`btn flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm ${isCompleted && !hasClaimed ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!isCompleted || hasClaimed} onClick={handleClaim}>
+                        <button className={`btn flex-grow-1 rounded-pill fw-bold shadow-sm py-2 btn-sm ${isCompleted && !hasClaimed && hasProfileSetup ? 'btn-success' : 'btn-light text-muted border'}`} disabled={!isCompleted || hasClaimed || !hasProfileSetup} onClick={handleClaim}>
                             {hasClaimed ? 'Claimed' : 'Claim 5 Credits'}
                         </button>
                     </div>
@@ -559,6 +579,7 @@ const TasksView = ({ user, socket, setModal, systemConfig }) => {
 };
 
 const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig }) => {
+    const hasProfileSetup = !!user?.gender && !!user?.name;
     const [activeTab, setActiveTab] = useState('inviters');
     const [inviters, setInviters] = useState([]);
     const [guessers, setGuessers] = useState([]);
@@ -738,7 +759,9 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
     }
 
     return (
-        <div className="container mt-4 pb-5" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} style={{ minHeight: '80vh' }}>
+        <div className="container mt-4 pb-5 position-relative" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} style={{ minHeight: '80vh' }}>
+            {!hasProfileSetup && <ProfileLockedOverlay />}
+            
             <div className="text-center mb-4">
                 <i className="fas fa-trophy text-warning mb-2" style={{ fontSize: '3rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}></i>
                 <h3 className="fw-bold m-0">Leaderboard</h3>
@@ -748,15 +771,12 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
             <div className="lobby-tabs-wrapper mb-2 overflow-auto" style={{whiteSpace: 'nowrap'}}>
                 <div className={`lobby-tab ${activeTab === 'inviters' ? 'active' : ''}`} onClick={() => setActiveTab('inviters')}>
                     <i className="fas fa-user-plus me-2"></i>Inviters
-                    <span className="notification-dot"></span>
                 </div>
                 <div className={`lobby-tab ${activeTab === 'guessers' ? 'active' : ''}`} onClick={() => setActiveTab('guessers')}>
                     <i className="fas fa-lightbulb me-2"></i>Guessers
-                    <span className="notification-dot"></span>
                 </div>
                 <div className={`lobby-tab ${activeTab === 'donators' ? 'active' : ''}`} onClick={() => setActiveTab('donators')}>
                     <i className="fas fa-heart me-2"></i>Donators
-                    <span className="notification-dot"></span>
                 </div>
             </div>
 
@@ -793,7 +813,7 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
                                 {renderList(activeTab === 'inviters' ? prevInviters : prevGuessers, activeTab, true)}
                                 
                                 {activeTab === 'inviters' && (
-                                    <div className={`card rounded-4 shadow-sm border mt-3 text-center p-3 ${isEligibleForInviterReward && !hasClaimedInviterReward ? 'hover-up cursor-pointer' : ''}`} onClick={() => { if(isEligibleForInviterReward && !hasClaimedInviterReward) socket.emit('claim_top_inviter_reward'); }} style={rewardCardStyle}>
+                                    <div className={`card rounded-4 shadow-sm border mt-3 text-center p-3 ${isEligibleForInviterReward && !hasClaimedInviterReward && hasProfileSetup ? 'hover-up cursor-pointer' : ''}`} onClick={() => { if(isEligibleForInviterReward && !hasClaimedInviterReward && hasProfileSetup) socket.emit('claim_top_inviter_reward'); }} style={rewardCardStyle}>
                                         <div className="d-flex flex-column align-items-center justify-content-center py-2">
                                             <div className="position-relative mb-2">
                                                 <i className={`${rewardIconClass} ${rewardIconColor}`} style={{ fontSize: '3rem', filter: isEligibleForInviterReward && !hasClaimedInviterReward ? 'drop-shadow(0 4px 6px rgba(0,0,0,0.15))' : 'none' }}></i>
@@ -814,7 +834,7 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
                 {activeTab === 'donators' && (
                     <>
                         <div className="text-center mb-3">
-                            <button className="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm w-100 border border-primary border-2" onClick={() => window.open('https://t.me/doodledashbot?start=donate', '_blank')}>
+                            <button className="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm w-100 border border-primary border-2" disabled={!hasProfileSetup} onClick={() => { if(hasProfileSetup) window.open('https://t.me/doodledashbot?start=donate', '_blank')}}>
                                 <i className="fas fa-heart text-danger me-2"></i> Donate to get featured!
                             </button>
                         </div>
@@ -836,13 +856,12 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
 };
 
 const LobbyView = ({ user, rooms, setModal, socket, systemConfig }) => {
+    const hasProfileSetup = !!user?.gender && !!user?.name;
     const [searchId, setSearchId] = useState('');
     const [activeTab, setActiveTab] = useState('public');
     const [hideFull, setHideFull] = useState(false);
 
     const [touchStartPos, setTouchStartPos] = useState(null);
-
-    const hasProfileSetup = !!user?.gender && !!user?.name;
 
     useEffect(() => {
         if (typeof window.show_10812134 === 'function' && user?.tg_id) {
@@ -933,13 +952,7 @@ const LobbyView = ({ user, rooms, setModal, socket, systemConfig }) => {
             </div>
 
             <div onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} className="position-relative swipe-container" style={{ minHeight: '300px' }}>
-                {!hasProfileSetup && (
-                    <div className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center pt-5" style={{zIndex: 10, background: 'rgba(248, 250, 252, 0.85)', backdropFilter: 'blur(3px)', borderRadius: '16px', border: '1px solid #e2e8f0'}}>
-                        <i className="fas fa-lock text-danger mb-3" style={{fontSize: '3rem'}}></i>
-                        <h5 className="fw-bold text-dark">Profile Locked</h5>
-                        <p className="text-muted small text-center px-4">Please set your Name and Gender in your Profile tab to enter game rooms.</p>
-                    </div>
-                )}
+                {!hasProfileSetup && <ProfileLockedOverlay text="Please set your Name and Gender in your Profile tab to enter game rooms." />}
 
                 <div className="input-group mb-4 shadow-sm rounded-pill overflow-hidden border bg-white">
                     <input type="text" className="form-control border-0 px-4 py-2" placeholder={`Search ${activeTab.replace('_', ' ')} Room...`} value={searchId} onChange={e => setSearchId(e.target.value)} disabled={!hasProfileSetup} />
