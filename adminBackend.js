@@ -17,27 +17,6 @@ const logAdminAction = async (adminId, action, details) => {
 };
 
 async function setupAdminPanel(app, io) {
-    try {
-        await db.query(`
-            CREATE TABLE IF NOT EXISTS admin_audit_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                admin_id VARCHAR(50),
-                action VARCHAR(100),
-                details TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        
-        // Ensure name_styles has is_hidden column
-        try {
-            await db.query(`ALTER TABLE name_styles ADD COLUMN is_hidden BOOLEAN DEFAULT 0`);
-        } catch(e) {
-            // Column already exists or error ignored
-        }
-    } catch (err) {
-        console.error('[Admin DB Init Error]', err);
-    }
-
     // Socket.io Interceptor for Maintenance Mode
     io.on('connection', (socket) => {
         socket.use(async ([event, ...args], next) => {
