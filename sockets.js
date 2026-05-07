@@ -266,7 +266,7 @@ module.exports = (io) => {
             } else {
                 const [inv] = await db.query('SELECT * FROM user_styles_inventory WHERE tg_id = ? AND style_id = ?', [currentUser, style_id]);
                 if (inv.length === 0) return socket.emit('create_error', 'You do not own this style.');
-                await db.query('UPDATE users SET equipped_style = ? WHERE tg_id = ?', [currentUser, currentUser]);
+                await db.query('UPDATE users SET equipped_style = ? WHERE tg_id = ?', [style_id, currentUser]);
             }
 
             const currentRoom = socket.data.currentRoom;
