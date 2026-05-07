@@ -645,18 +645,23 @@ const App = () => {
                         <div className="bottom-nav">
                             <div className={`nav-item ${mainPageTab === 'home' ? 'active' : ''}`} onClick={() => setMainPageTab('home')}>
                                 <i className="fas fa-gamepad"></i><span>Home</span>
+                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'tasks' ? 'active' : ''}`} onClick={() => setMainPageTab('tasks')}>
                                 <i className="fas fa-tasks"></i><span>Tasks</span>
+                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'shop' ? 'active' : ''}`} onClick={() => setMainPageTab('shop')}>
                                 <i className="fas fa-store"></i><span>Shop</span>
+                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${mainPageTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setMainPageTab('leaderboard')}>
                                 <i className="fas fa-trophy"></i><span>Ranks</span>
+                                <span className="notification-dot"></span>
                             </div>
                             <div className={`nav-item ${['profile', 'inventory'].includes(mainPageTab) ? 'active' : ''}`} onClick={() => setMainPageTab('profile')}>
                                 <i className="fas fa-user"></i><span>Profile</span>
+                                <span className="notification-dot"></span>
                             </div>
                         </div>
                     </div>

@@ -748,12 +748,15 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
             <div className="lobby-tabs-wrapper mb-2 overflow-auto" style={{whiteSpace: 'nowrap'}}>
                 <div className={`lobby-tab ${activeTab === 'inviters' ? 'active' : ''}`} onClick={() => setActiveTab('inviters')}>
                     <i className="fas fa-user-plus me-2"></i>Inviters
+                    <span className="notification-dot"></span>
                 </div>
                 <div className={`lobby-tab ${activeTab === 'guessers' ? 'active' : ''}`} onClick={() => setActiveTab('guessers')}>
                     <i className="fas fa-lightbulb me-2"></i>Guessers
+                    <span className="notification-dot"></span>
                 </div>
                 <div className={`lobby-tab ${activeTab === 'donators' ? 'active' : ''}`} onClick={() => setActiveTab('donators')}>
                     <i className="fas fa-heart me-2"></i>Donators
+                    <span className="notification-dot"></span>
                 </div>
             </div>
 
