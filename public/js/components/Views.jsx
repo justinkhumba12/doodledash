@@ -649,20 +649,23 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
             
             const styleClass = window.getStyleClass(l.equipped_style, systemConfig);
             const displayScore = (l.score !== undefined && l.score !== null) ? l.score : ((l.total_donated !== undefined && l.total_donated !== null) ? l.total_donated : 0);
-            const isCurrentUser = String(l.tg_id) === String(user?.tg_id);
+            
+            const rowUserId = l.tg_id || l.user_id || l.id;
+            const currentUserId = user?.tg_id || user?.id;
+            const isCurrentUser = isAppended || l.isCurrentUserAppend || (currentUserId && rowUserId && String(rowUserId) === String(currentUserId));
 
             return (
-                <div key={l.tg_id + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 ${!isAppended && index < mainList.length - 1 ? 'border-bottom' : ''} ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
+                <div key={(rowUserId || index) + (isAppended ? '-appended' : '')} className={`d-flex align-items-center justify-content-between p-3 ${!isAppended && index < mainList.length - 1 ? 'border-bottom' : ''} ${index === 0 && !isPrevious && !isAppended ? 'bg-warning' : ''} ${isAppended ? 'bg-light' : ''}`} style={(!isAppended && index === 0 && !isPrevious) ? { '--bs-bg-opacity': '.1' } : {}}>
                     <div className="d-flex align-items-center gap-2">
                         <div className={`rounded-circle d-flex align-items-center justify-content-center fw-bold shadow-sm flex-shrink-0 ${rankStyle}`} style={{width: '28px', height: '28px', fontSize: '0.75rem', zIndex: 1}}>
                             {rankDisplay}
                         </div>
                         {l.avatar_url ? (
-                            <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
+                            <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: rowUserId, pic: l.avatar_url, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
                                 <img src={l.avatar_url} className="rounded-circle shadow-sm border bg-white" style={{ width: '40px', height: '40px', objectFit: 'cover', borderColor: 'var(--primary)' }} alt="User"/>
                             </div>
                         ) : (
-                            <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: l.tg_id, pic: null, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
+                            <div className="flex-shrink-0 ms-2 cursor-pointer" onClick={() => setModal({type: 'profile_view', user_id: rowUserId, pic: null, gender: l.gender, name: l.name, username: l.username, style: l.equipped_style})}>
                                 <div className="rounded-circle shadow-sm border bg-white d-flex align-items-center justify-content-center text-secondary" style={{ width: '40px', height: '40px', borderColor: 'var(--primary)' }}>
                                     <i className="fas fa-user fs-5"></i>
                                 </div>
@@ -670,8 +673,8 @@ const LeaderboardView = ({ user, socket, setModal, setProfileModal, systemConfig
                         )}
                         <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
                             <div className="d-flex align-items-center">
-                                <span className={`fw-bold ${styleClass ? styleClass : (isAppended ? 'text-primary' : 'text-dark')}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
-                                    {l.name || window.toHex(l.tg_id)}
+                                <span className={`fw-bold ${styleClass ? styleClass : (isAppended ? 'text-primary' : 'text-dark')}`} data-name={l.name || window.toHex(rowUserId)} style={{fontSize: '0.95rem'}}>
+                                    {l.name || window.toHex(rowUserId)}
                                 </span>
                                 {isCurrentUser && (
                                     <span className="badge bg-primary text-white ms-2 rounded-pill shadow-sm" style={{fontSize:'0.55rem', padding:'0.35em 0.6em'}}>YOU</span>
