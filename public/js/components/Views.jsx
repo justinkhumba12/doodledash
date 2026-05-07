@@ -672,10 +672,10 @@ const renderList = (dataList, type, isPrevious = false) => {
                     )}
                     <div className="d-flex flex-column ms-1" style={{minWidth: 0}}>
                         <div className="d-flex align-items-center">
-                            <span className={`fw-bold ${styleClass || 'text-dark'} ${isAppended ? 'text-primary' : ''}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
+                            <span className={`fw-bold ${styleClass ? styleClass : (isAppended ? 'text-primary' : 'text-dark')}`} data-name={l.name || window.toHex(l.tg_id)} style={{fontSize: '0.95rem'}}>
                                 {l.name || window.toHex(l.tg_id)}
                             </span>
-                            {l.tg_id === user?.tg_id ? <span className="badge bg-primary ms-2 rounded-pill shadow-sm" style={{fontSize:'0.55rem', padding:'0.35em 0.6em'}}>YOU</span> : null}
+                            {String(l.tg_id) === String(user?.tg_id) ? <span className="badge bg-primary text-white ms-2 rounded-pill shadow-sm" style={{fontSize:'0.55rem', padding:'0.35em 0.6em'}}>YOU</span> : null}
                         </div>
                         {l.username && l.username !== 'unset' ? (
                             <a href={`https://t.me/${l.username}`} target="_blank" rel="noopener noreferrer" className="text-muted text-truncate" style={{fontSize: '0.75rem', maxWidth: '120px', textDecoration: 'none'}}>
@@ -684,11 +684,11 @@ const renderList = (dataList, type, isPrevious = false) => {
                         ) : null}
                     </div>
                 </div>
-                <div className={`badge ${isAppended ? 'bg-primary text-white' : 'bg-light text-dark'} px-2 py-1 rounded-pill shadow-sm d-flex align-items-center gap-1`} style={{ fontSize: '0.75rem' }}>
-                    {type === 'guessers' ? <i className="fas fa-check-circle" style={{fontSize: '0.6rem'}}></i> : null}
-                    {type === 'inviters' ? <i className="fas fa-user-plus" style={{fontSize: '0.6rem'}}></i> : null}
+                <div className="badge bg-white text-dark border px-2 py-1 rounded-pill shadow-sm d-flex align-items-center gap-1" style={{ fontSize: '0.75rem' }}>
+                    {type === 'guessers' ? <i className="fas fa-check-circle text-dark" style={{fontSize: '0.6rem'}}></i> : null}
+                    {type === 'inviters' ? <i className="fas fa-user-plus text-dark" style={{fontSize: '0.6rem'}}></i> : null}
                     {type === 'donators' ? <i className="fas fa-star" style={{color: '#d946ef', fontSize: '0.6rem'}}></i> : null}
-                    <span>{displayScore}</span>
+                    <span className="text-dark fw-bold">{displayScore}</span>
                 </div>
             </div>
         );
