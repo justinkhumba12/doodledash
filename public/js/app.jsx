@@ -152,6 +152,17 @@ const App = () => {
 
     const [idleTimer, setIdleTimer] = useState(30);
 
+    const executeBotRedirect = () => {
+        if (window.tg) {
+            try {
+                window.tg.openTelegramLink('https://t.me/doodledashbot?start=1');
+            } catch(e) {
+                console.error('Failed to open link', e);
+            }
+            window.tg.close();
+        }
+    };
+
     useEffect(() => {
         let isMounted = true;
         
@@ -179,13 +190,8 @@ const App = () => {
                 setIsAuthComplete(true);
             } else {
                 if (data.error === 'not_registered') {
-                    setLoadingState('Please start the bot first! Redirecting...');
-                    if (window.tg) {
-                        try {
-                            window.tg.openTelegramLink('https://t.me/doodledashbot?start=1');
-                        } catch(e) {}
-                        setTimeout(() => window.tg.close(), 500);
-                    }
+                    setLoadingState('not_registered');
+                    executeBotRedirect(); // Automatically trigger bot redirect and close
                 } else if (data.error === 'banned') {
                     setLoadingState('You are banned. Check the bot for details. Closing...');
                     if (window.tg) {
@@ -551,6 +557,27 @@ const App = () => {
     }
 
     if (!user || !socket || !isAuthComplete) {
+        // Registration Required View
+        if (loadingState === 'not_registered') {
+            return (
+                <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
+                    <div className="card border-0 shadow-lg p-5 rounded-4 text-center" style={{ maxWidth: '400px', width: '90%', background: 'linear-gradient(145deg, #ffffff, #f8fafc)' }}>
+                        <div className="mb-4">
+                            <div className="bg-primary bg-opacity-10 rounded-circle d-inline-flex p-4">
+                                <i className="fas fa-robot text-primary" style={{ fontSize: '3rem' }}></i>
+                            </div>
+                        </div>
+                        <h4 className="fw-bold text-dark mb-2">Registration Required</h4>
+                        <p className="text-muted small mb-4">Please start the bot to accept our policy and register your account. Once registered, you can start playing!</p>
+                        <button className="btn btn-primary rounded-pill py-2 fw-bold shadow-sm w-100" onClick={executeBotRedirect}>
+                            Start Bot
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // Default Loading View
         return (
             <div className="d-flex flex-column justify-content-center align-items-center vh-100 w-100" style={{ backgroundColor: 'var(--bg-color)' }}>
                 <div className="card border-0 shadow-lg p-5 rounded-4 text-center" style={{ maxWidth: '400px', width: '90%', background: 'linear-gradient(145deg, #ffffff, #f8fafc)' }}>
