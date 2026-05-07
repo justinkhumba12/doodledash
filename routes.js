@@ -367,6 +367,28 @@ module.exports = (app, io) => {
             const chatId = query.message.chat.id;
             const tgId = query.from.id.toString();
 
+            if (query.data.startsWith('claim_weekly_')) {
+                const parts = query.data.split('_');
+                const week = parts[2];
+                const amount = parseInt(parts[3]);
+                
+                const lockKey = `claimed_weekly_${week}_${tgId}`;
+                const locked = await redis.set(lockKey, '1', 'EX', 86400 * 30, 'NX'); 
+                if (locked) {
+                    await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [amount, tgId]);
+                    await redis.hincrbyfloat('user_credits', tgId, amount);
+                    
+                    tgApiCall('deleteMessage', { chat_id: chatId, message_id: query.message.message_id });
+                    sendMsg(chatId, `✅ You successfully claimed ${amount} credits for the weekly challenge!`);
+                    
+                    const userState = await getUserState(tgId);
+                    if (userState) io.to(`user_${tgId}`).emit('user_update', userState);
+                } else {
+                    tgApiCall('answerCallbackQuery', { callback_query_id: query.id, text: "Already claimed!", show_alert: true });
+                }
+                return;
+            }
+
             if (query.data.startsWith('accept_policy_')) {
                 const payload = query.data.replace('accept_policy_', '');
                 
