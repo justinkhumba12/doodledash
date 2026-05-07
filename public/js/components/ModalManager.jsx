@@ -193,7 +193,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         <small className="text-muted">A password is required for private rooms</small>
                     </div>
 
-                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password (6-10 digits)..." value={pwd} onChange={e => {
+                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5 prominent-input" placeholder="Numeric Password (6-10 digits)..." value={pwd} onChange={e => {
                         const val = e.target.value.replace(/[^0-9]/g, '');
                         setPwd(val.slice(0, 10));
                     }} />
@@ -245,7 +245,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             content = (
                 <>
                     <p className="text-muted small">Set a new numeric password (6-10 digits).</p>
-                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="New Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
+                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5 prominent-input" placeholder="New Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
                     <div className="d-flex gap-2">
                         <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                         <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('change_password', { password: pwd }); close(); }}>Change</button>
@@ -266,7 +266,7 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
             content = (
                 <>
                     <p className="text-muted small mb-3">This room is private. Please enter the numeric password to join.</p>
-                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5" placeholder="Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
+                    <input type="text" inputMode="numeric" pattern="[0-9]*" className="form-control mb-3 text-center fw-bold fs-5 prominent-input" placeholder="Numeric Password" value={pwd} onChange={e => setPwd(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))} />
                     <div className="d-flex gap-2">
                         <button className="btn btn-secondary w-50 rounded-pill" onClick={close}>Cancel</button>
                         <button className="btn btn-primary w-50 rounded-pill" disabled={pwd.length < 6 || pwd.length > 10} onClick={() => { socket.emit('join_room', { room_id: modal.room_id, password: pwd }); close(); }}>Join</button>

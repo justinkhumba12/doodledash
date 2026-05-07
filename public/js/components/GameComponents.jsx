@@ -745,7 +745,8 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [guesses]);
     
-    const showGiveUpButton = isDrawer || guessesLeft <= 0 || hasGivenUp;
+    // Convert to a strict boolean so React doesn't render a truthy/falsy numeric value (like 0)
+    const showGiveUpButton = Boolean(isDrawer || guessesLeft <= 0 || hasGivenUp);
 
     return (
         <div className="d-flex flex-column h-100" style={{overflow: 'hidden'}}>

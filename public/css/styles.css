@@ -56,6 +56,22 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .report-drawing-btn { transition: all 0.2s ease-in-out; }
 .report-drawing-btn:hover { background-color: #dc3545 !important; color: #fff !important; }
 
+/* Prominent Input Styles for Modals (Password Fields) */
+.prominent-input {
+    background-color: #f8fafc !important;
+    border: 2px solid var(--primary) !important;
+    box-shadow: 0 4px 10px rgba(99, 102, 241, 0.1) !important;
+}
+.prominent-input:focus {
+    box-shadow: 0 0 0 0.25rem rgba(99, 102, 241, 0.25) !important;
+    border-color: var(--primary-hover) !important;
+}
+.prominent-input::placeholder {
+    font-size: 0.85rem;
+    font-weight: normal;
+    color: #94a3b8;
+}
+
 /* Utility Ext. */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
