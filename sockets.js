@@ -366,6 +366,7 @@ module.exports = (io) => {
 
         socket.on('get_leaderboard', async () => {
             try {
+                const currentUser = socket.data.currentUser;
                 const weekKey = getWeekKey();
                 
                 const [inviterRows] = await db.query(`
@@ -418,9 +419,76 @@ module.exports = (io) => {
                 const prevInviters = await populateProfiles(prevInvitersData, 'invites');
                 const prevGuessers = await populateProfiles(prevGuessersData, 'guesses');
 
+                if (currentUser) {
+                    const [weeks] = await db.query('SELECT DISTINCT week_key FROM user_weekly_stats ORDER BY week_key DESC LIMIT 2');
+                    const prevWeekKey = weeks.find(w => w.week_key !== weekKey)?.week_key;
+
+                    const appendMeIfNeeded = async (list, scoreField, key) => {
+                        if (!key) return;
+                        const top5 = list.slice(0, 5);
+                        const meInTop5 = top5.find(u => u.tg_id === currentUser);
+                        if (!meInTop5) {
+                            const [myStats] = await db.query(`SELECT ${scoreField} FROM user_weekly_stats WHERE tg_id = ? AND week_key = ?`, [currentUser, key]);
+                            if (myStats.length > 0 && myStats[0][scoreField] > 0) {
+                                const score = myStats[0][scoreField];
+                                const [rankRes] = await db.query(`SELECT COUNT(*) + 1 as rank FROM user_weekly_stats WHERE week_key = ? AND ${scoreField} > ?`, [key, score]);
+                                const myRank = rankRes[0].rank;
+
+                                const myProfile = await populateProfiles([{ tg_id: currentUser, [scoreField]: score }], scoreField);
+                                if (myProfile.length) {
+                                    myProfile[0].rank = myRank;
+                                    myProfile[0].is_me = true;
+                                    list.push(myProfile[0]);
+                                }
+                            }
+                        }
+                    };
+
+                    await appendMeIfNeeded(inviters, 'invites', weekKey);
+                    await appendMeIfNeeded(prevInviters, 'invites', prevWeekKey);
+                }
+
                 socket.emit('leaderboard_data', { inviters, guessers, prevInviters, prevGuessers });
             } catch (err) {
                 console.error('Leaderboard error:', err);
+            }
+        });
+
+        socket.on('claim_top_inviter_reward', async () => {
+            const currentUser = socket.data.currentUser;
+            if (!currentUser) return;
+
+            try {
+                const currentWeekKey = getWeekKey();
+                const [weeks] = await db.query('SELECT DISTINCT week_key FROM user_weekly_stats ORDER BY week_key DESC LIMIT 2');
+                const prevWeekKey = weeks.find(w => w.week_key !== currentWeekKey)?.week_key;
+
+                if (!prevWeekKey) return socket.emit('create_error', 'No previous week data available to claim.');
+
+                const [userRows] = await db.query('SELECT last_top_inviter_claim_week FROM users WHERE tg_id = ?', [currentUser]);
+                if (userRows.length === 0) return;
+
+                if (userRows[0].last_top_inviter_claim_week === prevWeekKey) {
+                    return socket.emit('create_error', 'You have already claimed your Top Inviter reward for last week.');
+                }
+
+                const prevInvitersRaw = await redis.get('previous_week_top_inviters');
+                const prevInvitersData = prevInvitersRaw ? JSON.parse(prevInvitersRaw) : [];
+                const top5 = prevInvitersData.slice(0, 5);
+
+                const inTop5 = top5.find(u => u.tg_id === currentUser);
+                if (!inTop5) {
+                    return socket.emit('create_error', 'You were not in the Top 5 inviters last week.');
+                }
+
+                await db.query('UPDATE users SET gems = gems + 5, last_top_inviter_claim_week = ? WHERE tg_id = ?', [prevWeekKey, currentUser]);
+
+                socket.emit('reward_success', 'Claimed 5 Gems for being a Top Inviter last week!');
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            } catch (err) {
+                console.error('claim_top_inviter_reward Error:', err);
+                socket.emit('create_error', 'Could not process top inviter claim.');
             }
         });
 
