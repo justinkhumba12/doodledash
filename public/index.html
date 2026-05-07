@@ -2,51 +2,35 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>DoodleDash</title>
-    
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
-    <!-- Link out to our extracted styles -->
-    <link rel="stylesheet" href="/css/styles.css">
-
-    <link rel="preload" href="/audio/mgs_notification.mp3" as="audio">
-    <link rel="preload" href="/audio/guess_notification.mp3" as="audio">
-    
-    <!-- Telegram Official WebApp SDK (Required to natively grab users ID and Info) -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
-    
-    <!-- AD NETWORK SCRIPT: Replace with your actual ad network script when ready -->
-    <!-- <script src="//[your-ad-network-url]" data-zone="10604686"></script> -->
-
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW Registration failed: ', err));
-            });
-        }
-    </script>
-
-    <!-- React and Babel loaded externally without a bundler -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOODLE - Multiplayer Drawing Game</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/styles.css">
 </head>
-<body>
-    <audio id="mgsSound" src="/audio/mgs_notification.mp3" playsinline preload="auto"></audio>
-    <audio id="guessSound" src="/audio/guess_notification.mp3" playsinline preload="auto"></audio>
+<body class="bg-gray-900 text-white h-screen overflow-hidden font-sans">
+    <div id="root" class="h-full"></div>
 
-    <div id="root"></div>
+    <!-- Dependencies -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
 
-    <!-- Include the components via Babel. Note the load order matters because they rely on each other. -->
-    <script type="text/babel" src="/js/components/Views.jsx"></script>
-    <script type="text/babel" src="/js/components/ModalManager.jsx"></script>
-    <script type="text/babel" src="/js/components/GameComponents.jsx"></script>
+    <!-- Split React View Components -->
+    <script type="text/babel" src="js/components/SharedViews.jsx"></script>
+    <script type="text/babel" src="js/components/ShopView.jsx"></script>
+    <script type="text/babel" src="js/components/ProfileView.jsx"></script>
+    <script type="text/babel" src="js/components/InventoryView.jsx"></script>
+    <script type="text/babel" src="js/components/TasksView.jsx"></script>
+    <script type="text/babel" src="js/components/LeaderboardView.jsx"></script>
+    <script type="text/babel" src="js/components/LobbyView.jsx"></script>
     
-    <!-- Include the App Bootstrap which defines configs, globals, and renders everything to DOM -->
-    <script type="text/babel" src="/js/app.jsx"></script>
+    <!-- Game Core Components -->
+    <script type="text/babel" src="js/components/GameComponents.jsx"></script>
+    <script type="text/babel" src="js/components/ModalManager.jsx"></script>
+
+    <!-- Main App -->
+    <script type="text/babel" src="js/app.jsx"></script>
 </body>
 </html>
