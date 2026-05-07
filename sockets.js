@@ -592,17 +592,13 @@ module.exports = (io) => {
                     const invitesThisWeek = statsRows.length > 0 ? statsRows[0].invites : 0;
                     
                     if (invitesThisWeek >= 3) {
-                        const [userRows] = await db.query(
-                            `SELECT last_invite_claim_week FROM users WHERE tg_id = ?`, 
-                            [currentUser]
+                        rewardAmount = 5;
+                        const [updateResult] = await db.query(
+                            `UPDATE users SET credits = credits + ?, last_invite_claim_week = ? WHERE tg_id = ? AND (last_invite_claim_week != ? OR last_invite_claim_week IS NULL)`, 
+                            [rewardAmount, weekKey, currentUser, weekKey]
                         );
                         
-                        if (userRows.length > 0 && userRows[0].last_invite_claim_week !== weekKey) {
-                            rewardAmount = 5;
-                            await db.query(
-                                `UPDATE users SET credits = credits + ?, last_invite_claim_week = ? WHERE tg_id = ?`, 
-                                [rewardAmount, weekKey, currentUser]
-                            );
+                        if (updateResult.affectedRows > 0) {
                             success = true; 
                             msg = 'Invite reward claimed! +5 Credits';
                         } else {

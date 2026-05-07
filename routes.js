@@ -411,7 +411,10 @@ module.exports = (app, io) => {
                     `, [tgId]);
 
                     if (inviterId && inviterId !== 'none' && inviterId !== tgId) {
-                        const [res] = await db.query('INSERT IGNORE INTO referrals (inviter_id, invited_id) VALUES (?, ?)', [inviterId, tgId]);
+                        const [res] = await db.query(
+                            'INSERT INTO referrals (inviter_id, invited_id) SELECT ?, ? FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM referrals WHERE invited_id = ?)', 
+                            [inviterId, tgId, tgId]
+                        );
                         if (res.affectedRows > 0) {
                             const weekKey = getWeekKey();
                             await db.query(`
