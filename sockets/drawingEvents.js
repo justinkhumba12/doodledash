@@ -3,14 +3,19 @@ const { getRoom, saveRoom } = require('../roomManager');
 
 module.exports = (io, socket, shared) => {
     const { calculateStrokeLength } = shared;
-    const ALLOWED_COLORS = ['black', 'red', 'green', 'mix'];
+    const ALLOWED_COLORS = ['black', 'red', 'green', 'mix', 'cyber-mix', 'matrix-mix'];
 
     socket.on('request_initial_drawings', async () => {
         const currentRoom = socket.data.currentRoom;
         if (currentRoom) {
             const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
             const drawings = rawDrawings.map(d => JSON.parse(d));
-            socket.emit('sync_initial_drawings', drawings.map(d => ({ lines: d.lines, color: d.color, glow: !!d.glow })));
+            socket.emit('sync_initial_drawings', drawings.map(d => ({ 
+                lines: d.lines, 
+                color: d.color, 
+                glow: !!d.glow,
+                glowColor: d.glowColor || '#00ffff'
+            })));
         }
     });
 
@@ -22,10 +27,14 @@ module.exports = (io, socket, shared) => {
         // Strict Server-Side Validation logic
         const safeColor = ALLOWED_COLORS.includes(data.color) ? data.color : 'black';
         const safeGlow = Boolean(data.glow);
+        
+        // Validate glowColor (accepts standard hex codes or letters, defaults to cyan fallback)
+        const validGlowColorRegex = /^(#[0-9A-Fa-f]{3,8}|[a-zA-Z]+)$/;
+        const safeGlowColor = validGlowColorRegex.test(data.glowColor) ? data.glowColor : '#00ffff';
 
         const room = await getRoom(currentRoom);
         if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-            const drawObj = { lines: data.lines, color: safeColor, glow: safeGlow };
+            const drawObj = { lines: data.lines, color: safeColor, glow: safeGlow, glowColor: safeGlowColor };
             await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
             await redis.del(`room:${currentRoom}:redo`);
             

@@ -13,6 +13,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
     const [selectedColor, setSelectedColor] = useState('black');
     const [glowEnabled, setGlowEnabled] = useState(false);
+    const [glowColor, setGlowColor] = useState('#00ffff'); // New Glow Color State
     
     const drawingRef = useRef(false);
     const currentLineRef = useRef([]);
@@ -190,29 +191,38 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         }
     }, [room.status, room.round_end_time, roomData.server_time]);
 
-    const applyStrokeStyle = (ctx, color, glow) => {
+    const applyStrokeStyle = (ctx, color, glow, currentGlowColor) => {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.lineWidth = 5;
         
         // Handle Glow
         if (glow) {
-            ctx.shadowBlur = color === 'mix' ? 18 : 12;
-            if (color === 'red') ctx.shadowColor = '#ff4d4d';
-            else if (color === 'green') ctx.shadowColor = '#4dff4d';
-            else if (color === 'mix') ctx.shadowColor = '#ff00ff';
-            else ctx.shadowColor = '#666666'; // fallback to dark gray glow for black
+            ctx.shadowBlur = color.includes('mix') ? 18 : 12;
+            ctx.shadowColor = currentGlowColor || '#00ffff'; 
         } else {
             ctx.shadowBlur = 0;
             ctx.shadowColor = 'transparent';
         }
 
-        // Handle Color (including Neon Mix)
+        // Handle Color (including Neon Mixes)
         if (color === 'mix') {
             const gradient = ctx.createLinearGradient(0, 0, 500, 500);
             gradient.addColorStop(0, '#ff0080');
             gradient.addColorStop(0.5, '#7928ca');
             gradient.addColorStop(1, '#00d4ff');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'cyber-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#00ffff');
+            gradient.addColorStop(0.5, '#ff00ff');
+            gradient.addColorStop(1, '#00ffff');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'matrix-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#000000');
+            gradient.addColorStop(0.5, '#39ff14');
+            gradient.addColorStop(1, '#000000');
             ctx.strokeStyle = gradient;
         } else {
             ctx.strokeStyle = color === 'red' ? '#dc3545' : color === 'green' ? '#2ecc71' : '#000000';
@@ -228,10 +238,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         initialDrawingsRef.current.forEach(data => {
             const c = data.color || 'black';
             const g = !!data.glow;
+            const gc = data.glowColor || '#00ffff';
             const lines = data.lines;
             if (!lines) return;
             
-            applyStrokeStyle(ctx, c, g);
+            applyStrokeStyle(ctx, c, g, gc);
             for (let i = 0; i < lines.length; i += 4) {
                 ctx.beginPath();
                 ctx.moveTo(lines[i], lines[i+1]);
@@ -271,11 +282,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             let lines = data.lines;
             let c = data.color || 'black';
             let g = !!data.glow;
+            let gc = data.glowColor || '#00ffff';
             const canvas = canvasRef.current;
             if(!canvas || !lines) return;
             
             const ctx = canvas.getContext('2d');
-            applyStrokeStyle(ctx, c, g);
+            applyStrokeStyle(ctx, c, g, gc);
             
             for (let i = 0; i < lines.length; i += 4) {
                 ctx.beginPath();
@@ -285,7 +297,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             }
             ctx.shadowBlur = 0; // reset
             
-            initialDrawingsRef.current.push({ lines, color: c, glow: g });
+            initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc });
             
             if (!isDrawer) {
                 let strokeLength = 0;
@@ -316,7 +328,22 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.setPointerCapture(e.pointerId); } catch(err) {}
         drawingRef.current = true;
         currentLineRef.current = [];
-        lastPosRef.current = getMousePos(e);
+        
+        const pos = getMousePos(e);
+        lastPosRef.current = pos;
+        
+        // Single tap/click fix: Register an immediate tiny stroke
+        const tapPos = { x: pos.x + 0.1, y: pos.y + 0.1 };
+        const ctx = canvasRef.current.getContext('2d');
+        applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+        ctx.lineTo(tapPos.x, tapPos.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        currentLineRef.current.push(pos.x, pos.y, tapPos.x, tapPos.y);
+        lastPosRef.current = tapPos;
     };
 
     const moveDraw = (e) => {
@@ -344,7 +371,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         updateInkUI();
         
         const ctx = canvasRef.current.getContext('2d');
-        applyStrokeStyle(ctx, selectedColor, glowEnabled);
+        applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
         ctx.beginPath();
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
@@ -358,10 +385,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const flushDrawQueue = useCallback(() => {
         if (drawQueueRef.current.length > 0) {
             const grouped = {};
-            // Group strokes by their original color and glow parameters
+            // Group strokes by original color, glow state, and glow color parameters
             drawQueueRef.current.forEach(cmd => {
-                const key = `${cmd.color}_${cmd.glow}`;
-                if (!grouped[key]) grouped[key] = { lines: [], color: cmd.color, glow: cmd.glow };
+                const key = `${cmd.color}_${cmd.glow}_${cmd.glowColor}`;
+                if (!grouped[key]) grouped[key] = { lines: [], color: cmd.color, glow: cmd.glow, glowColor: cmd.glowColor };
                 grouped[key].lines.push(...cmd.lines);
             });
             Object.values(grouped).forEach(group => {
@@ -378,7 +405,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
         
         if(currentLineRef.current.length > 0) {
-            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor, glow: glowEnabled });
+            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor, glow: glowEnabled, glowColor: glowColor });
         }
         
         if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
@@ -432,54 +459,93 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
             {/* Ink Color & Glow Selector */}
             {isDrawer && isDrawingPhase && (
-                <div className="d-flex justify-content-center gap-3 mb-2 w-100 align-items-center bg-white p-2 rounded shadow-sm border" style={{maxWidth: '500px'}}>
+                <div className="d-flex flex-column mb-2 w-100 bg-white p-2 rounded shadow-sm border" style={{maxWidth: '500px'}}>
                     
-                    {/* Glow Effect Toggle */}
-                    <button 
-                        className={`btn btn-sm rounded-pill px-3 shadow-sm border transition ${glowEnabled ? 'btn-warning text-dark fw-bold glow-active' : 'btn-light text-secondary'}`}
-                        onClick={() => setGlowEnabled(!glowEnabled)}
-                        title="Toggle Glow Effect"
-                    >
-                        <i className="fas fa-magic"></i> {glowEnabled ? 'Glow On' : 'Glow Off'}
-                    </button>
-                    
-                    <div className="vr text-muted" style={{opacity: 0.2}}></div>
+                    {/* Main Palette */}
+                    <div className="color-palette-scroll w-100 hide-scrollbar pb-1">
+                        {/* Glow Effect Toggle */}
+                        <button 
+                            className={`btn rounded-circle flex-shrink-0 shadow-sm border transition ${glowEnabled ? 'btn-warning text-dark fw-bold glow-active' : 'btn-light text-secondary'}`}
+                            onClick={() => setGlowEnabled(!glowEnabled)}
+                            style={{ width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Toggle Glow Effect"
+                        >
+                            <i className="fas fa-magic"></i>
+                        </button>
+                        
+                        <div className="vr text-muted flex-shrink-0 mx-1" style={{opacity: 0.2, height: '32px'}}></div>
 
-                    {/* Color Options */}
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#000000', 
-                                outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('black')}
-                            title="Black Ink"></button>
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#dc3545', 
-                                outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('red')}
-                            title="Red Ink"></button>
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#2ecc71', 
-                                outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('green')}
-                            title="Green Ink"></button>
-                    
-                    {/* Neon Mix Color Option */}
-                    <button className="btn rounded-circle p-0 transition color-mix-btn"
-                            style={{
-                                width: '32px', height: '32px', 
-                                outline: selectedColor === 'mix' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('mix')}
-                            title="Neon Mix Ink"></button>
+                        {/* Standard Color Options */}
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#000000', 
+                                    outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('black')}
+                                title="Black Ink"></button>
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#dc3545', 
+                                    outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('red')}
+                                title="Red Ink"></button>
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#2ecc71', 
+                                    outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('green')}
+                                title="Green Ink"></button>
+                        
+                        {/* Neon Mix Color Options */}
+                        <button className="btn rounded-circle p-0 transition color-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('mix')}
+                                title="Rainbow Mix Ink"></button>
+                        
+                        <button className="btn rounded-circle p-0 transition cyber-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'cyber-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('cyber-mix')}
+                                title="Cyber Neon Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition matrix-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'matrix-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('matrix-mix')}
+                                title="Matrix Neon Mix Ink"></button>
+                    </div>
+
+                    {/* Secondary Conditional Glow Palette */}
+                    {glowEnabled && (
+                        <div className="color-palette-scroll w-100 hide-scrollbar pt-2 mt-1 border-top" style={{ borderColor: '#e2e8f0' }}>
+                            <span className="small text-muted flex-shrink-0 fw-bold me-1" style={{ fontSize: '0.75rem' }}>Glow Color:</span>
+                            {['#00ffff', '#ff00ff', '#39ff14', '#ffeb3b', '#ff4d4d', '#ffffff'].map(gc => (
+                                <button key={gc} className="btn rounded-circle p-0 transition flex-shrink-0"
+                                    style={{
+                                        width: '24px', height: '24px', backgroundColor: gc,
+                                        outline: glowColor === gc ? '2px solid #0d6efd' : 'none',
+                                        outlineOffset: '2px', border: '1px solid #cbd5e1', boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                                    }}
+                                    onClick={() => setGlowColor(gc)}
+                                    title={`Glow ${gc}`}></button>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
 
