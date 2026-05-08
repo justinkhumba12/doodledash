@@ -82,7 +82,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         if (buyBtn) {
-            // Allows refill whenever ink buys aren't maxed
             buyBtn.style.display = (isDrawer && !hasMaxInk) ? 'flex' : 'none';
         }
     }, [isDrawer, isDrawingPhase, drawerInkExtraObj, inkConfig]);
@@ -196,21 +195,23 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // Eraser Tool
+        // True Eraser Logic
         if (color === 'eraser') {
             ctx.globalCompositeOperation = 'destination-out';
             ctx.lineWidth = 20;
             ctx.strokeStyle = 'rgba(0,0,0,1)';
             ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
             return;
         }
 
+        // Standard Pen Logic
         ctx.globalCompositeOperation = 'source-over';
         ctx.lineWidth = 5;
         
         // Handle Glow
         if (glow) {
-            ctx.shadowBlur = color.includes('mix') ? 18 : 12;
+            ctx.shadowBlur = color === 'magic-mix' ? 18 : 12;
             ctx.shadowColor = currentGlowColor || '#00ffff'; 
         } else {
             ctx.shadowBlur = 0;
@@ -242,17 +243,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             const lines = data.lines;
             if (!lines) return;
             
+            ctx.save();
             applyStrokeStyle(ctx, c, g, gc);
+            
+            ctx.beginPath();
             for (let i = 0; i < lines.length; i += 4) {
-                ctx.beginPath();
                 ctx.moveTo(lines[i], lines[i+1]);
                 ctx.lineTo(lines[i+2], lines[i+3]);
-                ctx.stroke();
             }
+            ctx.stroke();
+            
+            ctx.restore();
         });
-        
-        ctx.shadowBlur = 0; // reset shadow
-        ctx.globalCompositeOperation = 'source-over'; // reset composite operation
     }, []);
 
     useEffect(() => {
@@ -288,17 +290,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             if(!canvas || !lines) return;
             
             const ctx = canvas.getContext('2d');
+            
+            ctx.save();
             applyStrokeStyle(ctx, c, g, gc);
             
+            ctx.beginPath();
             for (let i = 0; i < lines.length; i += 4) {
-                ctx.beginPath();
                 ctx.moveTo(lines[i], lines[i+1]);
                 ctx.lineTo(lines[i+2], lines[i+3]);
-                ctx.stroke();
             }
+            ctx.stroke();
             
-            ctx.shadowBlur = 0; // reset shadow
-            ctx.globalCompositeOperation = 'source-over'; // reset composite op
+            ctx.restore();
             
             initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc });
             
@@ -342,14 +345,14 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         
         const tapPos = { x: pos.x + 0.1, y: pos.y + 0.1 };
         const ctx = canvasRef.current.getContext('2d');
+        
+        ctx.save();
         applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(tapPos.x, tapPos.y);
         ctx.stroke();
-        
-        ctx.shadowBlur = 0;
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
         
         currentLineRef.current.push(pos.x, pos.y, tapPos.x, tapPos.y);
         lastPosRef.current = tapPos;
@@ -367,7 +370,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         
         if (selectedColor === 'eraser') {
-            // Eraser refunds ink visually right away
             inkUsedRef.current = Math.max(0, inkUsedRef.current - dist);
         } else {
             if (inkUsedRef.current + dist > currentMaxInkRef.current) {
@@ -384,14 +386,14 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         updateInkUI();
         
         const ctx = canvasRef.current.getContext('2d');
+        
+        ctx.save();
         applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
         ctx.beginPath();
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
         ctx.stroke();
-        
-        ctx.shadowBlur = 0; // reset
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
 
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
         lastPosRef.current = newPos;
