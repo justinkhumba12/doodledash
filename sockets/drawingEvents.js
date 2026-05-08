@@ -3,7 +3,7 @@ const { getRoom, saveRoom } = require('../roomManager');
 
 module.exports = (io, socket, shared) => {
     const { calculateStrokeLength } = shared;
-    const ALLOWED_COLORS = ['black', 'red', 'green', 'mix', 'cyber-mix', 'matrix-mix'];
+    const ALLOWED_COLORS = ['black', 'red', 'green', 'kawaii-mix', 'arcade-mix', 'galaxy-mix', 'nature-mix', 'retro-mix'];
 
     socket.on('request_initial_drawings', async () => {
         const currentRoom = socket.data.currentRoom;
@@ -32,31 +32,65 @@ module.exports = (io, socket, shared) => {
         const validGlowColorRegex = /^(#[0-9A-Fa-f]{3,8}|[a-zA-Z]+)$/;
         const safeGlowColor = validGlowColorRegex.test(data.glowColor) ? data.glowColor : '#00ffff';
 
-        const room = await getRoom(currentRoom);
-        if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-            const drawObj = { lines: data.lines, color: safeColor, glow: safeGlow, glowColor: safeGlowColor };
-            await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
-            await redis.del(`room:${currentRoom}:redo`);
-            
-            let strokeLength = calculateStrokeLength(data.lines);
-            
-            const member = room.members.find(m => m.user_id === currentUser);
-            if (member) {
-                member.ink_used = member.ink_used || {};
-                
-                // Track usage across a unified 'total' property, inheriting legacy 'black' value if present
-                const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + strokeLength;
-                member.ink_used['total'] = newTotal;
-                
-                await saveRoom(room);
-                io.to(`room_${currentRoom}`).emit('update_ink', { used: newTotal });
-            }
+        const cleanData = { lines: data.lines, color: safeColor, glow: safeGlow, glowColor: safeGlowColor };
 
-            socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
-            
-            const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
-            io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: 0 });
-        }
+        // Server-Side Rate Limiter & Batching (Reduces Spam/Payload)
+        if (!socket.drawQueue) socket.drawQueue = [];
+        socket.drawQueue.push(cleanData);
+
+        if (socket.drawThrottle) return; // Already throttling, wait for tick
+
+        socket.drawThrottle = setTimeout(async () => {
+            socket.drawThrottle = null;
+            const batchedDraws = socket.drawQueue;
+            socket.drawQueue = [];
+
+            const room = await getRoom(currentRoom);
+            if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+                let totalStrokeLength = 0;
+                const validDrawObjects = [];
+
+                // Group batched lines by their characteristics to optimize Redis and networking
+                const groupedDraws = {};
+                for (const draw of batchedDraws) {
+                    const key = `${draw.color}_${draw.glow}_${draw.glowColor}`;
+                    if (!groupedDraws[key]) {
+                        groupedDraws[key] = { lines: [], color: draw.color, glow: draw.glow, glowColor: draw.glowColor };
+                    }
+                    groupedDraws[key].lines.push(...draw.lines);
+                    totalStrokeLength += calculateStrokeLength(draw.lines);
+                }
+
+                // Push unified drawing blocks
+                for (const key in groupedDraws) {
+                    const drawObj = groupedDraws[key];
+                    validDrawObjects.push(drawObj);
+                    await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
+                }
+
+                if (validDrawObjects.length > 0) {
+                    await redis.del(`room:${currentRoom}:redo`);
+
+                    const member = room.members.find(m => m.user_id === currentUser);
+                    if (member) {
+                        member.ink_used = member.ink_used || {};
+                        const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + totalStrokeLength;
+                        member.ink_used['total'] = newTotal;
+                        
+                        await saveRoom(room);
+                        io.to(`room_${currentRoom}`).emit('update_ink', { used: newTotal });
+                    }
+
+                    // Broadcast all batched objects to subscribers
+                    validDrawObjects.forEach(drawObj => {
+                        socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
+                    });
+                    
+                    const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                    io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: 0 });
+                }
+            }
+        }, 150); // 150ms throttle delay to receive chunks and process
     });
 
     socket.on('clear_all', async () => {

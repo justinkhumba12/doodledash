@@ -101,19 +101,29 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     padding: 0.25rem;
 }
 
-/* Neon Mix Button Styles */
-.color-mix-btn {
-    background: linear-gradient(45deg, #ff0080, #7928ca, #00d4ff) !important;
+/* Cute and Gaming Mix Button Styles */
+.kawaii-mix-btn {
+    background: linear-gradient(45deg, #ffb3ba, #ffffba, #bae1ff) !important;
     background-size: 200% 200% !important;
     animation: gradientShift 3s ease infinite;
 }
-.cyber-mix-btn {
-    background: linear-gradient(45deg, #00ffff, #ff00ff, #00ffff) !important;
+.arcade-mix-btn {
+    background: linear-gradient(45deg, #ff0000, #ffff00, #ff8800) !important;
     background-size: 200% 200% !important;
     animation: gradientShift 3s ease infinite;
 }
-.matrix-mix-btn {
-    background: linear-gradient(45deg, #000000, #39ff14, #000000) !important;
+.galaxy-mix-btn {
+    background: linear-gradient(45deg, #2a0845, #6441A5, #ff0080) !important;
+    background-size: 200% 200% !important;
+    animation: gradientShift 3s ease infinite;
+}
+.nature-mix-btn {
+    background: linear-gradient(45deg, #11998e, #38ef7d, #11998e) !important;
+    background-size: 200% 200% !important;
+    animation: gradientShift 3s ease infinite;
+}
+.retro-mix-btn {
+    background: linear-gradient(45deg, #f12711, #f5af19, #f12711) !important;
     background-size: 200% 200% !important;
     animation: gradientShift 3s ease infinite;
 }
@@ -124,9 +134,9 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     100% { background-position: 0% 50%; }
 }
 
-/* Glow Tool Active Status */
+/* Glow Tool Active Status (Reduced Intensity) */
 .glow-active {
-    box-shadow: 0 0 12px rgba(245, 158, 11, 0.6) !important;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.4) !important;
 }
 
 /* Utility Ext. */

@@ -13,7 +13,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
     const [selectedColor, setSelectedColor] = useState('black');
     const [glowEnabled, setGlowEnabled] = useState(false);
-    const [glowColor, setGlowColor] = useState('#00ffff'); // New Glow Color State
+    const [glowColor, setGlowColor] = useState('#00ffff');
     
     const drawingRef = useRef(false);
     const currentLineRef = useRef([]);
@@ -82,7 +82,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         if (buyBtn) {
-            buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
+            buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'flex' : 'none';
         }
     }, [isDrawer, isDrawingPhase, drawerInkExtraObj, inkConfig]);
 
@@ -122,8 +122,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
             setUserReactions({});
-            setSelectedColor('black'); // Reset to default color at the start of a round
-            setGlowEnabled(false); // Reset glow state
+            setSelectedColor('black');
+            setGlowEnabled(false);
         }
     }, [room.status, room.turn_index]);
 
@@ -205,24 +205,34 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             ctx.shadowColor = 'transparent';
         }
 
-        // Handle Color (including Neon Mixes)
-        if (color === 'mix') {
+        // Handle Color (including cute and gaming Neon Mixes)
+        if (color === 'kawaii-mix') {
             const gradient = ctx.createLinearGradient(0, 0, 500, 500);
-            gradient.addColorStop(0, '#ff0080');
-            gradient.addColorStop(0.5, '#7928ca');
-            gradient.addColorStop(1, '#00d4ff');
+            gradient.addColorStop(0, '#ffb3ba');
+            gradient.addColorStop(0.5, '#ffffba');
+            gradient.addColorStop(1, '#bae1ff');
             ctx.strokeStyle = gradient;
-        } else if (color === 'cyber-mix') {
+        } else if (color === 'arcade-mix') {
             const gradient = ctx.createLinearGradient(0, 0, 500, 500);
-            gradient.addColorStop(0, '#00ffff');
-            gradient.addColorStop(0.5, '#ff00ff');
-            gradient.addColorStop(1, '#00ffff');
+            gradient.addColorStop(0, '#ff0000');
+            gradient.addColorStop(0.5, '#ffff00');
+            gradient.addColorStop(1, '#ff8800');
             ctx.strokeStyle = gradient;
-        } else if (color === 'matrix-mix') {
+        } else if (color === 'galaxy-mix') {
             const gradient = ctx.createLinearGradient(0, 0, 500, 500);
-            gradient.addColorStop(0, '#000000');
-            gradient.addColorStop(0.5, '#39ff14');
-            gradient.addColorStop(1, '#000000');
+            gradient.addColorStop(0, '#2a0845');
+            gradient.addColorStop(0.5, '#6441A5');
+            gradient.addColorStop(1, '#ff0080');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'nature-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#11998e');
+            gradient.addColorStop(1, '#38ef7d');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'retro-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#f12711');
+            gradient.addColorStop(1, '#f5af19');
             ctx.strokeStyle = gradient;
         } else {
             ctx.strokeStyle = color === 'red' ? '#dc3545' : color === 'green' ? '#2ecc71' : '#000000';
@@ -428,15 +438,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                             <span className="text-primary"><i className="fas fa-tint"></i> Shared Ink Level</span>
                             <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
                         </div>
-                        <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
-                            <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
-                                 style={{width: '100%', transition: 'width 0.1s'}}></div>
-                        </div>
-                        <div className="text-center mt-3" id="buyInkBtn" style={{display: 'none'}}>
-                            <button className="btn btn-sm btn-warning rounded-pill fw-bold shadow border border-warning text-dark" onClick={() => {
-                                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
-                            }}>
-                                <i className="fas fa-plus-circle"></i> Refill Ink ({inkConfig.cost} Cred)
+                        <div className="d-flex align-items-center gap-2">
+                            <div className="progress shadow-sm border border-light flex-grow-1" style={{height: '14px', borderRadius: '10px'}}>
+                                <div id="inkProgressBar" className="progress-bar progress-bar-striped progress-bar-animated bg-primary" 
+                                     style={{width: '100%', transition: 'width 0.1s'}}></div>
+                            </div>
+                            <button id="buyInkBtn" className="btn btn-warning rounded-circle p-0 align-items-center justify-content-center shadow-sm flex-shrink-0"
+                                    style={{ width: '24px', height: '24px', display: 'none' }}
+                                    onClick={() => {
+                                        setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
+                                    }}
+                                    title={`Refill Ink (${inkConfig.cost} Cred)`}>
+                                <i className="fas fa-plus" style={{fontSize: '12px'}}></i>
                             </button>
                         </div>
                     </div>
@@ -501,33 +514,51 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                                 onClick={() => setSelectedColor('green')}
                                 title="Green Ink"></button>
                         
-                        {/* Neon Mix Color Options */}
-                        <button className="btn rounded-circle p-0 transition color-mix-btn flex-shrink-0"
+                        {/* New Cute & Gaming Mix Color Options */}
+                        <button className="btn rounded-circle p-0 transition kawaii-mix-btn flex-shrink-0"
                                 style={{
                                     width: '32px', height: '32px', 
-                                    outline: selectedColor === 'mix' ? '3px solid #0d6efd' : 'none', 
+                                    outline: selectedColor === 'kawaii-mix' ? '3px solid #0d6efd' : 'none', 
                                     outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                                 }} 
-                                onClick={() => setSelectedColor('mix')}
-                                title="Rainbow Mix Ink"></button>
+                                onClick={() => setSelectedColor('kawaii-mix')}
+                                title="Kawaii Pastel Mix Ink"></button>
                         
-                        <button className="btn rounded-circle p-0 transition cyber-mix-btn flex-shrink-0"
+                        <button className="btn rounded-circle p-0 transition arcade-mix-btn flex-shrink-0"
                                 style={{
                                     width: '32px', height: '32px', 
-                                    outline: selectedColor === 'cyber-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outline: selectedColor === 'arcade-mix' ? '3px solid #0d6efd' : 'none', 
                                     outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                                 }} 
-                                onClick={() => setSelectedColor('cyber-mix')}
-                                title="Cyber Neon Mix Ink"></button>
+                                onClick={() => setSelectedColor('arcade-mix')}
+                                title="Arcade Neon Mix Ink"></button>
 
-                        <button className="btn rounded-circle p-0 transition matrix-mix-btn flex-shrink-0"
+                        <button className="btn rounded-circle p-0 transition galaxy-mix-btn flex-shrink-0"
                                 style={{
                                     width: '32px', height: '32px', 
-                                    outline: selectedColor === 'matrix-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outline: selectedColor === 'galaxy-mix' ? '3px solid #0d6efd' : 'none', 
                                     outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                                 }} 
-                                onClick={() => setSelectedColor('matrix-mix')}
-                                title="Matrix Neon Mix Ink"></button>
+                                onClick={() => setSelectedColor('galaxy-mix')}
+                                title="Galaxy Star Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition nature-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'nature-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('nature-mix')}
+                                title="Nature Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition retro-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'retro-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('retro-mix')}
+                                title="Retro Fire Mix Ink"></button>
                     </div>
 
                     {/* Secondary Conditional Glow Palette */}
@@ -634,22 +665,25 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
             {isDrawer && isDrawingPhase && (
                 <div className="d-flex gap-2 justify-content-center mt-3 w-100">
-                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                    <button className="btn btn-sm btn-light shadow-sm rounded-pill px-2 py-1 text-secondary d-flex align-items-center gap-1 border" 
+                            style={{ fontSize: '0.8rem' }}
                             onClick={() => socket.emit('undo')} 
                             disabled={(room.undo_steps || 0) === 0}
                             title="Undo">
-                        <i className="fas fa-undo"></i> <span className="badge bg-secondary rounded-circle">{room.undo_steps || 0}</span>
+                        <i className="fas fa-undo"></i> <span className="badge bg-secondary rounded-circle" style={{ fontSize: '0.65rem' }}>{room.undo_steps || 0}</span>
                     </button>
-                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-danger d-flex align-items-center gap-2 border border-danger" 
+                    <button className="btn btn-sm btn-light shadow-sm rounded-pill px-2 py-1 text-danger d-flex align-items-center gap-1 border border-danger" 
+                            style={{ fontSize: '0.8rem' }}
                             onClick={() => socket.emit('clear_all')} 
                             title="Clear All">
                         <i className="fas fa-trash-alt"></i> Clear All
                     </button>
-                    <button className="btn btn-light shadow-sm rounded-pill px-3 py-2 fw-bold text-secondary d-flex align-items-center gap-2 border" 
+                    <button className="btn btn-sm btn-light shadow-sm rounded-pill px-2 py-1 text-secondary d-flex align-items-center gap-1 border" 
+                            style={{ fontSize: '0.8rem' }}
                             onClick={() => socket.emit('redo')} 
                             disabled={(room.redo_steps || 0) === 0}
                             title="Redo">
-                        <i className="fas fa-redo"></i> <span className="badge bg-secondary rounded-circle">{room.redo_steps || 0}</span>
+                        <i className="fas fa-redo"></i> <span className="badge bg-secondary rounded-circle" style={{ fontSize: '0.65rem' }}>{room.redo_steps || 0}</span>
                     </button>
                 </div>
             )}
