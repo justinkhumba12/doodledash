@@ -11,7 +11,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const canvasRef = useRef(null);
     const [localTimeLeft, setLocalTimeLeft] = useState(0);
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
-    const [selectedColor, setSelectedColor] = useState('gradient-mix');
+    const [selectedColor, setSelectedColor] = useState('black');
     const [glowEnabled, setGlowEnabled] = useState(false);
     const [glowColor, setGlowColor] = useState('#00ffff');
     
@@ -82,8 +82,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         if (buyBtn) {
-            // Refill is constantly available for drawer unless max ink buys reached
-            buyBtn.style.display = (isDrawer && !hasMaxInk) ? 'flex' : 'none';
+            buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'flex' : 'none';
         }
     }, [isDrawer, isDrawingPhase, drawerInkExtraObj, inkConfig]);
 
@@ -123,7 +122,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
             setUserReactions({});
-            setSelectedColor('gradient-mix');
+            setSelectedColor('black');
             setGlowEnabled(false);
         }
     }, [room.status, room.turn_index]);
@@ -195,36 +194,48 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const applyStrokeStyle = (ctx, color, glow, currentGlowColor) => {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        
-        if (color === 'eraser') {
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.lineWidth = 20;
-            ctx.shadowBlur = 0;
-            ctx.strokeStyle = 'rgba(0,0,0,1)';
-            return;
-        }
-
-        ctx.globalCompositeOperation = 'source-over';
         ctx.lineWidth = 5;
-
+        
         // Handle Glow
         if (glow) {
-            ctx.shadowBlur = 18;
+            ctx.shadowBlur = color.includes('mix') ? 18 : 12;
             ctx.shadowColor = currentGlowColor || '#00ffff'; 
         } else {
             ctx.shadowBlur = 0;
             ctx.shadowColor = 'transparent';
         }
 
-        // Enforced Single Gradient Color
-        if (color === 'gradient-mix') {
+        // Handle Color (including cute and gaming Neon Mixes)
+        if (color === 'kawaii-mix') {
             const gradient = ctx.createLinearGradient(0, 0, 500, 500);
-            gradient.addColorStop(0, '#ff007f');
-            gradient.addColorStop(0.5, '#7928ca');
-            gradient.addColorStop(1, '#00d2ff');
+            gradient.addColorStop(0, '#ffb3ba');
+            gradient.addColorStop(0.5, '#ffffba');
+            gradient.addColorStop(1, '#bae1ff');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'arcade-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#ff0000');
+            gradient.addColorStop(0.5, '#ffff00');
+            gradient.addColorStop(1, '#ff8800');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'galaxy-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#2a0845');
+            gradient.addColorStop(0.5, '#6441A5');
+            gradient.addColorStop(1, '#ff0080');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'nature-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#11998e');
+            gradient.addColorStop(1, '#38ef7d');
+            ctx.strokeStyle = gradient;
+        } else if (color === 'retro-mix') {
+            const gradient = ctx.createLinearGradient(0, 0, 500, 500);
+            gradient.addColorStop(0, '#f12711');
+            gradient.addColorStop(1, '#f5af19');
             ctx.strokeStyle = gradient;
         } else {
-            ctx.strokeStyle = '#000000'; // Fallback
+            ctx.strokeStyle = color === 'red' ? '#dc3545' : color === 'green' ? '#2ecc71' : '#000000';
         }
     };
 
@@ -235,7 +246,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.clearRect(0,0, canvas.width, canvas.height);
         
         initialDrawingsRef.current.forEach(data => {
-            const c = data.color || 'gradient-mix';
+            const c = data.color || 'black';
             const g = !!data.glow;
             const gc = data.glowColor || '#00ffff';
             const lines = data.lines;
@@ -249,8 +260,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 ctx.stroke();
             }
         });
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.shadowBlur = 0; 
+        ctx.shadowBlur = 0; // reset shadow to avoid artifacts
     }, []);
 
     // Clear Canvas and Reset Drawings Automatically at the Start/End of New Rounds
@@ -280,7 +290,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         if (!socket) return;
         const handleLiveDraw = (data) => {
             let lines = data.lines;
-            let c = data.color || 'gradient-mix';
+            let c = data.color || 'black';
             let g = !!data.glow;
             let gc = data.glowColor || '#00ffff';
             const canvas = canvasRef.current;
@@ -295,9 +305,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 ctx.lineTo(lines[i+2], lines[i+3]);
                 ctx.stroke();
             }
-            
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.shadowBlur = 0;
+            ctx.shadowBlur = 0; // reset
             
             initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc });
             
@@ -306,11 +314,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 for (let i = 0; i < lines.length; i += 4) {
                     strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
                 }
-                if (c === 'eraser') {
-                    inkUsedRef.current = Math.max(0, inkUsedRef.current - strokeLength);
-                } else {
-                    inkUsedRef.current += strokeLength;
-                }
+                inkUsedRef.current += strokeLength;
                 updateInkUIRef.current();
             }
         };
@@ -346,8 +350,6 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.moveTo(pos.x, pos.y);
         ctx.lineTo(tapPos.x, tapPos.y);
         ctx.stroke();
-        
-        ctx.globalCompositeOperation = 'source-over';
         ctx.shadowBlur = 0;
         
         currentLineRef.current.push(pos.x, pos.y, tapPos.x, tapPos.y);
@@ -365,20 +367,15 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         
-        if (selectedColor === 'eraser') {
-            // Eraser refunds ink based on stroke distance
-            inkUsedRef.current = Math.max(0, inkUsedRef.current - dist);
-        } else {
-            if (inkUsedRef.current + dist > currentMaxInkRef.current) {
-                stopDraw(e); 
-                if (!hasMaxInk) {
-                    setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'total' });
-                }
-                return;
+        if (inkUsedRef.current + dist > currentMaxInkRef.current) {
+            stopDraw(e); 
+            if (!hasMaxInk) {
+                setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
             }
-            inkUsedRef.current += dist;
+            return;
         }
         
+        inkUsedRef.current += dist;
         localInkRef.current['total'] = inkUsedRef.current; 
 
         updateInkUI();
@@ -389,9 +386,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
         ctx.stroke();
-        
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = 0; // reset
 
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
         lastPosRef.current = newPos;
@@ -420,7 +415,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
         
         if(currentLineRef.current.length > 0) {
-            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor, glow: glowEnabled && selectedColor !== 'eraser', glowColor: glowColor });
+            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor, glow: glowEnabled, glowColor: glowColor });
         }
         
         if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
@@ -451,7 +446,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                             <button id="buyInkBtn" className="btn btn-warning rounded-circle p-0 align-items-center justify-content-center shadow-sm flex-shrink-0"
                                     style={{ width: '24px', height: '24px', display: 'none' }}
                                     onClick={() => {
-                                        setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'total' });
+                                        setModal({ type: 'confirm_buy_ink', title: 'Refill Ink', cost: inkConfig.cost, color: 'black' });
                                     }}
                                     title={`Refill Ink (${inkConfig.cost} Cred)`}>
                                 <i className="fas fa-plus" style={{fontSize: '12px'}}></i>
@@ -487,36 +482,87 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                             onClick={() => setGlowEnabled(!glowEnabled)}
                             style={{ width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                             title="Toggle Glow Effect"
-                            disabled={selectedColor === 'eraser'}
                         >
                             <i className="fas fa-magic"></i>
                         </button>
                         
                         <div className="vr text-muted flex-shrink-0 mx-1" style={{opacity: 0.2, height: '32px'}}></div>
 
-                        {/* Eraser Tool */}
-                        <button className={`btn rounded-circle p-0 transition flex-shrink-0 eraser-btn`}
+                        {/* Standard Color Options */}
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
                                 style={{
-                                    width: '32px', height: '32px', 
-                                    outline: selectedColor === 'eraser' ? '3px solid #0d6efd' : 'none', 
-                                    outlineOffset: '2px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                                }} 
-                                onClick={() => setSelectedColor('eraser')}
-                                title="Eraser"></button>
-
-                        {/* Single Enforced Gradient Color */}
-                        <button className="btn rounded-circle p-0 transition gradient-mix-btn flex-shrink-0"
-                                style={{
-                                    width: '32px', height: '32px', 
-                                    outline: selectedColor === 'gradient-mix' ? '3px solid #0d6efd' : 'none', 
+                                    width: '32px', height: '32px', backgroundColor: '#000000', 
+                                    outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
                                     outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                                 }} 
-                                onClick={() => setSelectedColor('gradient-mix')}
-                                title="Gradient Ink"></button>
+                                onClick={() => setSelectedColor('black')}
+                                title="Black Ink"></button>
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#dc3545', 
+                                    outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('red')}
+                                title="Red Ink"></button>
+                        <button className="btn rounded-circle p-0 transition flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#2ecc71', 
+                                    outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('green')}
+                                title="Green Ink"></button>
+                        
+                        {/* New Cute & Gaming Mix Color Options */}
+                        <button className="btn rounded-circle p-0 transition kawaii-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'kawaii-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('kawaii-mix')}
+                                title="Kawaii Pastel Mix Ink"></button>
+                        
+                        <button className="btn rounded-circle p-0 transition arcade-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'arcade-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('arcade-mix')}
+                                title="Arcade Neon Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition galaxy-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'galaxy-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('galaxy-mix')}
+                                title="Galaxy Star Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition nature-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'nature-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('nature-mix')}
+                                title="Nature Mix Ink"></button>
+
+                        <button className="btn rounded-circle p-0 transition retro-mix-btn flex-shrink-0"
+                                style={{
+                                    width: '32px', height: '32px', 
+                                    outline: selectedColor === 'retro-mix' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('retro-mix')}
+                                title="Retro Fire Mix Ink"></button>
                     </div>
 
                     {/* Secondary Conditional Glow Palette */}
-                    {glowEnabled && selectedColor !== 'eraser' && (
+                    {glowEnabled && (
                         <div className="color-palette-scroll w-100 hide-scrollbar pt-2 mt-1 border-top" style={{ borderColor: '#e2e8f0' }}>
                             <span className="small text-muted flex-shrink-0 fw-bold me-1" style={{ fontSize: '0.75rem' }}>Glow Color:</span>
                             {['#00ffff', '#ff00ff', '#39ff14', '#ffeb3b', '#ff4d4d', '#ffffff'].map(gc => (
