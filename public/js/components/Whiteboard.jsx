@@ -7,6 +7,44 @@ fetch('/api/public/dictionary')
     .then(words => { if (words && words.length > 0) RANDOM_WORDS = words; })
     .catch(e => console.error("Could not fetch custom dictionary"));
 
+// Helper function to process intersection-based eraser refunds
+const applyEraserStrokeAndGetRefund = (ctx, canvasWidth, canvasHeight, x1, y1, x2, y2) => {
+    const pad = 30; // 20 (lineWidth) + 10 (shadow padding for glow removal)
+    const minX = Math.floor(Math.min(x1, x2)) - pad;
+    const minY = Math.floor(Math.min(y1, y2)) - pad;
+    const maxX = Math.ceil(Math.max(x1, x2)) + pad;
+    const maxY = Math.ceil(Math.max(y1, y2)) + pad;
+
+    const sx = Math.max(0, minX);
+    const sy = Math.max(0, minY);
+    const sw = Math.min(canvasWidth - sx, maxX - sx);
+    const sh = Math.min(canvasHeight - sy, maxY - sy);
+
+    let beforeData = null;
+    if (sw > 0 && sh > 0) {
+        beforeData = ctx.getImageData(sx, sy, sw, sh).data;
+    }
+
+    // Execute the actual erasure on the canvas
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    let pixelsErased = 0;
+    if (beforeData && sw > 0 && sh > 0) {
+        const afterData = ctx.getImageData(sx, sy, sw, sh).data;
+        for (let i = 3; i < beforeData.length; i += 4) {
+            // Check alpha channel to see if ink was removed
+            if (beforeData[i] > 0 && afterData[i] < beforeData[i]) {
+                pixelsErased += (beforeData[i] - afterData[i]) / 255;
+            }
+        }
+    }
+    // Convert cleared area back to equivalent linear stroke distance (width = ~5)
+    return pixelsErased / 5;
+};
+
 const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const canvasRef = useRef(null);
     const [localTimeLeft, setLocalTimeLeft] = useState(0);
@@ -195,13 +233,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // True Eraser Logic
+        // True Eraser Logic - configured to clean up outer glows too
         if (color === 'eraser') {
             ctx.globalCompositeOperation = 'destination-out';
             ctx.lineWidth = 20;
             ctx.strokeStyle = 'rgba(0,0,0,1)';
-            ctx.shadowBlur = 0;
-            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 15; // Emits a soft masking shadow to beautifully wipe away surrounding stroke glows
+            ctx.shadowColor = 'rgba(0,0,0,1)';
             return;
         }
 
@@ -233,7 +271,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const redraw = useCallback(() => {
         const canvas = canvasRef.current;
         if(!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.clearRect(0,0, canvas.width, canvas.height);
         
         initialDrawingsRef.current.forEach(data => {
@@ -289,35 +327,45 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             const canvas = canvasRef.current;
             if(!canvas || !lines) return;
             
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
             
             ctx.save();
             applyStrokeStyle(ctx, c, g, gc);
             
-            ctx.beginPath();
-            for (let i = 0; i < lines.length; i += 4) {
-                ctx.moveTo(lines[i], lines[i+1]);
-                ctx.lineTo(lines[i+2], lines[i+3]);
+            if (c === 'eraser') {
+                let totalRefund = 0;
+                for (let i = 0; i < lines.length; i += 4) {
+                    const dist = Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
+                    const refund = applyEraserStrokeAndGetRefund(ctx, canvas.width, canvas.height, lines[i], lines[i+1], lines[i+2], lines[i+3]);
+                    // Cap the refund to what it would normally cost to draw this segment
+                    totalRefund += Math.min(refund, Math.max(5, dist));
+                }
+                
+                if (!isDrawer) {
+                    inkUsedRef.current = Math.max(0, inkUsedRef.current - totalRefund);
+                    updateInkUIRef.current();
+                }
+            } else {
+                ctx.beginPath();
+                for (let i = 0; i < lines.length; i += 4) {
+                    ctx.moveTo(lines[i], lines[i+1]);
+                    ctx.lineTo(lines[i+2], lines[i+3]);
+                }
+                ctx.stroke();
+                
+                if (!isDrawer) {
+                    let strokeLength = 0;
+                    for (let i = 0; i < lines.length; i += 4) {
+                        strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
+                    }
+                    inkUsedRef.current += strokeLength;
+                    updateInkUIRef.current();
+                }
             }
-            ctx.stroke();
             
             ctx.restore();
             
             initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc });
-            
-            if (!isDrawer) {
-                let strokeLength = 0;
-                for (let i = 0; i < lines.length; i += 4) {
-                    strokeLength += Math.hypot(lines[i+2] - lines[i], lines[i+3] - lines[i+1]);
-                }
-                
-                if (c === 'eraser') {
-                    inkUsedRef.current = Math.max(0, inkUsedRef.current - strokeLength);
-                } else {
-                    inkUsedRef.current += strokeLength;
-                }
-                updateInkUIRef.current();
-            }
         };
         socket.on('live_draw', handleLiveDraw);
         return () => socket.off('live_draw', handleLiveDraw);
@@ -344,14 +392,24 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         lastPosRef.current = pos;
         
         const tapPos = { x: pos.x + 0.1, y: pos.y + 0.1 };
-        const ctx = canvasRef.current.getContext('2d');
+        const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
         
         ctx.save();
         applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
-        ctx.beginPath();
-        ctx.moveTo(pos.x, pos.y);
-        ctx.lineTo(tapPos.x, tapPos.y);
-        ctx.stroke();
+        
+        if (selectedColor === 'eraser') {
+            const refund = applyEraserStrokeAndGetRefund(ctx, canvasRef.current.width, canvasRef.current.height, pos.x, pos.y, tapPos.x, tapPos.y);
+            const actualRefund = Math.min(refund, 5); // Taps are minimal distance, allow up to 5 refund based on removed pixels
+            inkUsedRef.current = Math.max(0, inkUsedRef.current - actualRefund);
+            localInkRef.current['total'] = inkUsedRef.current;
+            updateInkUI();
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+            ctx.lineTo(tapPos.x, tapPos.y);
+            ctx.stroke();
+        }
+        
         ctx.restore();
         
         currentLineRef.current.push(pos.x, pos.y, tapPos.x, tapPos.y);
@@ -369,9 +427,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         
-        if (selectedColor === 'eraser') {
-            inkUsedRef.current = Math.max(0, inkUsedRef.current - dist);
-        } else {
+        // Handle Ink Capacity Checks for standard pens
+        if (selectedColor !== 'eraser') {
             if (inkUsedRef.current + dist > currentMaxInkRef.current) {
                 stopDraw(e); 
                 if (!hasMaxInk) {
@@ -382,19 +439,29 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             inkUsedRef.current += dist;
         }
 
-        localInkRef.current['total'] = inkUsedRef.current; 
-        updateInkUI();
-        
-        const ctx = canvasRef.current.getContext('2d');
+        const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
         
         ctx.save();
         applyStrokeStyle(ctx, selectedColor, glowEnabled, glowColor);
-        ctx.beginPath();
-        ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
-        ctx.lineTo(newPos.x, newPos.y);
-        ctx.stroke();
+        
+        if (selectedColor === 'eraser') {
+            // Process pixel-perfect intersection refund
+            const refund = applyEraserStrokeAndGetRefund(ctx, canvasRef.current.width, canvasRef.current.height, lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
+            // Cap to distance to prevent farming ink from erasing heavy glow areas
+            const actualRefund = Math.min(refund, dist);
+            inkUsedRef.current = Math.max(0, inkUsedRef.current - actualRefund);
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
+            ctx.lineTo(newPos.x, newPos.y);
+            ctx.stroke();
+        }
+        
         ctx.restore();
 
+        localInkRef.current['total'] = inkUsedRef.current; 
+        updateInkUI();
+        
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
         lastPosRef.current = newPos;
     };
