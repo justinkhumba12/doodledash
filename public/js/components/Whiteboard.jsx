@@ -13,6 +13,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
     const [selectedColor, setSelectedColor] = useState('black');
     
+    // New Effects State
+    const [isGlowEnabled, setIsGlowEnabled] = useState(false);
+    const [glowColor, setGlowColor] = useState('#ffff00');
+    const [isNeonEnabled, setIsNeonEnabled] = useState(false);
+
     const drawingRef = useRef(false);
     const currentLineRef = useRef([]);
     const lastPosRef = useRef({x: 0, y: 0});
@@ -120,7 +125,9 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
             setUserReactions({});
-            setSelectedColor('black'); // Reset to default color at the start of a round
+            setSelectedColor('black'); 
+            setIsGlowEnabled(false);
+            setIsNeonEnabled(false);
         }
     }, [room.status, room.turn_index]);
 
@@ -188,17 +195,35 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         }
     }, [room.status, room.round_end_time, roomData.server_time]);
 
+    const applyCanvasStyles = (ctx, c, isGlow, gColor, isNeon) => {
+        let baseColor = c === 'red' ? '#dc3545' : c === 'green' ? '#2ecc71' : (c === 'black' ? '#000000' : c);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 5;
+
+        if (isNeon) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = baseColor;
+        } else if (isGlow) {
+            ctx.strokeStyle = baseColor;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = gColor || baseColor;
+        } else {
+            ctx.strokeStyle = baseColor;
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = 'transparent';
+        }
+    };
+
     const redraw = useCallback(() => {
         const canvas = canvasRef.current;
         if(!canvas) return;
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0,0, canvas.width, canvas.height);
-        ctx.lineCap = 'round';
-        ctx.lineWidth = 5;
         
         initialDrawingsRef.current.forEach(data => {
-            const c = data.color || 'black';
-            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#2ecc71' : (c === 'black' ? '#000000' : c);
+            applyCanvasStyles(ctx, data.color, data.isGlow, data.glowColor, data.isNeon);
             const lines = data.lines;
             if (!lines) return;
             for (let i = 0; i < lines.length; i += 4) {
@@ -237,14 +262,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         if (!socket) return;
         const handleLiveDraw = (data) => {
             let lines = data.lines;
-            let c = data.color || 'black';
             const canvas = canvasRef.current;
             if(!canvas || !lines) return;
             
             const ctx = canvas.getContext('2d');
-            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#2ecc71' : (c === 'black' ? '#000000' : c);
-            ctx.lineCap = 'round';
-            ctx.lineWidth = 5;
+            applyCanvasStyles(ctx, data.color, data.isGlow, data.glowColor, data.isNeon);
+            
             for (let i = 0; i < lines.length; i += 4) {
                 ctx.beginPath();
                 ctx.moveTo(lines[i], lines[i+1]);
@@ -252,7 +275,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 ctx.stroke();
             }
             
-            initialDrawingsRef.current.push({ lines, color: c });
+            initialDrawingsRef.current.push({ 
+                lines, 
+                color: data.color || 'black',
+                isGlow: data.isGlow,
+                glowColor: data.glowColor,
+                isNeon: data.isNeon
+            });
             
             if (!isDrawer) {
                 let strokeLength = 0;
@@ -314,7 +343,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.beginPath();
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
-        ctx.strokeStyle = selectedColor === 'red' ? '#dc3545' : selectedColor === 'green' ? '#2ecc71' : '#000000';
+        applyCanvasStyles(ctx, selectedColor, isGlowEnabled, glowColor, isNeonEnabled);
         ctx.stroke();
 
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
@@ -324,13 +353,16 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const flushDrawQueue = useCallback(() => {
         if (drawQueueRef.current.length > 0) {
             const grouped = {};
-            // Group strokes by their original color to maintain efficiency while supporting distinct colors
+            // Group strokes by all styling attributes
             drawQueueRef.current.forEach(cmd => {
-                if (!grouped[cmd.color]) grouped[cmd.color] = [];
-                grouped[cmd.color].push(...cmd.lines);
+                const key = `${cmd.color}_${cmd.isGlow}_${cmd.glowColor}_${cmd.isNeon}`;
+                if (!grouped[key]) {
+                    grouped[key] = { lines: [], color: cmd.color, isGlow: cmd.isGlow, glowColor: cmd.glowColor, isNeon: cmd.isNeon };
+                }
+                grouped[key].lines.push(...cmd.lines);
             });
-            Object.keys(grouped).forEach(color => {
-                if (socket) socket.emit('draw', { lines: grouped[color], color });
+            Object.values(grouped).forEach(payload => {
+                if (socket) socket.emit('draw', payload);
             });
             drawQueueRef.current = [];
         }
@@ -343,7 +375,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
         
         if(currentLineRef.current.length > 0) {
-            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor });
+            drawQueueRef.current.push({ 
+                lines: [...currentLineRef.current], 
+                color: selectedColor,
+                isGlow: isGlowEnabled,
+                glowColor: glowColor,
+                isNeon: isNeonEnabled
+            });
         }
         
         if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
@@ -395,33 +433,65 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 )}
             </div>
 
-            {/* Ink Color Selector */}
+            {/* Ink Color & Effects Selector */}
             {isDrawer && isDrawingPhase && (
-                <div className="d-flex justify-content-center gap-3 mb-2 w-100">
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#000000', 
-                                outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('black')}
-                            title="Black Ink"></button>
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#dc3545', 
-                                outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('red')}
-                            title="Red Ink"></button>
-                    <button className="btn rounded-circle p-0 transition"
-                            style={{
-                                width: '32px', height: '32px', backgroundColor: '#2ecc71', 
-                                outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
-                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-                            }} 
-                            onClick={() => setSelectedColor('green')}
-                            title="Green Ink"></button>
+                <div className="d-flex flex-column align-items-center gap-2 mb-2 w-100">
+                    <div className="d-flex justify-content-center gap-3 w-100">
+                        <button className="btn rounded-circle p-0 transition"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#000000', 
+                                    outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('black')}
+                                title="Black Ink"></button>
+                        <button className="btn rounded-circle p-0 transition"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#dc3545', 
+                                    outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('red')}
+                                title="Red Ink"></button>
+                        <button className="btn rounded-circle p-0 transition"
+                                style={{
+                                    width: '32px', height: '32px', backgroundColor: '#2ecc71', 
+                                    outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
+                                    outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                                }} 
+                                onClick={() => setSelectedColor('green')}
+                                title="Green Ink"></button>
+                    </div>
+
+                    <div className="d-flex justify-content-center align-items-center gap-3 bg-white rounded-pill px-3 py-2 border shadow-sm mt-1" style={{ fontSize: '0.85rem' }}>
+                        <div className="form-check form-switch d-flex align-items-center gap-2 m-0 p-0">
+                            <input className="form-check-input m-0 custom-effect-switch cursor-pointer" type="checkbox" id="neonToggle" 
+                                   checked={isNeonEnabled} 
+                                   onChange={(e) => { 
+                                       setIsNeonEnabled(e.target.checked); 
+                                       if(e.target.checked) setIsGlowEnabled(false); 
+                                   }} />
+                            <label className="form-check-label fw-bold text-secondary cursor-pointer" htmlFor="neonToggle">Neon</label>
+                        </div>
+                        <div className="vr bg-secondary opacity-25" style={{width: '2px', height: '20px'}}></div>
+                        <div className="form-check form-switch d-flex align-items-center gap-2 m-0 p-0">
+                            <input className="form-check-input m-0 custom-effect-switch cursor-pointer" type="checkbox" id="glowToggle" 
+                                   checked={isGlowEnabled} 
+                                   onChange={(e) => { 
+                                       setIsGlowEnabled(e.target.checked); 
+                                       if(e.target.checked) setIsNeonEnabled(false); 
+                                   }} />
+                            <label className="form-check-label fw-bold text-secondary cursor-pointer" htmlFor="glowToggle">Glow</label>
+                        </div>
+                        {isGlowEnabled && (
+                            <div className="d-flex align-items-center gap-1 ms-1 fade-in-scale">
+                                <input type="color" className="form-control form-control-color p-0 border-0 color-picker-input shadow-sm cursor-pointer" 
+                                       value={glowColor} 
+                                       onChange={e => setGlowColor(e.target.value)} 
+                                       title="Choose Glow Color" />
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 

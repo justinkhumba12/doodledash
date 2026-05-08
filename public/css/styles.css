@@ -92,6 +92,36 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     color: #94a3b8;
 }
 
+/* Glow & Neon Switch Styles */
+.custom-effect-switch:checked {
+    background-color: var(--primary) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.6) !important;
+}
+.custom-effect-switch:focus {
+    box-shadow: 0 0 0 0.25rem rgba(99, 102, 241, 0.25) !important;
+}
+.color-picker-input {
+    width: 30px;
+    height: 30px;
+    border-radius: 50% !important;
+    overflow: hidden;
+}
+.color-picker-input::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+.color-picker-input::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+}
+.fade-in-scale {
+    animation: fadeInScale 0.2s ease-out forwards;
+}
+@keyframes fadeInScale {
+    0% { opacity: 0; transform: scale(0.8); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
 /* Utility Ext. */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

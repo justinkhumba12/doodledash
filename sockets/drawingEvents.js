@@ -4,12 +4,21 @@ const { getRoom, saveRoom } = require('../roomManager');
 module.exports = (io, socket, shared) => {
     const { calculateStrokeLength } = shared;
 
+    // Server-side validation helpers
+    const isValidColor = (c) => typeof c === 'string' && (['black', 'red', 'green'].includes(c) || /^#[0-9A-Fa-f]{6}$/i.test(c));
+
     socket.on('request_initial_drawings', async () => {
         const currentRoom = socket.data.currentRoom;
         if (currentRoom) {
             const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
             const drawings = rawDrawings.map(d => JSON.parse(d));
-            socket.emit('sync_initial_drawings', drawings.map(d => ({ lines: d.lines, color: d.color })));
+            socket.emit('sync_initial_drawings', drawings.map(d => ({ 
+                lines: d.lines, 
+                color: d.color,
+                isGlow: d.isGlow,
+                glowColor: d.glowColor,
+                isNeon: d.isNeon
+            })));
         }
     });
 
@@ -20,7 +29,20 @@ module.exports = (io, socket, shared) => {
 
         const room = await getRoom(currentRoom);
         if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-            const drawObj = { lines: data.lines, color: data.color || 'black' };
+            // Apply sanitization and strictly valid types to prevent abuse via custom payloads
+            const sColor = isValidColor(data.color) ? data.color : 'black';
+            const sGlow = !!data.isGlow;
+            const sNeon = !!data.isNeon;
+            const sGlowColor = isValidColor(data.glowColor) ? data.glowColor : '#ffff00';
+
+            const drawObj = { 
+                lines: data.lines, 
+                color: sColor,
+                isGlow: sGlow,
+                glowColor: sGlowColor,
+                isNeon: sNeon
+            };
+            
             await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
             await redis.del(`room:${currentRoom}:redo`);
             
