@@ -9,7 +9,7 @@ module.exports = {
     WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
     CREDITS_PER_STAR: parseInt(process.env.CREDITS_PER_STAR) || 1,
     INK_CONFIG: {
-        black: { free: 2500, extra: 2500, cost: 0.5 }
+        total: { free: 2500, extra: 2500, cost: 0.5 }
     },
     CORS_OPTIONS: {
         origin: "*",

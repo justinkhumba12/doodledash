@@ -101,31 +101,17 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     padding: 0.25rem;
 }
 
-/* Cute and Gaming Mix Button Styles */
-.kawaii-mix-btn {
-    background: linear-gradient(45deg, #ffb3ba, #ffffba, #bae1ff) !important;
+/* Enforced Gradient Tool Button Styles */
+.gradient-mix-btn {
+    background: linear-gradient(45deg, #ff007f, #7928ca, #00d2ff) !important;
     background-size: 200% 200% !important;
     animation: gradientShift 3s ease infinite;
 }
-.arcade-mix-btn {
-    background: linear-gradient(45deg, #ff0000, #ffff00, #ff8800) !important;
-    background-size: 200% 200% !important;
-    animation: gradientShift 3s ease infinite;
-}
-.galaxy-mix-btn {
-    background: linear-gradient(45deg, #2a0845, #6441A5, #ff0080) !important;
-    background-size: 200% 200% !important;
-    animation: gradientShift 3s ease infinite;
-}
-.nature-mix-btn {
-    background: linear-gradient(45deg, #11998e, #38ef7d, #11998e) !important;
-    background-size: 200% 200% !important;
-    animation: gradientShift 3s ease infinite;
-}
-.retro-mix-btn {
-    background: linear-gradient(45deg, #f12711, #f5af19, #f12711) !important;
-    background-size: 200% 200% !important;
-    animation: gradientShift 3s ease infinite;
+
+/* Eraser Button Pattern Style */
+.eraser-btn {
+    background: repeating-linear-gradient(45deg, #e2e8f0, #e2e8f0 5px, #ffffff 5px, #ffffff 10px) !important;
+    border: 2px solid #cbd5e1 !important;
 }
 
 @keyframes gradientShift {
