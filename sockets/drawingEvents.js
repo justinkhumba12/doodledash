@@ -3,13 +3,15 @@ const { getRoom, saveRoom } = require('../roomManager');
 
 module.exports = (io, socket, shared) => {
     const { calculateStrokeLength } = shared;
-    const ALLOWED_COLORS = ['black', 'red', 'green', 'kawaii-mix', 'arcade-mix', 'galaxy-mix', 'nature-mix', 'retro-mix'];
+    // Magic-mix and eraser added to ALLOWED_COLORS validator
+    const ALLOWED_COLORS = ['black', 'red', 'green', 'magic-mix', 'eraser'];
 
     socket.on('request_initial_drawings', async () => {
         const currentRoom = socket.data.currentRoom;
         if (currentRoom) {
             const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
             const drawings = rawDrawings.map(d => JSON.parse(d));
+            
             socket.emit('sync_initial_drawings', drawings.map(d => ({ 
                 lines: d.lines, 
                 color: d.color, 
@@ -47,7 +49,7 @@ module.exports = (io, socket, shared) => {
 
             const room = await getRoom(currentRoom);
             if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-                let totalStrokeLength = 0;
+                let inkChange = 0;
                 const validDrawObjects = [];
 
                 // Group batched lines by their characteristics to optimize Redis and networking
@@ -58,7 +60,14 @@ module.exports = (io, socket, shared) => {
                         groupedDraws[key] = { lines: [], color: draw.color, glow: draw.glow, glowColor: draw.glowColor };
                     }
                     groupedDraws[key].lines.push(...draw.lines);
-                    totalStrokeLength += calculateStrokeLength(draw.lines);
+                    
+                    const strokeLen = calculateStrokeLength(draw.lines);
+                    // Server-side Ink calculations: Refund ink if erasing, deduct if drawing
+                    if (draw.color === 'eraser') {
+                        inkChange -= strokeLen;
+                    } else {
+                        inkChange += strokeLen;
+                    }
                 }
 
                 // Push unified drawing blocks
@@ -69,12 +78,21 @@ module.exports = (io, socket, shared) => {
                 }
 
                 if (validDrawObjects.length > 0) {
+                    // Maximum of 3 actions tracker for undo/redo limit
+                    await redis.incr(`room:${currentRoom}:undo_count`);
+                    let currentUndoCount = parseInt(await redis.get(`room:${currentRoom}:undo_count`) || '0');
+                    if (currentUndoCount > 3) {
+                        currentUndoCount = 3;
+                        await redis.set(`room:${currentRoom}:undo_count`, 3);
+                    }
+
+                    // Drawing clears redo history naturally
                     await redis.del(`room:${currentRoom}:redo`);
 
                     const member = room.members.find(m => m.user_id === currentUser);
                     if (member) {
                         member.ink_used = member.ink_used || {};
-                        const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + totalStrokeLength;
+                        const newTotal = Math.max(0, (member.ink_used['total'] || member.ink_used['black'] || 0) + inkChange);
                         member.ink_used['total'] = newTotal;
                         
                         await saveRoom(room);
@@ -86,8 +104,7 @@ module.exports = (io, socket, shared) => {
                         socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
                     });
                     
-                    const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
-                    io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: 0 });
+                    io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: currentUndoCount, redo_steps: 0 });
                 }
             }
         }, 150); // 150ms throttle delay to receive chunks and process
@@ -102,6 +119,7 @@ module.exports = (io, socket, shared) => {
         if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
             await redis.del(`room:${currentRoom}:drawings`);
             await redis.del(`room:${currentRoom}:redo`);
+            await redis.del(`room:${currentRoom}:undo_count`);
             
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
@@ -122,18 +140,25 @@ module.exports = (io, socket, shared) => {
         if (!currentUser || !currentRoom) return;
 
         const room = await getRoom(currentRoom);
-        if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+        const currentUndoCount = parseInt(await redis.get(`room:${currentRoom}:undo_count`) || '0');
+        
+        // Capped to a maximum of 3 historical undo limits
+        if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser && currentUndoCount > 0) {
             const lastDrawStr = await redis.rpop(`room:${currentRoom}:drawings`);
             if (lastDrawStr) {
                 await redis.lpush(`room:${currentRoom}:redo`, lastDrawStr);
+                await redis.decr(`room:${currentRoom}:undo_count`);
                 
                 const lastDraw = JSON.parse(lastDrawStr);
                 const strokeLength = calculateStrokeLength(lastDraw.lines);
 
+                // Reversing an eraser restores the ink; reversing a draw refunds ink.
+                let inkChange = lastDraw.color === 'eraser' ? strokeLength : -strokeLength;
+
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
                     member.ink_used = member.ink_used || {};
-                    const newTotal = Math.max(0, (member.ink_used['total'] || member.ink_used['black'] || 0) - strokeLength);
+                    const newTotal = Math.max(0, (member.ink_used['total'] || member.ink_used['black'] || 0) + inkChange);
                     member.ink_used['total'] = newTotal;
                     
                     await saveRoom(room);
@@ -144,9 +169,9 @@ module.exports = (io, socket, shared) => {
                 const drawings = rawDrawings.map(d => JSON.parse(d));
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
 
-                const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                const newUndoCount = parseInt(await redis.get(`room:${currentRoom}:undo_count`) || '0');
                 const redoLen = await redis.llen(`room:${currentRoom}:redo`);
-                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: redoLen });
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: newUndoCount, redo_steps: redoLen });
             }
         }
     });
@@ -157,18 +182,24 @@ module.exports = (io, socket, shared) => {
         if (!currentUser || !currentRoom) return;
 
         const room = await getRoom(currentRoom);
-        if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
+        const redoLenCheck = await redis.llen(`room:${currentRoom}:redo`);
+        
+        if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser && redoLenCheck > 0) {
             const nextDrawStr = await redis.lpop(`room:${currentRoom}:redo`);
             if (nextDrawStr) {
                 await redis.rpush(`room:${currentRoom}:drawings`, nextDrawStr);
+                await redis.incr(`room:${currentRoom}:undo_count`);
                 
                 const nextDraw = JSON.parse(nextDrawStr);
                 const strokeLength = calculateStrokeLength(nextDraw.lines);
 
+                // Redoing an eraser deducts the ink; redoing a draw adds ink.
+                let inkChange = nextDraw.color === 'eraser' ? -strokeLength : strokeLength;
+
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
                     member.ink_used = member.ink_used || {};
-                    const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + strokeLength;
+                    const newTotal = Math.max(0, (member.ink_used['total'] || member.ink_used['black'] || 0) + inkChange);
                     member.ink_used['total'] = newTotal;
                     
                     await saveRoom(room);
@@ -179,9 +210,9 @@ module.exports = (io, socket, shared) => {
                 const drawings = rawDrawings.map(d => JSON.parse(d));
                 io.to(`room_${currentRoom}`).emit('sync_initial_drawings', drawings);
 
-                const drawingsLen = await redis.llen(`room:${currentRoom}:drawings`);
+                const newUndoCount = parseInt(await redis.get(`room:${currentRoom}:undo_count`) || '0');
                 const redoLen = await redis.llen(`room:${currentRoom}:redo`);
-                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: drawingsLen, redo_steps: redoLen });
+                io.to(`room_${currentRoom}`).emit('update_undo_redo', { undo_steps: newUndoCount, redo_steps: redoLen });
             }
         }
     });
