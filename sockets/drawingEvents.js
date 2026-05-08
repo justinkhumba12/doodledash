@@ -16,7 +16,8 @@ module.exports = (io, socket, shared) => {
                 lines: d.lines, 
                 color: d.color, 
                 glow: !!d.glow,
-                glowColor: d.glowColor || '#00ffff'
+                glowColor: d.glowColor || '#00ffff',
+                refundAmount: d.refundAmount || 0
             })));
         }
     });
@@ -29,12 +30,13 @@ module.exports = (io, socket, shared) => {
         // Strict Server-Side Validation logic
         const safeColor = ALLOWED_COLORS.includes(data.color) ? data.color : 'black';
         const safeGlow = Boolean(data.glow);
+        const safeRefundAmount = typeof data.refundAmount === 'number' ? data.refundAmount : 0;
         
         // Validate glowColor (accepts standard hex codes or letters, defaults to cyan fallback)
         const validGlowColorRegex = /^(#[0-9A-Fa-f]{3,8}|[a-zA-Z]+)$/;
         const safeGlowColor = validGlowColorRegex.test(data.glowColor) ? data.glowColor : '#00ffff';
 
-        const cleanData = { lines: data.lines, color: safeColor, glow: safeGlow, glowColor: safeGlowColor };
+        const cleanData = { lines: data.lines, color: safeColor, glow: safeGlow, glowColor: safeGlowColor, refundAmount: safeRefundAmount };
 
         // Server-Side Rate Limiter & Batching (Reduces Spam/Payload)
         if (!socket.drawQueue) socket.drawQueue = [];
@@ -57,14 +59,17 @@ module.exports = (io, socket, shared) => {
                 for (const draw of batchedDraws) {
                     const key = `${draw.color}_${draw.glow}_${draw.glowColor}`;
                     if (!groupedDraws[key]) {
-                        groupedDraws[key] = { lines: [], color: draw.color, glow: draw.glow, glowColor: draw.glowColor };
+                        groupedDraws[key] = { lines: [], color: draw.color, glow: draw.glow, glowColor: draw.glowColor, refundAmount: 0 };
                     }
                     groupedDraws[key].lines.push(...draw.lines);
                     
                     const strokeLen = calculateStrokeLength(draw.lines);
                     // Server-side Ink calculations: Refund ink if erasing, deduct if drawing
                     if (draw.color === 'eraser') {
-                        inkChange -= strokeLen;
+                        // Clamp the exact client-provided refund amount securely against physical stroke boundaries
+                        const clampedRefund = Math.min(draw.refundAmount || 0, strokeLen);
+                        groupedDraws[key].refundAmount += clampedRefund;
+                        inkChange -= clampedRefund;
                     } else {
                         inkChange += strokeLen;
                     }
@@ -152,8 +157,13 @@ module.exports = (io, socket, shared) => {
                 const lastDraw = JSON.parse(lastDrawStr);
                 const strokeLength = calculateStrokeLength(lastDraw.lines);
 
-                // Reversing an eraser restores the ink; reversing a draw refunds ink.
-                let inkChange = lastDraw.color === 'eraser' ? strokeLength : -strokeLength;
+                // Reversing an eraser restores the exact numerical ink removed; reversing a draw refunds physical ink.
+                let inkChange = 0;
+                if (lastDraw.color === 'eraser') {
+                    inkChange = typeof lastDraw.refundAmount === 'number' ? lastDraw.refundAmount : strokeLength;
+                } else {
+                    inkChange = -strokeLength;
+                }
 
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
@@ -193,8 +203,13 @@ module.exports = (io, socket, shared) => {
                 const nextDraw = JSON.parse(nextDrawStr);
                 const strokeLength = calculateStrokeLength(nextDraw.lines);
 
-                // Redoing an eraser deducts the ink; redoing a draw adds ink.
-                let inkChange = nextDraw.color === 'eraser' ? -strokeLength : strokeLength;
+                // Redoing an eraser deducts the exact numerical ink required; redoing a draw deducts physical ink.
+                let inkChange = 0;
+                if (nextDraw.color === 'eraser') {
+                    inkChange = typeof nextDraw.refundAmount === 'number' ? -nextDraw.refundAmount : -strokeLength;
+                } else {
+                    inkChange = strokeLength;
+                }
 
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {

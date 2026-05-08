@@ -35,8 +35,9 @@ const applyEraserStrokeAndGetRefund = (ctx, canvasWidth, canvasHeight, x1, y1, x
     if (beforeData && sw > 0 && sh > 0) {
         const afterData = ctx.getImageData(sx, sy, sw, sh).data;
         for (let i = 3; i < beforeData.length; i += 4) {
-            // Check alpha channel to see if ink was removed
-            if (beforeData[i] > 0 && afterData[i] < beforeData[i]) {
+            // Check alpha channel to see if ink was removed.
+            // Require > 200 alpha to ensure lightly opaque pixels from glow effects are ignored.
+            if (beforeData[i] > 200 && afterData[i] < beforeData[i]) {
                 pixelsErased += (beforeData[i] - afterData[i]) / 255;
             }
         }
@@ -58,6 +59,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const lastPosRef = useRef({x: 0, y: 0});
     const inkUsedRef = useRef(0);
     const localInkRef = useRef({});
+    const currentRefundRef = useRef(0); // Tracks exact eraser refund calculated during stroke
     
     const initialDrawingsRef = useRef([]);
     
@@ -342,7 +344,9 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 }
                 
                 if (!isDrawer) {
-                    inkUsedRef.current = Math.max(0, inkUsedRef.current - totalRefund);
+                    // Use exact server-provided refund amount if sent to stay synchronized, otherwise recalculate
+                    let appliedRefund = typeof data.refundAmount === 'number' ? data.refundAmount : totalRefund;
+                    inkUsedRef.current = Math.max(0, inkUsedRef.current - appliedRefund);
                     updateInkUIRef.current();
                 }
             } else {
@@ -365,7 +369,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             
             ctx.restore();
             
-            initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc });
+            initialDrawingsRef.current.push({ lines, color: c, glow: g, glowColor: gc, refundAmount: data.refundAmount });
         };
         socket.on('live_draw', handleLiveDraw);
         return () => socket.off('live_draw', handleLiveDraw);
@@ -402,8 +406,10 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             const actualRefund = Math.min(refund, 5); // Taps are minimal distance, allow up to 5 refund based on removed pixels
             inkUsedRef.current = Math.max(0, inkUsedRef.current - actualRefund);
             localInkRef.current['total'] = inkUsedRef.current;
+            currentRefundRef.current = actualRefund; // Track exact refund directly
             updateInkUI();
         } else {
+            currentRefundRef.current = 0; // Reset for drawing tools
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);
             ctx.lineTo(tapPos.x, tapPos.y);
@@ -450,6 +456,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             // Cap to distance to prevent farming ink from erasing heavy glow areas
             const actualRefund = Math.min(refund, dist);
             inkUsedRef.current = Math.max(0, inkUsedRef.current - actualRefund);
+            currentRefundRef.current += actualRefund; // Accumulate exact stroke refund amount
         } else {
             ctx.beginPath();
             ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
@@ -471,8 +478,11 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             const grouped = {};
             drawQueueRef.current.forEach(cmd => {
                 const key = `${cmd.color}_${cmd.glow}_${cmd.glowColor}`;
-                if (!grouped[key]) grouped[key] = { lines: [], color: cmd.color, glow: cmd.glow, glowColor: cmd.glowColor };
+                if (!grouped[key]) grouped[key] = { lines: [], color: cmd.color, glow: cmd.glow, glowColor: cmd.glowColor, refundAmount: 0 };
                 grouped[key].lines.push(...cmd.lines);
+                if (cmd.color === 'eraser') {
+                    grouped[key].refundAmount += (cmd.refundAmount || 0); // Aggregate total refund amount
+                }
             });
             Object.values(grouped).forEach(group => {
                 if (socket) socket.emit('draw', group);
@@ -488,7 +498,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
         
         if(currentLineRef.current.length > 0) {
-            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor, glow: glowEnabled, glowColor: glowColor });
+            drawQueueRef.current.push({ 
+                lines: [...currentLineRef.current], 
+                color: selectedColor, 
+                glow: glowEnabled, 
+                glowColor: glowColor,
+                refundAmount: currentRefundRef.current || 0 
+            });
         }
         
         if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
