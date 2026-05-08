@@ -20,7 +20,7 @@ module.exports = (io, socket, shared) => {
 
         const room = await getRoom(currentRoom);
         if (room && room.status === 'DRAWING' && room.current_drawer_id === currentUser) {
-            const drawObj = { lines: data.lines, color: 'black' };
+            const drawObj = { lines: data.lines, color: data.color || 'black' };
             await redis.rpush(`room:${currentRoom}:drawings`, JSON.stringify(drawObj));
             await redis.del(`room:${currentRoom}:redo`);
             
@@ -29,9 +29,13 @@ module.exports = (io, socket, shared) => {
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
                 member.ink_used = member.ink_used || {};
-                member.ink_used['black'] = (member.ink_used['black'] || 0) + strokeLength;
+                
+                // Track usage across a unified 'total' property, inheriting legacy 'black' value if present
+                const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + strokeLength;
+                member.ink_used['total'] = newTotal;
+                
                 await saveRoom(room);
-                io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                io.to(`room_${currentRoom}`).emit('update_ink', { used: newTotal });
             }
 
             socket.to(`room_${currentRoom}`).emit('live_draw', drawObj);
@@ -54,9 +58,9 @@ module.exports = (io, socket, shared) => {
             const member = room.members.find(m => m.user_id === currentUser);
             if (member) {
                 member.ink_used = member.ink_used || {};
-                member.ink_used['black'] = 0;
+                member.ink_used['total'] = 0;
                 await saveRoom(room);
-                io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: 0 });
+                io.to(`room_${currentRoom}`).emit('update_ink', { used: 0 });
             }
 
             io.to(`room_${currentRoom}`).emit('sync_initial_drawings', []);
@@ -81,9 +85,11 @@ module.exports = (io, socket, shared) => {
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
                     member.ink_used = member.ink_used || {};
-                    member.ink_used['black'] = Math.max(0, (member.ink_used['black'] || 0) - strokeLength);
+                    const newTotal = Math.max(0, (member.ink_used['total'] || member.ink_used['black'] || 0) - strokeLength);
+                    member.ink_used['total'] = newTotal;
+                    
                     await saveRoom(room);
-                    io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                    io.to(`room_${currentRoom}`).emit('update_ink', { used: newTotal });
                 }
 
                 const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);
@@ -114,9 +120,11 @@ module.exports = (io, socket, shared) => {
                 const member = room.members.find(m => m.user_id === currentUser);
                 if (member) {
                     member.ink_used = member.ink_used || {};
-                    member.ink_used['black'] = (member.ink_used['black'] || 0) + strokeLength;
+                    const newTotal = (member.ink_used['total'] || member.ink_used['black'] || 0) + strokeLength;
+                    member.ink_used['total'] = newTotal;
+                    
                     await saveRoom(room);
-                    io.to(`room_${currentRoom}`).emit('update_ink', { color: 'black', used: member.ink_used['black'] });
+                    io.to(`room_${currentRoom}`).emit('update_ink', { used: newTotal });
                 }
 
                 const rawDrawings = await redis.lrange(`room:${currentRoom}:drawings`, 0, -1);

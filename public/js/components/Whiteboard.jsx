@@ -11,6 +11,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const canvasRef = useRef(null);
     const [localTimeLeft, setLocalTimeLeft] = useState(0);
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
+    const [selectedColor, setSelectedColor] = useState('black');
     
     const drawingRef = useRef(false);
     const currentLineRef = useRef([]);
@@ -36,7 +37,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const drawerInkExtraObj = drawerMember.ink_extra || {};
     
     const inkConfig = systemConfig?.inkConfig || { free: 2500, extra: 2500, cost: 0.5, max_buys: 1 };
-    const currentMaxInk = inkConfig.free + (drawerInkExtraObj['black'] || 0);
+    const currentMaxInk = inkConfig.free + (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0);
 
     const maintActive = systemConfig?.maintenance?.active;
     const maintEndTime = systemConfig?.maintenance?.end_time;
@@ -76,7 +77,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             text.innerText = `${Math.floor(inkLeft)} / ${max}`;
         }
         
-        const buysMade = (drawerInkExtraObj['black'] || 0) / inkConfig.extra;
+        const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         if (buyBtn) {
             buyBtn.style.display = (isDrawer && inkLeft <= 0 && !hasMaxInk) ? 'inline-block' : 'none';
@@ -99,19 +100,18 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             return;
         }
         const drawerInkUsedObj = drawerMember.ink_used || {};
-        localInkRef.current['black'] = drawerInkUsedObj['black'] || 0;
-        inkUsedRef.current = localInkRef.current['black'] || 0;
+        const totalUsed = drawerInkUsedObj['total'] || drawerInkUsedObj['black'] || 0;
+        localInkRef.current['total'] = totalUsed;
+        inkUsedRef.current = totalUsed;
         updateInkUI();
     }, [room.status, drawerMember.ink_used, updateInkUI]);
 
     useEffect(() => {
         if (!socket) return;
-        const handleUpdateInk = ({ color, used }) => {
-            if (color === 'black') {
-                inkUsedRef.current = used;
-                localInkRef.current['black'] = used;
-                updateInkUIRef.current();
-            }
+        const handleUpdateInk = ({ used }) => {
+            inkUsedRef.current = used;
+            localInkRef.current['total'] = used;
+            updateInkUIRef.current();
         };
         socket.on('update_ink', handleUpdateInk);
         return () => socket.off('update_ink', handleUpdateInk);
@@ -120,6 +120,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     useEffect(() => {
         if (room.status === 'PRE_DRAW' || room.status === 'WAITING') {
             setUserReactions({});
+            setSelectedColor('black'); // Reset to default color at the start of a round
         }
     }, [room.status, room.turn_index]);
 
@@ -196,7 +197,8 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.lineWidth = 5;
         
         initialDrawingsRef.current.forEach(data => {
-            ctx.strokeStyle = data.color === 'black' ? '#000000' : (data.color || '#000000');
+            const c = data.color || 'black';
+            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#198754' : (c === 'black' ? '#000000' : c);
             const lines = data.lines;
             if (!lines) return;
             for (let i = 0; i < lines.length; i += 4) {
@@ -235,12 +237,12 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         if (!socket) return;
         const handleLiveDraw = (data) => {
             let lines = data.lines;
-            let color = data.color || 'black';
+            let c = data.color || 'black';
             const canvas = canvasRef.current;
             if(!canvas || !lines) return;
             
             const ctx = canvas.getContext('2d');
-            ctx.strokeStyle = color === 'black' ? '#000000' : color;
+            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#198754' : (c === 'black' ? '#000000' : c);
             ctx.lineCap = 'round';
             ctx.lineWidth = 5;
             for (let i = 0; i < lines.length; i += 4) {
@@ -250,7 +252,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 ctx.stroke();
             }
             
-            initialDrawingsRef.current.push({ lines, color });
+            initialDrawingsRef.current.push({ lines, color: c });
             
             if (!isDrawer) {
                 let strokeLength = 0;
@@ -292,7 +294,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         const dist = Math.hypot(newPos.x - lastPosRef.current.x, newPos.y - lastPosRef.current.y);
         if (dist < 1) return; 
         
-        const buysMade = (drawerInkExtraObj['black'] || 0) / inkConfig.extra;
+        const buysMade = (drawerInkExtraObj['total'] || drawerInkExtraObj['black'] || 0) / inkConfig.extra;
         const hasMaxInk = buysMade >= inkConfig.max_buys;
         
         if (inkUsedRef.current + dist > currentMaxInkRef.current) {
@@ -304,7 +306,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         }
         
         inkUsedRef.current += dist;
-        localInkRef.current['black'] = inkUsedRef.current; 
+        localInkRef.current['total'] = inkUsedRef.current; 
 
         updateInkUI();
         
@@ -312,7 +314,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.beginPath();
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
-        ctx.strokeStyle = '#000000';
+        ctx.strokeStyle = selectedColor === 'red' ? '#dc3545' : selectedColor === 'green' ? '#198754' : '#000000';
         ctx.stroke();
 
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
@@ -321,7 +323,15 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
     const flushDrawQueue = useCallback(() => {
         if (drawQueueRef.current.length > 0) {
-            if (socket) socket.emit('draw', { lines: drawQueueRef.current });
+            const grouped = {};
+            // Group strokes by their original color to maintain efficiency while supporting distinct colors
+            drawQueueRef.current.forEach(cmd => {
+                if (!grouped[cmd.color]) grouped[cmd.color] = [];
+                grouped[cmd.color].push(...cmd.lines);
+            });
+            Object.keys(grouped).forEach(color => {
+                if (socket) socket.emit('draw', { lines: grouped[color], color });
+            });
             drawQueueRef.current = [];
         }
         emitTimeoutRef.current = null;
@@ -333,7 +343,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         try { e.target.releasePointerCapture(e.pointerId); } catch(err) {}
         
         if(currentLineRef.current.length > 0) {
-            drawQueueRef.current.push(...currentLineRef.current);
+            drawQueueRef.current.push({ lines: [...currentLineRef.current], color: selectedColor });
         }
         
         if (!emitTimeoutRef.current && drawQueueRef.current.length > 0) {
@@ -353,7 +363,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 {isDrawingPhase && isDrawer && (
                     <div className="w-100">
                         <div className="d-flex justify-content-between small fw-bold mb-1">
-                            <span className="text-primary"><i className="fas fa-tint"></i> Ink Level</span>
+                            <span className="text-primary"><i className="fas fa-tint"></i> Shared Ink Level</span>
                             <span id="inkProgressText" className="text-muted">{Math.floor(Math.max(0, currentMaxInkRef.current - (inkUsedRef.current || 0)))} / {currentMaxInkRef.current}</span>
                         </div>
                         <div className="progress shadow-sm border border-light" style={{height: '14px', borderRadius: '10px'}}>
@@ -384,6 +394,36 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                     </div>
                 )}
             </div>
+
+            {/* Ink Color Selector */}
+            {isDrawer && isDrawingPhase && (
+                <div className="d-flex justify-content-center gap-3 mb-2 w-100">
+                    <button className="btn rounded-circle p-0 transition"
+                            style={{
+                                width: '32px', height: '32px', backgroundColor: '#000000', 
+                                outline: selectedColor === 'black' ? '3px solid #0d6efd' : 'none', 
+                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                            }} 
+                            onClick={() => setSelectedColor('black')}
+                            title="Black Ink"></button>
+                    <button className="btn rounded-circle p-0 transition"
+                            style={{
+                                width: '32px', height: '32px', backgroundColor: '#dc3545', 
+                                outline: selectedColor === 'red' ? '3px solid #0d6efd' : 'none', 
+                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                            }} 
+                            onClick={() => setSelectedColor('red')}
+                            title="Red Ink"></button>
+                    <button className="btn rounded-circle p-0 transition"
+                            style={{
+                                width: '32px', height: '32px', backgroundColor: '#198754', 
+                                outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
+                                outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                            }} 
+                            onClick={() => setSelectedColor('green')}
+                            title="Green Ink"></button>
+                </div>
+            )}
 
             <div className="whiteboard-container">
                 <canvas 
