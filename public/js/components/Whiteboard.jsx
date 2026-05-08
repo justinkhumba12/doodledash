@@ -198,7 +198,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         
         initialDrawingsRef.current.forEach(data => {
             const c = data.color || 'black';
-            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#198754' : (c === 'black' ? '#000000' : c);
+            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#2ecc71' : (c === 'black' ? '#000000' : c);
             const lines = data.lines;
             if (!lines) return;
             for (let i = 0; i < lines.length; i += 4) {
@@ -242,7 +242,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             if(!canvas || !lines) return;
             
             const ctx = canvas.getContext('2d');
-            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#198754' : (c === 'black' ? '#000000' : c);
+            ctx.strokeStyle = c === 'red' ? '#dc3545' : c === 'green' ? '#2ecc71' : (c === 'black' ? '#000000' : c);
             ctx.lineCap = 'round';
             ctx.lineWidth = 5;
             for (let i = 0; i < lines.length; i += 4) {
@@ -314,7 +314,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
         ctx.beginPath();
         ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y);
         ctx.lineTo(newPos.x, newPos.y);
-        ctx.strokeStyle = selectedColor === 'red' ? '#dc3545' : selectedColor === 'green' ? '#198754' : '#000000';
+        ctx.strokeStyle = selectedColor === 'red' ? '#dc3545' : selectedColor === 'green' ? '#2ecc71' : '#000000';
         ctx.stroke();
 
         currentLineRef.current.push(lastPosRef.current.x, lastPosRef.current.y, newPos.x, newPos.y);
@@ -416,7 +416,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                             title="Red Ink"></button>
                     <button className="btn rounded-circle p-0 transition"
                             style={{
-                                width: '32px', height: '32px', backgroundColor: '#198754', 
+                                width: '32px', height: '32px', backgroundColor: '#2ecc71', 
                                 outline: selectedColor === 'green' ? '3px solid #0d6efd' : 'none', 
                                 outlineOffset: '2px', border: '2px solid white', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                             }} 
