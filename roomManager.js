@@ -168,22 +168,20 @@ async function syncRoom(roomId, io) {
                 
                 masked_word = actual_word.split('').map((char, index) => {
                     if (char === ' ') return { char: ' ', index, revealed: true };
-                    if (isDrawer || isReveal || base_hints.includes(index) || purchased_hints.includes(index)) {
+                    
+                    const isRevealed = isReveal || base_hints.includes(index) || purchased_hints.includes(index);
+                    
+                    if (isRevealed) {
                         return { char, index, revealed: true };
                     }
-                    return { char: '_', index, revealed: false };
+                    
+                    return { char: isDrawer ? char : '_', index, revealed: false };
                 });
-            }
-
-            let sanitizedWordToDraw = room.word_to_draw;
-            if (!isDrawer && room.status === 'DRAWING') {
-                sanitizedWordToDraw = null;
             }
 
             s.emit('room_sync', {
                 room: { 
                     ...room, 
-                    word_to_draw: sanitizedWordToDraw,
                     expire_at: room.expire_at ? room.expire_at.toISOString() : null,
                     break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
                     round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null,
