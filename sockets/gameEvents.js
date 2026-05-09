@@ -203,7 +203,7 @@ module.exports = (io, socket, shared) => {
             allGuessers.add(currentUser);
 
             // Strictly requiring total correct guessers to equal non-drawing members
-            if (correctGuessers.size === nonDrawers.length) {
+            if (nonDrawers.length > 0 && correctGuessers.size === nonDrawers.length) {
                 room.status = 'REVEAL';
                 room.end_reason = 'all_guessed';
                 room.break_end_time = new Date(Date.now() + 5000);
@@ -299,7 +299,7 @@ module.exports = (io, socket, shared) => {
         }
     });
 
-    socket.on('buy_hint_credit', async ({ index }) => {
+    socket.on('buy_hint_credit', async () => {
         const currentUser = socket.data.currentUser;
         const currentRoom = socket.data.currentRoom;
         if (!currentUser || !currentRoom) return;
@@ -311,7 +311,6 @@ module.exports = (io, socket, shared) => {
             }
 
             const actualWord = room.word_to_draw || '';
-            if (index < 0 || index >= actualWord.length || actualWord[index] === ' ') return;
 
             const member = room.members.find(m => m.user_id === currentUser);
             if (!member) return;
@@ -319,55 +318,27 @@ module.exports = (io, socket, shared) => {
             const purchased_hints = JSON.parse(member.purchased_hints || '[]');
             const base_hints = JSON.parse(room.base_hints || '[]');
 
-            if (!purchased_hints.includes(index) && !base_hints.includes(index)) {
-                const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
-                if (userRows.length && userRows[0].credits >= 1) {
-                    await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
-                    await redis.hincrbyfloat('user_credits', currentUser, -1);
-                    
-                    purchased_hints.push(index);
-                    member.purchased_hints = JSON.stringify(purchased_hints);
-
-                    const cId = await redis.incr('global_chat_id');
-                    const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'used a hint.', is_system: true, action_type: 'hint', created_at: new Date() };
-                    await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
-                    await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
-                    io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
-                    
-                    await saveRoom(room);
-                    await syncRoom(currentRoom, io);
-                    
-                    const userState = await getUserState(currentUser);
-                    if (userState) socket.emit('user_update', userState);
-                } else {
-                    socket.emit('create_error', 'Not enough credits.');
+            // Determine all unrevealed valid letter indices
+            const unrevealedIndices = [];
+            for (let i = 0; i < actualWord.length; i++) {
+                if (actualWord[i] !== ' ' && !base_hints.includes(i) && !purchased_hints.includes(i)) {
+                    unrevealedIndices.push(i);
                 }
             }
-        }
-    });
 
-    socket.on('buy_hint_ad', async ({ index }) => {
-        const currentUser = socket.data.currentUser;
-        const currentRoom = socket.data.currentRoom;
-        if (!currentUser || !currentRoom) return;
-
-        const room = await getRoom(currentRoom);
-        if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
-            if (room.drawing_start_time && Date.now() - new Date(room.drawing_start_time).getTime() < 15000) {
-                return socket.emit('create_error', 'Hints are disabled for the first 15 seconds!');
+            if (unrevealedIndices.length === 0) {
+                return socket.emit('create_error', 'No more letters to reveal!');
             }
 
-            const actualWord = room.word_to_draw || '';
-            if (index < 0 || index >= actualWord.length || actualWord[index] === ' ') return;
+            // Pick a random index from the unrevealed letters
+            const randomIndex = unrevealedIndices[Math.floor(Math.random() * unrevealedIndices.length)];
 
-            const member = room.members.find(m => m.user_id === currentUser);
-            if (!member) return;
-
-            const purchased_hints = JSON.parse(member.purchased_hints || '[]');
-            const base_hints = JSON.parse(room.base_hints || '[]');
-
-            if (!purchased_hints.includes(index) && !base_hints.includes(index)) {
-                purchased_hints.push(index);
+            const [userRows] = await db.query('SELECT credits FROM users WHERE tg_id = ?', [currentUser]);
+            if (userRows.length && userRows[0].credits >= 1) {
+                await db.query('UPDATE users SET credits = credits - 1 WHERE tg_id = ?', [currentUser]);
+                await redis.hincrbyfloat('user_credits', currentUser, -1);
+                
+                purchased_hints.push(randomIndex);
                 member.purchased_hints = JSON.stringify(purchased_hints);
 
                 const cId = await redis.incr('global_chat_id');
@@ -378,7 +349,60 @@ module.exports = (io, socket, shared) => {
                 
                 await saveRoom(room);
                 await syncRoom(currentRoom, io);
+                
+                const userState = await getUserState(currentUser);
+                if (userState) socket.emit('user_update', userState);
+            } else {
+                socket.emit('create_error', 'Not enough credits.');
             }
+        }
+    });
+
+    socket.on('buy_hint_ad', async () => {
+        const currentUser = socket.data.currentUser;
+        const currentRoom = socket.data.currentRoom;
+        if (!currentUser || !currentRoom) return;
+
+        const room = await getRoom(currentRoom);
+        if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
+            if (room.drawing_start_time && Date.now() - new Date(room.drawing_start_time).getTime() < 15000) {
+                return socket.emit('create_error', 'Hints are disabled for the first 15 seconds!');
+            }
+
+            const actualWord = room.word_to_draw || '';
+
+            const member = room.members.find(m => m.user_id === currentUser);
+            if (!member) return;
+
+            const purchased_hints = JSON.parse(member.purchased_hints || '[]');
+            const base_hints = JSON.parse(room.base_hints || '[]');
+
+            // Determine all unrevealed valid letter indices
+            const unrevealedIndices = [];
+            for (let i = 0; i < actualWord.length; i++) {
+                if (actualWord[i] !== ' ' && !base_hints.includes(i) && !purchased_hints.includes(i)) {
+                    unrevealedIndices.push(i);
+                }
+            }
+
+            if (unrevealedIndices.length === 0) {
+                return socket.emit('create_error', 'No more letters to reveal!');
+            }
+
+            // Pick a random index from the unrevealed letters
+            const randomIndex = unrevealedIndices[Math.floor(Math.random() * unrevealedIndices.length)];
+
+            purchased_hints.push(randomIndex);
+            member.purchased_hints = JSON.stringify(purchased_hints);
+
+            const cId = await redis.incr('global_chat_id');
+            const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'used a hint.', is_system: true, action_type: 'hint', created_at: new Date() };
+            await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
+            await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
+            io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
+            
+            await saveRoom(room);
+            await syncRoom(currentRoom, io);
         }
     });
 

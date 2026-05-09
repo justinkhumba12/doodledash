@@ -45,25 +45,46 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                 <div className="whiteboard-wrapper">
                     
                     {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
-                    <div className="w-100 d-flex flex-column align-items-center mb-3">
-                        <div className="w-100 d-flex flex-wrap justify-content-center gap-2 bg-light p-2 rounded-pill shadow-sm">
-                            {roomData.masked_word.map((item, i) => (
-                                <div 
-                                    key={i}
-                                    className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${item.revealed ? 'bg-warning text-dark border border-dark hint-reveal' : 'bg-secondary text-white cursor-pointer'} ${(!item.revealed && hintCooldown) ? 'opacity-50' : ''}`}
-                                    style={{ width: '20px', height: '20px', fontSize: '0.75rem', transition: '0.2s', padding: 0 }}
-                                    onClick={() => {
-                                        if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
-                                            if (hintCooldown) return;
-                                            setModal({ type: 'confirm_buy_hint', index: item.index });
-                                        }
-                                    }}
-                                    title={!item.revealed && roomData.room.current_drawer_id !== tgId ? (hintCooldown ? `Hints available in ${cooldownTimeLeft}s` : "Click to reveal (1 Credit)") : ""}
-                                >
-                                    {item.revealed ? item.char : '?'}
-                                </div>
-                            ))}
+                    <div className="word-hint-container w-100 d-flex flex-wrap align-items-center justify-content-center gap-3 mb-3">
+                        <div className="masked-word-box d-flex flex-wrap justify-content-center gap-2 rounded shadow-sm">
+                            {roomData.masked_word.map((item, i) => {
+                                const isDrawer = roomData.room.current_drawer_id === tgId;
+                                const showChar = isDrawer || item.revealed;
+                                const isRevealedToAll = item.revealed;
+                                const isSpace = item.char === ' ';
+
+                                let boxClass = 'hidden-letter';
+                                if (isSpace) {
+                                    boxClass = 'space-box';
+                                } else if (isRevealedToAll) {
+                                    boxClass = 'revealed-letter hint-reveal';
+                                } else if (isDrawer) {
+                                    boxClass = 'drawer-hidden-letter';
+                                }
+
+                                return (
+                                    <div 
+                                        key={i}
+                                        className={`letter-box d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${boxClass}`}
+                                    >
+                                        {showChar && !isSpace ? item.char : ''}
+                                    </div>
+                                );
+                            })}
                         </div>
+                        {roomData.room.current_drawer_id !== tgId && (
+                            <button
+                                className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-50' : ''}`}
+                                onClick={() => {
+                                    if (hintCooldown) return;
+                                    setModal({ type: 'confirm_buy_hint' });
+                                }}
+                                title={hintCooldown ? `Hints available in ${cooldownTimeLeft}s` : "Get a Hint (1 Credit)"}
+                                disabled={hintCooldown}
+                            >
+                                <i className="fas fa-lightbulb"></i>
+                            </button>
+                        )}
                     </div>
                 ) : null}
 
