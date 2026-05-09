@@ -243,9 +243,9 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 }
 
 .drawer-main-letter {
-    width: 14px;
-    height: 18px;
-    font-size: 0.75rem;
+    width: 13px;
+    height: 17px;
+    font-size: 0.65rem;
     font-weight: 800;
     text-transform: uppercase;
     display: flex;
@@ -261,7 +261,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .drawer-main-letter.space-box {
     background: transparent;
     box-shadow: none;
-    width: 10px;
+    width: 8px;
 }
 
 /* Mini Letter Styles for Drawer Secondary View */

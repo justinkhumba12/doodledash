@@ -59,8 +59,6 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                             </div>
                                         ))}
                                     </div>
-                                    
-                                    <hr className="w-100 my-2 text-muted" />
 
                                     {/* Secondary Masked Word (What guessers see) */}
                                     <div className="d-flex align-items-center justify-content-center gap-2 px-3 py-1">
@@ -80,6 +78,8 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                             })}
                                         </div>
                                     </div>
+                                    
+                                    <hr className="w-100 my-2 text-muted" />
                                 </div>
                             ) : (
                                 // Guesser View: Masked word and Hint Button
