@@ -177,6 +177,14 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     font-size: 0.65rem;
 }
 
+.drawer-hint-letter {
+    background: #0f172a;
+    color: #34d399;
+    border: 1px solid #064e3b;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+    font-size: 0.5rem;
+}
+
 .space-box {
     background-color: transparent !important;
     border: none !important;
