@@ -52,7 +52,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                 // Drawer View: Full word prominently, masked word small below
                                 <div className="d-flex flex-column align-items-center w-100 py-1">
                                     {/* Main Full Word */}
-                                    <div className="drawer-full-word mb-2 text-center">
+                                    <div className="drawer-full-word mb-2 text-center d-flex justify-content-center">
                                         {roomData.masked_word.map((item, i) => (
                                             <div key={`full-${i}`} className={`drawer-main-letter ${item.char === ' ' ? 'space-box' : ''}`}>
                                                 {item.char !== ' ' ? item.char : ''}
@@ -85,7 +85,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                             ) : (
                                 // Guesser View: Masked word and Hint Button
                                 <div className="d-flex flex-nowrap align-items-center justify-content-between w-100 gap-3">
-                                    <div className="masked-word-box d-flex flex-wrap justify-content-center gap-2 rounded shadow-sm w-100">
+                                    <div className="masked-word-box d-flex flex-wrap justify-content-start gap-2 w-100">
                                         {roomData.masked_word.map((item, i) => {
                                             const isRevealedToAll = item.revealed;
                                             const isSpace = item.char === ' ';
@@ -105,7 +105,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                     </div>
                                     
                                     <button
-                                        className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
+                                        className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center flex-shrink-0 ${hintCooldown ? 'opacity-75' : ''}`}
                                         onClick={() => {
                                             if (hintCooldown) return;
                                             setModal({ type: 'confirm_buy_hint' });
