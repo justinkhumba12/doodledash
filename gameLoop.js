@@ -99,7 +99,7 @@ module.exports = (io) => {
 
                 let needsSync = false;
 
-                if (room.status === 'PRE_DRAW' && room.round_end_time && now >= room.round_end_time.getTime()) {
+                if (room.status === 'PRE_DRAW' && room.round_end_time && now >= new Date(room.round_end_time).getTime()) {
                     room.status = 'BREAK';
                     room.end_reason = 'timeout_predraw';
                     room.break_end_time = new Date(now + 5000); 
@@ -119,7 +119,7 @@ module.exports = (io) => {
                     needsSync = true;
                 }
 
-                if (room.status === 'DRAWING' && room.round_end_time && now >= room.round_end_time.getTime()) {
+                if (room.status === 'DRAWING' && room.round_end_time && now >= new Date(room.round_end_time).getTime()) {
                     const rawGuesses = await redis.lrange(`room:${roomId}:guesses`, 0, -1);
                     const guesses = rawGuesses.map(g => JSON.parse(g));
                     const hasCorrect = guesses.some(g => g.is_correct);
@@ -129,16 +129,24 @@ module.exports = (io) => {
                     room.break_end_time = new Date(now + 5000); 
                     room.round_end_time = null;
                     room.members.forEach(m => { m.is_ready = 0; });
+                    
+                    const scores = await redis.hgetall(`room:${roomId}:round_scores`);
+                    room.round_leaderboard = Object.keys(scores).map(uid => ({
+                        user_id: uid,
+                        points: parseInt(scores[uid], 10)
+                    })).sort((a, b) => b.points - a.points);
+                    room.correct_word = room.word_to_draw;
+                    
                     needsSync = true;
                 }
 
-                if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
+                if (room.status === 'REVEAL' && room.break_end_time && now >= new Date(room.break_end_time).getTime()) {
                     room.status = 'BREAK';
                     room.break_end_time = new Date(now + 10000); 
                     needsSync = true;
                 }
 
-                if (room.status === 'BREAK' && room.break_end_time && now >= room.break_end_time.getTime()) {
+                if (room.status === 'BREAK' && room.break_end_time && now >= new Date(room.break_end_time).getTime()) {
                     room.status = 'WAITING';
                     room.break_end_time = null;
                     room.round_end_time = null;
@@ -146,7 +154,7 @@ module.exports = (io) => {
                     needsSync = true;
                 }
 
-                if (room.is_private && room.expire_at && now >= room.expire_at.getTime()) {
+                if (room.is_private && room.expire_at && now >= new Date(room.expire_at).getTime()) {
                     io.to(`room_${roomId}`).emit('room_expired');
                     await deleteRoomData(roomId);
                     

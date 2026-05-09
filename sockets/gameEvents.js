@@ -36,6 +36,8 @@ module.exports = (io, socket, shared) => {
                     room.end_reason = null;
                     room.last_winner_id = null;
                     room.winner_style = null;
+                    room.round_leaderboard = null;
+                    room.correct_word = null;
                     
                     room.members.forEach(m => { 
                         m.purchased_hints = '[]';
@@ -44,7 +46,7 @@ module.exports = (io, socket, shared) => {
                         m.ink_buys = {};
                         m.ink_used = {};
                     });
-                    await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`, `room:${roomId}:guesses`);
+                    await redis.del(`room:${roomId}:drawings`, `room:${roomId}:redo`, `room:${roomId}:guesses`, `room:${roomId}:round_scores`);
                 }
                 await saveRoom(room);
                 await syncRoom(roomId, io);
@@ -172,10 +174,19 @@ module.exports = (io, socket, shared) => {
                 room.winner_style = equippedStyle;
             }
 
-            await db.query('UPDATE users SET credits = credits + 2 WHERE tg_id = ?', [currentUser]);
-            await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [room.current_drawer_id]);
-            await redis.hincrbyfloat('user_credits', currentUser, 2);
-            await redis.hincrbyfloat('user_credits', room.current_drawer_id, 1);
+            // Calculate dynamic points based on remaining time
+            const timeLeftMs = room.round_end_time ? Math.max(0, new Date(room.round_end_time).getTime() - Date.now()) : 0;
+            const pointsEarned = Math.max(1, Math.ceil(timeLeftMs / 10000));
+            const drawerPoints = 1;
+
+            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pointsEarned, currentUser]);
+            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [drawerPoints, room.current_drawer_id]);
+            await redis.hincrbyfloat('user_credits', currentUser, pointsEarned);
+            await redis.hincrbyfloat('user_credits', room.current_drawer_id, drawerPoints);
+            
+            // Save individual round scores
+            await redis.hincrby(`room:${currentRoom}:round_scores`, currentUser, pointsEarned);
+            await redis.hincrby(`room:${currentRoom}:round_scores`, room.current_drawer_id, drawerPoints);
             
             await db.query(`UPDATE users SET daily_correct_guesses = IF(DATE_FORMAT(last_correct_guess_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'), daily_correct_guesses + 1, 1), last_correct_guess_date = UTC_DATE() WHERE tg_id = ?`, [currentUser]);
 
@@ -191,6 +202,13 @@ module.exports = (io, socket, shared) => {
                 room.end_reason = 'all_guessed';
                 room.break_end_time = new Date(Date.now() + 5000);
                 room.members.forEach(m => { m.is_ready = 0; });
+
+                const scores = await redis.hgetall(`room:${currentRoom}:round_scores`);
+                room.round_leaderboard = Object.keys(scores).map(uid => ({
+                    user_id: uid,
+                    points: parseInt(scores[uid], 10)
+                })).sort((a, b) => b.points - a.points);
+                room.correct_word = room.word_to_draw;
             }
 
             await saveRoom(room);
@@ -381,6 +399,14 @@ module.exports = (io, socket, shared) => {
             room.end_reason = 'drawer_gave_up';
             room.break_end_time = new Date(Date.now() + 5000);
             room.members.forEach(m => { m.is_ready = 0; });
+            
+            const scores = await redis.hgetall(`room:${currentRoom}:round_scores`);
+            room.round_leaderboard = Object.keys(scores).map(uid => ({
+                user_id: uid,
+                points: parseInt(scores[uid], 10)
+            })).sort((a, b) => b.points - a.points);
+            room.correct_word = room.word_to_draw;
+
             await saveRoom(room);
             await syncRoom(currentRoom, io);
         }
