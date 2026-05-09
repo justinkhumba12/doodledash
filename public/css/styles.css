@@ -243,9 +243,9 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 }
 
 .drawer-main-letter {
-    width: 18px;
-    height: 24px;
-    font-size: 0.9rem;
+    width: 14px;
+    height: 18px;
+    font-size: 0.75rem;
     font-weight: 800;
     text-transform: uppercase;
     display: flex;
@@ -253,7 +253,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     justify-content: center;
     background: linear-gradient(135deg, var(--primary) 0%, #818cf8 100%);
     color: white;
-    border-radius: 6px;
+    border-radius: 4px;
     box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
     text-shadow: 0 1px 2px rgba(0,0,0,0.2);
 }
@@ -261,7 +261,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .drawer-main-letter.space-box {
     background: transparent;
     box-shadow: none;
-    width: 12px;
+    width: 10px;
 }
 
 /* Mini Letter Styles for Drawer Secondary View */
