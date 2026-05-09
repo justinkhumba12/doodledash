@@ -138,6 +138,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     background: transparent;
     border: none;
     padding: 4px 0;
+    gap: 4px !important;
 }
 
 .letter-box {
@@ -179,8 +180,8 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    width: 12px;
-    margin: 0 4px;
+    width: 6px;
+    margin: 0 2px;
 }
 
 .hint-btn {
@@ -239,7 +240,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 6px;
+    gap: 3px !important;
 }
 
 .drawer-main-letter {
@@ -261,7 +262,7 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 .drawer-main-letter.space-box {
     background: transparent;
     box-shadow: none;
-    width: 8px;
+    width: 4px;
 }
 
 /* Mini Letter Styles for Drawer Secondary View */
@@ -275,5 +276,5 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 }
 
 .mini-space {
-    width: 8px !important;
+    width: 4px !important;
 }
