@@ -1,6 +1,8 @@
 const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemConfig }) => {
     const { room, members } = roomData;
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
+    
+    const isUserDrawer = room.current_drawer_id === tgId;
 
     const prevStatusRef = React.useRef(room.status);
     const [hintCooldown, setHintCooldown] = React.useState(false);
@@ -45,51 +47,81 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                 <div className="whiteboard-wrapper">
                     
                     {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
-                    <div className="word-hint-container w-100 d-flex flex-nowrap align-items-center justify-content-between gap-3 mb-3">
-                        <div className="masked-word-box d-flex flex-wrap justify-content-center gap-2 rounded shadow-sm">
-                            {roomData.masked_word.map((item, i) => {
-                                const isDrawer = roomData.room.current_drawer_id === tgId;
-                                const showChar = isDrawer || item.revealed;
-                                const isRevealedToAll = item.revealed;
-                                const isSpace = item.char === ' ';
-
-                                let boxClass = 'hidden-letter';
-                                if (isSpace) {
-                                    boxClass = 'space-box';
-                                } else if (isRevealedToAll) {
-                                    boxClass = 'revealed-letter hint-reveal';
-                                } else if (isDrawer) {
-                                    boxClass = 'drawer-hidden-letter';
-                                }
-
-                                return (
-                                    <div 
-                                        key={i}
-                                        className={`letter-box d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${boxClass}`}
-                                    >
-                                        {showChar && !isSpace ? item.char : ''}
+                        <div className="word-hint-container w-100 mb-3">
+                            {isUserDrawer ? (
+                                // Drawer View: Full word prominently, masked word small below
+                                <div className="d-flex flex-column align-items-center w-100 py-1">
+                                    {/* Main Full Word */}
+                                    <div className="drawer-full-word mb-2 text-center">
+                                        {roomData.masked_word.map((item, i) => (
+                                            <div key={`full-${i}`} className={`drawer-main-letter ${item.char === ' ' ? 'space-box' : ''}`}>
+                                                {item.char !== ' ' ? item.char : ''}
+                                            </div>
+                                        ))}
                                     </div>
-                                );
-                            })}
-                        </div>
-                        {roomData.room.current_drawer_id !== tgId && (
-                            <button
-                                className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
-                                onClick={() => {
-                                    if (hintCooldown) return;
-                                    setModal({ type: 'confirm_buy_hint' });
-                                }}
-                                title={hintCooldown ? `Hints available in ${cooldownTimeLeft}s` : "Get a Hint (1 Credit)"}
-                                disabled={hintCooldown}
-                            >
-                                <i className="fas fa-lightbulb"></i>
-                                {hintCooldown && <span className="cooldown-text">{cooldownTimeLeft}s</span>}
-                            </button>
-                        )}
-                    </div>
-                ) : null}
+                                    
+                                    {/* Secondary Masked Word (What guessers see) */}
+                                    <div className="d-flex align-items-center justify-content-center gap-2 bg-light rounded-pill px-3 py-1 border shadow-sm">
+                                        <span className="text-secondary fw-bold" style={{fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px'}}>
+                                            Guessers see:
+                                        </span>
+                                        <div className="d-flex flex-wrap justify-content-center gap-1">
+                                            {roomData.masked_word.map((item, i) => {
+                                                const isRevealed = item.revealed;
+                                                const isSpace = item.char === ' ';
+                                                let boxClass = 'hidden-letter mini-letter';
+                                                if (isSpace) boxClass = 'space-box mini-space';
+                                                else if (isRevealed) boxClass = 'revealed-letter mini-letter hint-reveal';
+                                                
+                                                return (
+                                                    <div key={`mask-${i}`} className={`letter-box d-flex align-items-center justify-content-center fw-bold ${boxClass}`}>
+                                                        {isRevealed && !isSpace ? item.char : ''}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                // Guesser View: Masked word and Hint Button
+                                <div className="d-flex flex-nowrap align-items-center justify-content-between w-100 gap-3">
+                                    <div className="masked-word-box d-flex flex-wrap justify-content-center gap-2 rounded shadow-sm w-100">
+                                        {roomData.masked_word.map((item, i) => {
+                                            const isRevealedToAll = item.revealed;
+                                            const isSpace = item.char === ' ';
+                                            let boxClass = 'hidden-letter';
+                                            if (isSpace) boxClass = 'space-box';
+                                            else if (isRevealedToAll) boxClass = 'revealed-letter hint-reveal';
 
-                <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} systemConfig={systemConfig} />
+                                            return (
+                                                <div 
+                                                    key={i}
+                                                    className={`letter-box d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${boxClass}`}
+                                                >
+                                                    {isRevealedToAll && !isSpace ? item.char : ''}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    
+                                    <button
+                                        className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
+                                        onClick={() => {
+                                            if (hintCooldown) return;
+                                            setModal({ type: 'confirm_buy_hint' });
+                                        }}
+                                        title={hintCooldown ? `Hints available in ${cooldownTimeLeft}s` : "Get a Hint (1 Credit)"}
+                                        disabled={hintCooldown}
+                                    >
+                                        <i className="fas fa-lightbulb"></i>
+                                        {hintCooldown && <span className="cooldown-text">{cooldownTimeLeft}s</span>}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ) : null}
+
+                    <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} systemConfig={systemConfig} />
 
                     <div className="mt-4 w-100">
                         <h6 className="fw-bold text-secondary mb-3">Drawing Queue</h6>
