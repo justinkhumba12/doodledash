@@ -63,7 +63,7 @@ module.exports = (io, socket, shared) => {
             const actualWord = word.toUpperCase();
             room.word_to_draw = actualWord;
             room.status = 'DRAWING';
-            room.round_end_time = new Date(Date.now() + 90000); // Set drawing timer to 90 seconds
+            room.round_end_time = new Date(Date.now() + 90000); 
 
             const lettersOnly = actualWord.replace(/ /g, '');
             const len = lettersOnly.length;
@@ -116,6 +116,10 @@ module.exports = (io, socket, shared) => {
         const guesses = rawGuesses.map(g => JSON.parse(g));
         const myGuesses = guesses.filter(g => g.user_id === currentUser);
 
+        if (myGuesses.some(g => g.is_correct)) {
+            return socket.emit('create_error', 'You have already guessed the word correctly!');
+        }
+
         const allowedGuesses = 4 + (member.purchased_guesses || 0);
         if (myGuesses.length >= allowedGuesses) return socket.emit('create_error', 'Out of guesses. Please buy more.');
 
@@ -127,13 +131,25 @@ module.exports = (io, socket, shared) => {
         const guessObj = {
             id: Date.now(),
             user_id: currentUser,
-            guess_text: isCorrect ? 'Correct guess!' : data.guess.toUpperCase(),
+            guess_text: data.guess.toUpperCase(),
             is_correct: isCorrect,
             equipped_style: equippedStyle
         };
 
         await redis.rpush(`room:${currentRoom}:guesses`, JSON.stringify(guessObj));
-        io.to(`room_${currentRoom}`).emit('new_guess', guessObj);
+        
+        const roomSockets = await io.in(`room_${currentRoom}`).fetchSockets();
+        for (const s of roomSockets) {
+            const sid = s.data.currentUser;
+            const isDrawer = room.current_drawer_id === sid;
+            const isSender = currentUser === sid;
+            const emitGuess = { ...guessObj };
+            
+            if (!isDrawer && !isSender && room.status === 'DRAWING') {
+                emitGuess.guess_text = '••••••••';
+            }
+            s.emit('new_guess', emitGuess);
+        }
 
         if (isCorrect) {
             const cId = await redis.incr('global_chat_id');
@@ -151,12 +167,10 @@ module.exports = (io, socket, shared) => {
             await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
             io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
 
-            room.status = 'REVEAL';
-            room.last_winner_id = currentUser;
-            room.winner_style = equippedStyle;
-            room.break_end_time = new Date(Date.now() + 5000);
-            room.members.forEach(m => { m.is_ready = 0; });
-            await saveRoom(room);
+            if (!room.last_winner_id) {
+                room.last_winner_id = currentUser;
+                room.winner_style = equippedStyle;
+            }
 
             await db.query('UPDATE users SET credits = credits + 2 WHERE tg_id = ?', [currentUser]);
             await db.query('UPDATE users SET credits = credits + 1 WHERE tg_id = ?', [room.current_drawer_id]);
@@ -168,7 +182,20 @@ module.exports = (io, socket, shared) => {
             const weekKey = getWeekKey();
             await db.query(`INSERT INTO user_weekly_stats (tg_id, week_key, guesses, guesses_updated_at) VALUES (?, ?, 1, NOW()) ON DUPLICATE KEY UPDATE guesses = guesses + 1, guesses_updated_at = NOW()`, [currentUser, weekKey]);
 
+            const correctGuessers = new Set(guesses.filter(g => g.is_correct).map(g => g.user_id));
+            correctGuessers.add(currentUser);
+            const nonDrawers = room.members.filter(m => m.user_id !== room.current_drawer_id);
+
+            if (correctGuessers.size >= nonDrawers.length) {
+                room.status = 'REVEAL';
+                room.end_reason = 'all_guessed';
+                room.break_end_time = new Date(Date.now() + 5000);
+                room.members.forEach(m => { m.is_ready = 0; });
+            }
+
+            await saveRoom(room);
             await syncRoom(currentRoom, io);
+            
             const userState = await getUserState(currentUser);
             if (userState) socket.emit('user_update', userState);
         }

@@ -108,7 +108,6 @@ module.exports = (io) => {
                     room.base_hints = '[]';
                     room.masked_word = null;
                     
-                    // Reset ready status so everyone has to manually ready up again
                     room.members.forEach(m => { m.is_ready = 0; });
                     
                     const cId = await redis.incr('global_chat_id');
@@ -121,8 +120,12 @@ module.exports = (io) => {
                 }
 
                 if (room.status === 'DRAWING' && room.round_end_time && now >= room.round_end_time.getTime()) {
+                    const rawGuesses = await redis.lrange(`room:${roomId}:guesses`, 0, -1);
+                    const guesses = rawGuesses.map(g => JSON.parse(g));
+                    const hasCorrect = guesses.some(g => g.is_correct);
+
                     room.status = 'REVEAL';
-                    room.end_reason = 'nobody_guessed';
+                    room.end_reason = hasCorrect ? 'time_up' : 'nobody_guessed';
                     room.break_end_time = new Date(now + 5000); 
                     room.round_end_time = null;
                     room.members.forEach(m => { m.is_ready = 0; });
