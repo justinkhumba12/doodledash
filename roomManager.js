@@ -175,9 +175,15 @@ async function syncRoom(roomId, io) {
                 });
             }
 
+            let sanitizedWordToDraw = room.word_to_draw;
+            if (!isDrawer && room.status === 'DRAWING') {
+                sanitizedWordToDraw = null;
+            }
+
             s.emit('room_sync', {
                 room: { 
                     ...room, 
+                    word_to_draw: sanitizedWordToDraw,
                     expire_at: room.expire_at ? room.expire_at.toISOString() : null,
                     break_end_time: room.break_end_time ? room.break_end_time.toISOString() : null,
                     round_end_time: room.round_end_time ? room.round_end_time.toISOString() : null,
