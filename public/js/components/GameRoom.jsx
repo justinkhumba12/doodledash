@@ -57,7 +57,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                 if (isSpace) {
                                     boxClass = 'space-box';
                                 } else if (isDrawer && isRevealedToAll) {
-                                    boxClass = 'drawer-hint-letter hint-reveal';
+                                    boxClass = 'drawer-hint-letter';
                                 } else if (isRevealedToAll) {
                                     boxClass = 'revealed-letter hint-reveal';
                                 } else if (isDrawer) {

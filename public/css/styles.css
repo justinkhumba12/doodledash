@@ -178,11 +178,11 @@ canvas { cursor: crosshair; width: 100% !important; height: 100% !important; dis
 }
 
 .drawer-hint-letter {
-    background: #0f172a;
-    color: #34d399;
-    border: 1px solid #064e3b;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
-    font-size: 0.5rem;
+    background: #2d1b1e;
+    color: #ef4444;
+    border: 1px solid #dc2626;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2), 0 0 5px rgba(239, 68, 68, 0.3);
+    font-size: 0.55rem;
 }
 
 .space-box {
