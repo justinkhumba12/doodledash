@@ -74,7 +74,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         </div>
                         {roomData.room.current_drawer_id !== tgId && (
                             <button
-                                className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-50' : ''}`}
+                                className={`hint-btn btn rounded-circle shadow d-flex flex-column align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
                                 onClick={() => {
                                     if (hintCooldown) return;
                                     setModal({ type: 'confirm_buy_hint' });
@@ -83,6 +83,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                                 disabled={hintCooldown}
                             >
                                 <i className="fas fa-lightbulb"></i>
+                                {hintCooldown && <span className="cooldown-text">{cooldownTimeLeft}s</span>}
                             </button>
                         )}
                     </div>
