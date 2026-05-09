@@ -113,6 +113,11 @@ module.exports = (io, socket, shared) => {
         const room = await getRoom(currentRoom);
         if (!room || room.status !== 'DRAWING' || room.current_drawer_id === currentUser) return;
 
+        // Reject guesses if the round end time has passed
+        if (room.round_end_time && Date.now() > new Date(room.round_end_time).getTime()) {
+            return socket.emit('create_error', 'Time is up! Guess not accepted.');
+        }
+
         const member = room.members.find(m => m.user_id === currentUser);
         if (!member) return;
 
@@ -180,7 +185,7 @@ module.exports = (io, socket, shared) => {
             const timeLeftMs = room.round_end_time ? Math.max(0, new Date(room.round_end_time).getTime() - Date.now()) : 0;
             const pointsEarned = Math.max(1, Math.ceil(timeLeftMs / 10000));
 
-            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pointsEarned, currentUser]);
+            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [currentUser]);
             await redis.hincrbyfloat('user_credits', currentUser, pointsEarned);
             
             // Save individual round scores

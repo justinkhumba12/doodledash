@@ -2,6 +2,7 @@ const { useState, useEffect, useRef } = React;
 
 const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) => {
     const [rawInput, setRawInput] = useState('');
+    const [timeLeft, setTimeLeft] = useState(1);
     const isDrawer = roomData.room.current_drawer_id === tgId;
     const messagesEndRef = useRef(null);
 
@@ -19,6 +20,21 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
     const wordData = (roomData.room.status === 'DRAWING' && roomData.masked_word) ? roomData.masked_word : null;
     const wordLength = wordData ? wordData.length : 10;
     const unrevealedCount = wordData ? wordData.filter(w => !w.revealed).length : wordLength;
+
+    useEffect(() => {
+        if (roomData.room.status === 'DRAWING' && roomData.room.round_end_time) {
+            const updateTimer = () => {
+                const end = new Date(roomData.room.round_end_time).getTime();
+                const now = Date.now();
+                setTimeLeft(Math.max(0, Math.floor((end - now) / 1000)));
+            };
+            updateTimer(); 
+            const interval = setInterval(updateTimer, 1000);
+            return () => clearInterval(interval);
+        } else {
+            setTimeLeft(1);
+        }
+    }, [roomData.room.status, roomData.room.round_end_time]);
 
     useEffect(() => {
         if (rawInput.length > unrevealedCount) {
@@ -42,7 +58,7 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
     };
 
     const handleGuessSubmit = () => {
-        if (guessesLeft <= 0) return;
+        if (guessesLeft <= 0 || timeLeft === 0) return;
         if (rawInput.length !== unrevealedCount) {
             setModal({ type: 'error', title: 'Invalid Guess', content: `Please fill in all ${unrevealedCount} missing letters.`});
             return;
@@ -162,9 +178,10 @@ const GuessBox = ({ guesses, tgId, roomData, socket, setModal, systemConfig }) =
                                         autoComplete="off"
                                         autoCorrect="off"
                                         spellCheck="false"
+                                        disabled={timeLeft === 0}
                                     />
                                 </div>
-                                <button className="btn btn-primary rounded-pill ms-2 px-3 h-100" style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={rawInput.length !== unrevealedCount}>
+                                <button className="btn btn-primary rounded-pill ms-2 px-3 h-100" style={{zIndex: 11}} onClick={handleGuessSubmit} disabled={rawInput.length !== unrevealedCount || timeLeft === 0}>
                                     <i className="fas fa-paper-plane"></i>
                                 </button>
                             </div>

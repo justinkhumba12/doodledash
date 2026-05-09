@@ -50,8 +50,8 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                             {roomData.masked_word.map((item, i) => (
                                 <div 
                                     key={i}
-                                    className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'} ${(!item.revealed && hintCooldown) ? 'opacity-50' : ''}`}
-                                    style={{ width: '28px', height: '28px', fontSize: '1rem', transition: '0.2s' }}
+                                    className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${item.revealed ? 'bg-warning text-dark border border-dark hint-reveal' : 'bg-secondary text-white cursor-pointer'} ${(!item.revealed && hintCooldown) ? 'opacity-50' : ''}`}
+                                    style={{ width: '20px', height: '20px', fontSize: '0.75rem', transition: '0.2s', padding: 0 }}
                                     onClick={() => {
                                         if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
                                             if (hintCooldown) return;

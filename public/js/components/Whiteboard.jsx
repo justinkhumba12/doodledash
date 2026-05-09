@@ -405,7 +405,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     };
 
     const startDraw = (e) => {
-        if (!isDrawer || !isDrawingPhase) return;
+        if (!isDrawer || !isDrawingPhase || timeLeft === 0) return;
         try { e.target.setPointerCapture(e.pointerId); } catch(err) {}
         drawingRef.current = true;
         currentLineRef.current = [];
@@ -668,7 +668,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             <div className="whiteboard-container" style={{ position: 'relative' }}>
                 <canvas 
                     ref={canvasRef} width="500" height="500"
-                    style={{ touchAction: 'none' }}
+                    style={{ touchAction: 'none', pointerEvents: (room.status === 'DRAWING' && timeLeft === 0) ? 'none' : 'auto' }}
                     onPointerDown={startDraw} 
                     onPointerMove={moveDraw} 
                     onPointerUp={stopDraw} 
@@ -676,14 +676,14 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                     onPointerCancel={stopDraw}
                 />
                 
-                {/* Embedded absolute Timer UI right above the canvas content */}
+                {/* Embedded absolute Timer UI positioned at the top-left of the canvas */}
                 {room.status === 'DRAWING' && (
                     <div 
                         style={{
                             position: 'absolute',
                             top: '8px',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
+                            left: '8px',
+                            transform: 'none',
                             backgroundColor: timeLeft <= 15 ? 'rgba(220, 53, 69, 0.9)' : 'rgba(255, 255, 255, 0.85)',
                             color: timeLeft <= 15 ? '#fff' : '#333',
                             padding: '2px 8px',
@@ -699,6 +699,13 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                         }}
                     >
                         <i className="fas fa-clock"></i>{timeLeft}s
+                    </div>
+                )}
+                
+                {/* Loading results overlay when the timer hits zero */}
+                {room.status === 'DRAWING' && timeLeft === 0 && (
+                    <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.85)', zIndex: 15}}>
+                        <h4 className="fw-bold text-dark"><i className="fas fa-spinner fa-spin me-2"></i>Loading results...</h4>
                     </div>
                 )}
 
