@@ -45,7 +45,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                 <div className="whiteboard-wrapper">
                     
                     {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
-                    <div className="word-hint-container w-100 d-flex flex-wrap align-items-center justify-content-center gap-3 mb-3">
+                    <div className="word-hint-container w-100 d-flex flex-nowrap align-items-center justify-content-between gap-3 mb-3">
                         <div className="masked-word-box d-flex flex-wrap justify-content-center gap-2 rounded shadow-sm">
                             {roomData.masked_word.map((item, i) => {
                                 const isDrawer = roomData.room.current_drawer_id === tgId;
@@ -74,7 +74,7 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         </div>
                         {roomData.room.current_drawer_id !== tgId && (
                             <button
-                                className={`hint-btn btn rounded-circle shadow d-flex flex-column align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
+                                className={`hint-btn btn rounded-circle shadow d-flex align-items-center justify-content-center ${hintCooldown ? 'opacity-75' : ''}`}
                                 onClick={() => {
                                     if (hintCooldown) return;
                                     setModal({ type: 'confirm_buy_hint' });
