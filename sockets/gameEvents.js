@@ -38,7 +38,6 @@ module.exports = (io, socket, shared) => {
                     room.winner_style = null;
                     
                     room.members.forEach(m => { 
-                        m.has_given_up = 0; 
                         m.purchased_hints = '[]';
                         m.purchased_guesses = 0;
                         m.ink_extra = {};
@@ -64,7 +63,7 @@ module.exports = (io, socket, shared) => {
             const actualWord = word.toUpperCase();
             room.word_to_draw = actualWord;
             room.status = 'DRAWING';
-            room.round_end_time = null;
+            room.round_end_time = new Date(Date.now() + 90000); // Set drawing timer to 90 seconds
 
             const lettersOnly = actualWord.replace(/ /g, '');
             const len = lettersOnly.length;
@@ -111,7 +110,7 @@ module.exports = (io, socket, shared) => {
         if (!room || room.status !== 'DRAWING' || room.current_drawer_id === currentUser) return;
 
         const member = room.members.find(m => m.user_id === currentUser);
-        if (!member || member.has_given_up) return;
+        if (!member) return;
 
         const rawGuesses = await redis.lrange(`room:${currentRoom}:guesses`, 0, -1);
         const guesses = rawGuesses.map(g => JSON.parse(g));
@@ -357,39 +356,6 @@ module.exports = (io, socket, shared) => {
             room.members.forEach(m => { m.is_ready = 0; });
             await saveRoom(room);
             await syncRoom(currentRoom, io);
-        }
-    });
-
-    socket.on('guesser_give_up', async () => {
-        const currentUser = socket.data.currentUser;
-        const currentRoom = socket.data.currentRoom;
-        if (!currentUser || !currentRoom) return;
-
-        const room = await getRoom(currentRoom);
-        if (room && (room.status === 'DRAWING' || room.status === 'PRE_DRAW') && room.current_drawer_id !== currentUser) {
-            const member = room.members.find(m => m.user_id === currentUser);
-            if (member) {
-                member.has_given_up = 1;
-                await saveRoom(room);
-                
-                const cId = await redis.incr('global_chat_id');
-                const sysChat = { id: cId, room_id: currentRoom, user_id: currentUser, message: 'voted to give up.', is_system: true, action_type: 'give_up', created_at: new Date() };
-                await redis.rpush(`room:${currentRoom}:chats`, JSON.stringify(sysChat));
-                await redis.ltrim(`room:${currentRoom}:chats`, -50, -1);
-                io.to(`room_${currentRoom}`).emit('new_chat', sysChat);
-
-                const activeGuessers = room.members.filter(m => m.user_id !== room.current_drawer_id);
-                const allGivenUp = activeGuessers.length > 0 && activeGuessers.every(m => m.has_given_up);
-                
-                if (allGivenUp && room.status === 'DRAWING') {
-                    room.status = 'REVEAL';
-                    room.end_reason = 'all_gave_up';
-                    room.break_end_time = new Date(Date.now() + 5000);
-                    room.members.forEach(m => { m.is_ready = 0; });
-                    await saveRoom(room);
-                }
-                await syncRoom(currentRoom, io);
-            }
         }
     });
 };

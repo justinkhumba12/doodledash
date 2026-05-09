@@ -132,7 +132,6 @@ module.exports = (io) => {
                 if (room.status === 'REVEAL' && room.break_end_time && now >= room.break_end_time.getTime()) {
                     room.status = 'BREAK';
                     room.break_end_time = new Date(now + 10000); 
-                    room.members.forEach(m => m.has_given_up = 0);
                     needsSync = true;
                 }
 
@@ -140,7 +139,7 @@ module.exports = (io) => {
                     room.status = 'WAITING';
                     room.break_end_time = null;
                     room.round_end_time = null;
-                    room.members.forEach(m => { m.is_ready = 0; m.has_given_up = 0; });
+                    room.members.forEach(m => { m.is_ready = 0; });
                     needsSync = true;
                 }
 
