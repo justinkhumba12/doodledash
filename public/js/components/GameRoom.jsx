@@ -3,6 +3,8 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
     const prevStatusRef = React.useRef(room.status);
+    const [hintCooldown, setHintCooldown] = React.useState(false);
+    const [cooldownTimeLeft, setCooldownTimeLeft] = React.useState(0);
     
     React.useEffect(() => {
         if (room.status === 'REVEAL' && prevStatusRef.current !== 'REVEAL') {
@@ -15,6 +17,28 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
         prevStatusRef.current = room.status;
     }, [room.status, room.round_leaderboard, room.correct_word, room.word_to_draw, setModal]);
 
+    React.useEffect(() => {
+        let interval;
+        if (room.status === 'DRAWING' && room.drawing_start_time) {
+            const checkCooldown = () => {
+                const elapsed = Date.now() - new Date(room.drawing_start_time).getTime();
+                if (elapsed < 15000) {
+                    setHintCooldown(true);
+                    setCooldownTimeLeft(Math.ceil((15000 - elapsed) / 1000));
+                } else {
+                    setHintCooldown(false);
+                    setCooldownTimeLeft(0);
+                }
+            };
+            checkCooldown();
+            interval = setInterval(checkCooldown, 1000);
+        } else {
+            setHintCooldown(false);
+            setCooldownTimeLeft(0);
+        }
+        return () => clearInterval(interval);
+    }, [room.status, room.drawing_start_time]);
+
     return (
         <div className="row pb-5">
             <div className="col-12 col-lg-8 mx-auto">
@@ -26,14 +50,15 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                             {roomData.masked_word.map((item, i) => (
                                 <div 
                                     key={i}
-                                    className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold fs-5 ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'}`}
-                                    style={{ width: '35px', height: '35px', transition: '0.2s' }}
+                                    className={`d-flex align-items-center justify-content-center rounded shadow-sm fw-bold ${item.revealed ? 'bg-success text-white hint-reveal' : 'bg-secondary text-white cursor-pointer'} ${(!item.revealed && hintCooldown) ? 'opacity-50' : ''}`}
+                                    style={{ width: '28px', height: '28px', fontSize: '1rem', transition: '0.2s' }}
                                     onClick={() => {
                                         if (!item.revealed && roomData.room.current_drawer_id !== tgId) {
+                                            if (hintCooldown) return;
                                             setModal({ type: 'confirm_buy_hint', index: item.index });
                                         }
                                     }}
-                                    title={!item.revealed && roomData.room.current_drawer_id !== tgId ? "Click to reveal (1 Credit)" : ""}
+                                    title={!item.revealed && roomData.room.current_drawer_id !== tgId ? (hintCooldown ? `Hints available in ${cooldownTimeLeft}s` : "Click to reveal (1 Credit)") : ""}
                                 >
                                     {item.revealed ? item.char : '?'}
                                 </div>

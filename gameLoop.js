@@ -65,6 +65,7 @@ module.exports = (io) => {
                                 room.base_hints = '[]';
                                 room.masked_word = null;
                                 room.round_end_time = null;
+                                room.drawing_start_time = null;
                                 room.members.forEach(m => { m.is_ready = 0; });
                                 
                                 const cId = await redis.incr('global_chat_id');
@@ -107,6 +108,7 @@ module.exports = (io) => {
                     room.word_to_draw = null;
                     room.base_hints = '[]';
                     room.masked_word = null;
+                    room.drawing_start_time = null;
                     
                     room.members.forEach(m => { m.is_ready = 0; });
                     
@@ -122,7 +124,26 @@ module.exports = (io) => {
                 if (room.status === 'DRAWING' && room.round_end_time && now >= new Date(room.round_end_time).getTime()) {
                     const rawGuesses = await redis.lrange(`room:${roomId}:guesses`, 0, -1);
                     const guesses = rawGuesses.map(g => JSON.parse(g));
-                    const hasCorrect = guesses.some(g => g.is_correct);
+                    const correctGuessers = new Set(guesses.filter(g => g.is_correct).map(g => g.user_id));
+                    const allGuessers = new Set(guesses.map(g => g.user_id));
+
+                    const drawerPoints = (correctGuessers.size * 5) + (allGuessers.size * 1);
+                    if (drawerPoints > 0) {
+                        await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [drawerPoints, room.current_drawer_id]);
+                        await redis.hincrbyfloat('user_credits', room.current_drawer_id, drawerPoints);
+                        await redis.hincrby(`room:${roomId}:round_scores`, room.current_drawer_id, drawerPoints);
+                    }
+
+                    for (const uid of allGuessers) {
+                        if (!correctGuessers.has(uid) && uid !== room.current_drawer_id) {
+                            const pPoints = 1;
+                            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pPoints, uid]);
+                            await redis.hincrbyfloat('user_credits', uid, pPoints);
+                            await redis.hincrby(`room:${roomId}:round_scores`, uid, pPoints);
+                        }
+                    }
+
+                    const hasCorrect = correctGuessers.size > 0;
 
                     room.status = 'REVEAL';
                     room.end_reason = hasCorrect ? 'time_up' : 'nobody_guessed';
@@ -131,9 +152,9 @@ module.exports = (io) => {
                     room.members.forEach(m => { m.is_ready = 0; });
                     
                     const scores = await redis.hgetall(`room:${roomId}:round_scores`);
-                    room.round_leaderboard = Object.keys(scores).map(uid => ({
-                        user_id: uid,
-                        points: parseInt(scores[uid], 10)
+                    room.round_leaderboard = room.members.map(m => ({
+                        user_id: m.user_id,
+                        points: parseInt(scores[m.user_id] || 0, 10)
                     })).sort((a, b) => b.points - a.points);
                     room.correct_word = room.word_to_draw;
                     
@@ -150,6 +171,7 @@ module.exports = (io) => {
                     room.status = 'WAITING';
                     room.break_end_time = null;
                     room.round_end_time = null;
+                    room.drawing_start_time = null;
                     room.members.forEach(m => { m.is_ready = 0; });
                     needsSync = true;
                 }
@@ -199,6 +221,7 @@ module.exports = (io) => {
                                 room.base_hints = '[]';
                                 room.masked_word = null;
                                 room.round_end_time = null;
+                                room.drawing_start_time = null;
                                 room.members.forEach(m => { m.is_ready = 0; });
                             }
 

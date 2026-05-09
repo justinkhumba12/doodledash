@@ -38,6 +38,7 @@ module.exports = (io, socket, shared) => {
                     room.winner_style = null;
                     room.round_leaderboard = null;
                     room.correct_word = null;
+                    room.drawing_start_time = null;
                     
                     room.members.forEach(m => { 
                         m.purchased_hints = '[]';
@@ -66,6 +67,7 @@ module.exports = (io, socket, shared) => {
             room.word_to_draw = actualWord;
             room.status = 'DRAWING';
             room.round_end_time = new Date(Date.now() + 90000); 
+            room.drawing_start_time = new Date();
 
             const lettersOnly = actualWord.replace(/ /g, '');
             const len = lettersOnly.length;
@@ -174,19 +176,15 @@ module.exports = (io, socket, shared) => {
                 room.winner_style = equippedStyle;
             }
 
-            // Calculate dynamic points based on remaining time
+            // Calculate dynamic points based on remaining time for the guesser
             const timeLeftMs = room.round_end_time ? Math.max(0, new Date(room.round_end_time).getTime() - Date.now()) : 0;
             const pointsEarned = Math.max(1, Math.ceil(timeLeftMs / 10000));
-            const drawerPoints = 1;
 
             await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pointsEarned, currentUser]);
-            await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [drawerPoints, room.current_drawer_id]);
             await redis.hincrbyfloat('user_credits', currentUser, pointsEarned);
-            await redis.hincrbyfloat('user_credits', room.current_drawer_id, drawerPoints);
             
             // Save individual round scores
             await redis.hincrby(`room:${currentRoom}:round_scores`, currentUser, pointsEarned);
-            await redis.hincrby(`room:${currentRoom}:round_scores`, room.current_drawer_id, drawerPoints);
             
             await db.query(`UPDATE users SET daily_correct_guesses = IF(DATE_FORMAT(last_correct_guess_date, '%Y-%m-%d') = DATE_FORMAT(UTC_DATE(), '%Y-%m-%d'), daily_correct_guesses + 1, 1), last_correct_guess_date = UTC_DATE() WHERE tg_id = ?`, [currentUser]);
 
@@ -196,6 +194,8 @@ module.exports = (io, socket, shared) => {
             const correctGuessers = new Set(guesses.filter(g => g.is_correct).map(g => g.user_id));
             correctGuessers.add(currentUser);
             const nonDrawers = room.members.filter(m => m.user_id !== room.current_drawer_id);
+            const allGuessers = new Set(guesses.map(g => g.user_id));
+            allGuessers.add(currentUser);
 
             // Strictly requiring total correct guessers to equal non-drawing members
             if (correctGuessers.size === nonDrawers.length) {
@@ -204,10 +204,26 @@ module.exports = (io, socket, shared) => {
                 room.break_end_time = new Date(Date.now() + 5000);
                 room.members.forEach(m => { m.is_ready = 0; });
 
+                const drawerPoints = (correctGuessers.size * 5) + (allGuessers.size * 1);
+                if (drawerPoints > 0) {
+                    await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [drawerPoints, room.current_drawer_id]);
+                    await redis.hincrbyfloat('user_credits', room.current_drawer_id, drawerPoints);
+                    await redis.hincrby(`room:${currentRoom}:round_scores`, room.current_drawer_id, drawerPoints);
+                }
+
+                for (const uid of allGuessers) {
+                    if (!correctGuessers.has(uid) && uid !== room.current_drawer_id) {
+                        const pPoints = 1;
+                        await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pPoints, uid]);
+                        await redis.hincrbyfloat('user_credits', uid, pPoints);
+                        await redis.hincrby(`room:${currentRoom}:round_scores`, uid, pPoints);
+                    }
+                }
+
                 const scores = await redis.hgetall(`room:${currentRoom}:round_scores`);
-                room.round_leaderboard = Object.keys(scores).map(uid => ({
-                    user_id: uid,
-                    points: parseInt(scores[uid], 10)
+                room.round_leaderboard = room.members.map(m => ({
+                    user_id: m.user_id,
+                    points: parseInt(scores[m.user_id] || 0, 10)
                 })).sort((a, b) => b.points - a.points);
                 room.correct_word = room.word_to_draw;
             }
@@ -285,6 +301,10 @@ module.exports = (io, socket, shared) => {
 
         const room = await getRoom(currentRoom);
         if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
+            if (room.drawing_start_time && Date.now() - new Date(room.drawing_start_time).getTime() < 15000) {
+                return socket.emit('create_error', 'Hints are disabled for the first 15 seconds!');
+            }
+
             const actualWord = room.word_to_draw || '';
             if (index < 0 || index >= actualWord.length || actualWord[index] === ' ') return;
 
@@ -328,6 +348,10 @@ module.exports = (io, socket, shared) => {
 
         const room = await getRoom(currentRoom);
         if (room && room.status === 'DRAWING' && room.current_drawer_id !== currentUser) {
+            if (room.drawing_start_time && Date.now() - new Date(room.drawing_start_time).getTime() < 15000) {
+                return socket.emit('create_error', 'Hints are disabled for the first 15 seconds!');
+            }
+
             const actualWord = room.word_to_draw || '';
             if (index < 0 || index >= actualWord.length || actualWord[index] === ' ') return;
 
@@ -401,10 +425,31 @@ module.exports = (io, socket, shared) => {
             room.break_end_time = new Date(Date.now() + 5000);
             room.members.forEach(m => { m.is_ready = 0; });
             
+            const rawGuesses = await redis.lrange(`room:${currentRoom}:guesses`, 0, -1);
+            const guesses = rawGuesses.map(g => JSON.parse(g));
+            const correctGuessers = new Set(guesses.filter(g => g.is_correct).map(g => g.user_id));
+            const allGuessers = new Set(guesses.map(g => g.user_id));
+
+            const drawerPoints = (correctGuessers.size * 5) + (allGuessers.size * 1);
+            if (drawerPoints > 0) {
+                await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [drawerPoints, room.current_drawer_id]);
+                await redis.hincrbyfloat('user_credits', room.current_drawer_id, drawerPoints);
+                await redis.hincrby(`room:${currentRoom}:round_scores`, room.current_drawer_id, drawerPoints);
+            }
+
+            for (const uid of allGuessers) {
+                if (!correctGuessers.has(uid) && uid !== room.current_drawer_id) {
+                    const pPoints = 1;
+                    await db.query('UPDATE users SET credits = credits + ? WHERE tg_id = ?', [pPoints, uid]);
+                    await redis.hincrbyfloat('user_credits', uid, pPoints);
+                    await redis.hincrby(`room:${currentRoom}:round_scores`, uid, pPoints);
+                }
+            }
+
             const scores = await redis.hgetall(`room:${currentRoom}:round_scores`);
-            room.round_leaderboard = Object.keys(scores).map(uid => ({
-                user_id: uid,
-                points: parseInt(scores[uid], 10)
+            room.round_leaderboard = room.members.map(m => ({
+                user_id: m.user_id,
+                points: parseInt(scores[m.user_id] || 0, 10)
             })).sort((a, b) => b.points - a.points);
             room.correct_word = room.word_to_draw;
 
