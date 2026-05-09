@@ -2,11 +2,18 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
     const { room, members } = roomData;
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
+    const prevStatusRef = React.useRef(room.status);
+    
     React.useEffect(() => {
-        if (roomData.room.status === 'REVEAL') {
-            setModal({ type: 'round_result' });
+        if (room.status === 'REVEAL' && prevStatusRef.current !== 'REVEAL') {
+            setModal({
+                type: 'round_reveal',
+                round_leaderboard: room.round_leaderboard,
+                correct_word: room.correct_word || room.word_to_draw
+            });
         }
-    }, [roomData.room.status, setModal]);
+        prevStatusRef.current = room.status;
+    }, [room.status, room.round_leaderboard, room.correct_word, room.word_to_draw, setModal]);
 
     return (
         <div className="row pb-5">
@@ -34,41 +41,6 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                         </div>
                     </div>
                 ) : null}
-
-                {roomData.room.status === 'REVEAL' && (
-                    <div className="reveal-leaderboard mb-4 p-4 rounded shadow text-center bg-white border border-3 border-primary animate__animated animate__fadeIn">
-                        <h4 className="fw-bold text-primary mb-1 text-uppercase tracking-wider">Round Ended!</h4>
-                        <h2 className="fw-bold text-dark mb-4">
-                            WORD: <span className="text-success text-uppercase">{roomData.room.correct_word || roomData.room.word_to_draw || '?'}</span>
-                        </h2>
-                        
-                        {roomData.room.round_leaderboard && roomData.room.round_leaderboard.length > 0 ? (
-                            <div className="leaderboard-list d-flex flex-column gap-2 mx-auto" style={{maxWidth: '400px'}}>
-                                {roomData.room.round_leaderboard.map((entry, idx) => {
-                                    const displayName = window.getDisplayName(entry.user_id, roomData?.names);
-                                    const photo = roomData?.photos?.[entry.user_id];
-                                    const styleClass = window.getStyleClass(roomData.styles?.[entry.user_id], systemConfig) || 'text-dark';
-                                    return (
-                                        <div key={entry.user_id} className="d-flex align-items-center justify-content-between p-2 bg-light rounded shadow-sm border border-light">
-                                            <div className="d-flex align-items-center gap-3">
-                                                <div className="fw-bold text-secondary" style={{width: '20px'}}>{idx + 1}.</div>
-                                                {photo ? (
-                                                    <img src={photo} className="rounded-circle border" width="35" height="35" style={{objectFit: 'cover'}} alt="Player"/>
-                                                ) : (
-                                                    <i className="fas fa-user-circle fs-3 text-secondary bg-white rounded-circle"></i>
-                                                )}
-                                                <span className={`fw-bold ${styleClass}`} style={{fontSize: '1rem'}}>{displayName}</span>
-                                            </div>
-                                            <span className="badge bg-success rounded-pill px-3 py-2 fs-6 shadow-sm">+{entry.points} pts</span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        ) : (
-                            <div className="p-3 bg-light rounded text-muted fw-bold">No points were awarded this round.</div>
-                        )}
-                    </div>
-                )}
 
                 <Whiteboard roomData={roomData} tgId={tgId} socket={socket} setModal={setModal} systemConfig={systemConfig} />
 

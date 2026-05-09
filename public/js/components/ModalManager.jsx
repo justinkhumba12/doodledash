@@ -174,6 +174,42 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     <button className={`btn btn-${modal.type === 'success' ? 'success' : 'danger'} w-100 rounded-pill`} onClick={close}>Close</button>
                 </>
             );
+        } else if (modal.type === 'round_reveal') {
+            title = 'Round Ended!';
+            content = (
+                <div className="text-center py-2 animate__animated animate__fadeIn">
+                    <h4 className="fw-bold text-dark mb-4">
+                        WORD: <span className="text-success text-uppercase">{modal.correct_word || '?'}</span>
+                    </h4>
+                    
+                    {modal.round_leaderboard && modal.round_leaderboard.length > 0 ? (
+                        <div className="leaderboard-list d-flex flex-column gap-2 mx-auto" style={{maxWidth: '350px'}}>
+                            {modal.round_leaderboard.map((entry, idx) => {
+                                const displayName = getDisplayName(entry.user_id, roomData?.names?.[entry.user_id], roomData?.usernames?.[entry.user_id]);
+                                const photo = roomData?.photos?.[entry.user_id];
+                                const styleClass = window.getStyleClass(roomData?.styles?.[entry.user_id], systemConfig) || 'text-dark';
+                                return (
+                                    <div key={entry.user_id} className="d-flex align-items-center justify-content-between p-2 bg-light rounded shadow-sm border border-light">
+                                        <div className="d-flex align-items-center gap-2">
+                                            <div className="fw-bold text-secondary small" style={{width: '18px'}}>{idx + 1}.</div>
+                                            {photo ? (
+                                                <img src={photo} className="rounded-circle border" width="28" height="28" style={{objectFit: 'cover'}} alt="Player"/>
+                                            ) : (
+                                                <i className="fas fa-user-circle text-secondary bg-white rounded-circle" style={{fontSize: '28px'}}></i>
+                                            )}
+                                            <span className={`fw-bold ${styleClass} small`} style={{fontSize: '0.85rem'}}>{displayName}</span>
+                                        </div>
+                                        <span className="badge bg-success rounded-pill px-2 py-1 shadow-sm" style={{fontSize: '0.75rem'}}>+{entry.points} pts</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="p-3 bg-light rounded text-muted fw-bold small">No points were awarded this round.</div>
+                    )}
+                    <button className="btn btn-primary w-100 rounded-pill mt-4 py-2 fw-bold" onClick={close}>Close</button>
+                </div>
+            );
         } else if (modal.type === 'create_room') {
             const defaultRoomLimits = { publicMax: 8, privateMax: 10, privateBaseCost: 0, timeOptions: [{ minutes: 30, cost: 1 }, { minutes: 60, cost: 2 }] };
             const roomLimits = systemConfig?.roomLimits || defaultRoomLimits;
@@ -582,46 +618,6 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                         </div>
                     </div>
                     <button className="btn btn-secondary w-100 rounded-pill mt-2" onClick={close}>Close</button>
-                </div>
-            );
-        } else if (modal.type === 'round_result') {
-            title = 'Round Result';
-            const room = roomData?.room || {};
-            
-            content = (
-                <div className="text-center py-2">
-                    {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
-                        <h5 className="fw-bold mb-3">The word was: <span className="text-success text-uppercase">{room.word_to_draw}</span></h5>
-                    )}
-                    
-                    {room.end_reason === 'drawer_gave_up' ? (
-                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
-                    ) : room.end_reason === 'all_gave_up' ? (
-                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
-                    ) : room.end_reason === 'timeout_predraw' ? (
-                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
-                    ) : room.end_reason === 'drawer_skipped' ? (
-                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
-                    ) : room.end_reason === 'drawer_disconnected' ? (
-                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
-                    ) : room.last_winner_id ? (
-                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm py-3">
-                            {(roomData?.photos?.[room.last_winner_id]) ? (
-                                <img src={roomData.photos[room.last_winner_id]} className="rounded-circle shadow border" width="60" height="60" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Winner"/>
-                            ) : (
-                                <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
-                            )}
-                            <span className="fs-5 mt-2">
-                                <b className={window.getStyleClass(room.winner_style || roomData?.styles?.[room.last_winner_id], systemConfig) || ''}>
-                                    {window.getDisplayName(room.last_winner_id, roomData?.names)}
-                                </b> guessed it!
-                            </span>
-                        </div>
-                    ) : (
-                        <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
-                    )}
-                    
-                    <button className="btn btn-primary w-100 rounded-pill mt-3 fw-bold" onClick={close}>Continue</button>
                 </div>
             );
         }

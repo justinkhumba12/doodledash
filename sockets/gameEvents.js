@@ -197,7 +197,8 @@ module.exports = (io, socket, shared) => {
             correctGuessers.add(currentUser);
             const nonDrawers = room.members.filter(m => m.user_id !== room.current_drawer_id);
 
-            if (correctGuessers.size >= nonDrawers.length) {
+            // Strictly requiring total correct guessers to equal non-drawing members
+            if (correctGuessers.size === nonDrawers.length) {
                 room.status = 'REVEAL';
                 room.end_reason = 'all_guessed';
                 room.break_end_time = new Date(Date.now() + 5000);

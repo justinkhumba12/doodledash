@@ -726,14 +726,36 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
 
                 {(room.status === 'REVEAL' || room.status === 'WAITING' || room.status === 'BREAK') && (
                     <div className="wb-overlay">
+                        {room.status !== 'WAITING' && (
+                            <>
+                                {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
+                                    <h6 className="fw-bold">The word was: <span className="text-success">{room.word_to_draw}</span></h6>
+                                )}
+                                
+                                {room.end_reason === 'drawer_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
+                                ) : room.end_reason === 'all_gave_up' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
+                                ) : room.end_reason === 'timeout_predraw' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
+                                ) : room.end_reason === 'drawer_skipped' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
+                                ) : room.end_reason === 'drawer_disconnected' ? (
+                                    <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
+                                ) : !room.last_winner_id ? (
+                                    <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
+                                ) : null}
+                            </>
+                        )}
+                        
                         {isMeReady ? (
-                            <h5 className="text-muted fw-bold mb-0">
+                            <h5 className="mt-4 text-muted fw-bold">
                                 {members.length === 1 ? 'Waiting for players to join...' : `Waiting for others... (${readyCount}/${members.length})`}
                             </h5>
                         ) : maintActive ? (
-                            <button className="btn btn-secondary rounded-pill px-5 py-2 shadow fs-5" onClick={() => setModal({ type: 'maintenance', end_time: maintEndTime })}><i className="fas fa-tools"></i> Server Maintenance</button>
+                            <button className="btn btn-secondary rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => setModal({ type: 'maintenance', end_time: maintEndTime })}><i className="fas fa-tools"></i> Server Maintenance</button>
                         ) : (
-                            <button className="btn btn-success rounded-pill px-5 py-2 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
+                            <button className="btn btn-success rounded-pill px-5 py-2 mt-3 shadow fs-5" onClick={() => socket.emit('set_ready')}><i className="fas fa-check"></i> I'm Ready!</button>
                         )}
                     </div>
                 )}
