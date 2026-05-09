@@ -48,7 +48,8 @@ const applyEraserStrokeAndGetRefund = (ctx, canvasWidth, canvasHeight, x1, y1, x
 
 const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
     const canvasRef = useRef(null);
-    const [localTimeLeft, setLocalTimeLeft] = useState(0);
+    const [timeLeft, setTimeLeft] = useState(0); // Drawing turn timer
+    const [localTimeLeft, setLocalTimeLeft] = useState(0); // Break/waiting timer
     const [preDrawTimeLeft, setPreDrawTimeLeft] = useState(30);
     const [selectedColor, setSelectedColor] = useState('black');
     const [glowEnabled, setGlowEnabled] = useState(false);
@@ -200,6 +201,23 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
             });
         }
     };
+
+    // Drawing Phase Timer logic
+    useEffect(() => {
+        if (room.status === 'DRAWING' && room.round_end_time) {
+            const updateTimer = () => {
+                const end = new Date(room.round_end_time).getTime();
+                const now = Date.now();
+                const remaining = Math.max(0, Math.floor((end - now) / 1000));
+                setTimeLeft(remaining);
+            };
+            
+            updateTimer(); 
+            const interval = setInterval(updateTimer, 1000);
+            
+            return () => clearInterval(interval);
+        }
+    }, [room.status, room.round_end_time]);
 
     useEffect(() => {
         if ((room.status === 'WAITING' || room.status === 'BREAK' || room.status === 'REVEAL') && room.break_end_time) {
@@ -647,7 +665,7 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                 </div>
             )}
 
-            <div className="whiteboard-container">
+            <div className="whiteboard-container" style={{ position: 'relative' }}>
                 <canvas 
                     ref={canvasRef} width="500" height="500"
                     style={{ touchAction: 'none' }}
@@ -658,6 +676,32 @@ const Whiteboard = ({ roomData, tgId, socket, setModal, systemConfig }) => {
                     onPointerCancel={stopDraw}
                 />
                 
+                {/* Embedded absolute Timer UI right above the canvas content */}
+                {room.status === 'DRAWING' && (
+                    <div 
+                        style={{
+                            position: 'absolute',
+                            top: '8px',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            backgroundColor: timeLeft <= 15 ? 'rgba(220, 53, 69, 0.9)' : 'rgba(255, 255, 255, 0.85)',
+                            color: timeLeft <= 15 ? '#fff' : '#333',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            pointerEvents: 'none',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                            zIndex: 10,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                        }}
+                    >
+                        <i className="fas fa-clock"></i>{timeLeft}s
+                    </div>
+                )}
+
                 {room.status === 'PRE_DRAW' && isDrawer && (
                     <div className="wb-overlay d-flex flex-column justify-content-center align-items-center w-100" style={{background: 'rgba(255,255,255,0.95)', padding: '10px'}}>
                         <h5 className="text-primary fw-bold mb-1">Your Turn!</h5>

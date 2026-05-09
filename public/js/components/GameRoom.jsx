@@ -1,23 +1,6 @@
 const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemConfig }) => {
     const { room, members } = roomData;
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
-    const [timeLeft, setTimeLeft] = React.useState(0);
-
-    React.useEffect(() => {
-        if (roomData.room.status === 'DRAWING' && roomData.room.round_end_time) {
-            const updateTimer = () => {
-                const end = new Date(roomData.room.round_end_time).getTime();
-                const now = Date.now();
-                const remaining = Math.max(0, Math.floor((end - now) / 1000));
-                setTimeLeft(remaining);
-            };
-            
-            updateTimer(); // Initial call to avoid 1s delay
-            const interval = setInterval(updateTimer, 1000);
-            
-            return () => clearInterval(interval);
-        }
-    }, [roomData.room.status, roomData.room.round_end_time]);
 
     return (
         <div className="row pb-5">
@@ -26,9 +9,6 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
                     
                     {(roomData.room.status === 'DRAWING' && roomData.masked_word) ? (
                     <div className="w-100 d-flex flex-column align-items-center mb-3">
-                        <div className={`badge ${timeLeft <= 15 ? 'bg-danger' : 'bg-primary'} mb-2 p-2 shadow-sm fs-6 rounded-pill`} style={{ minWidth: '80px' }}>
-                            <i className="fas fa-clock me-1"></i> {timeLeft}s
-                        </div>
                         <div className="w-100 d-flex flex-wrap justify-content-center gap-2 bg-light p-2 rounded-pill shadow-sm">
                             {roomData.masked_word.map((item, i) => (
                                 <div 
