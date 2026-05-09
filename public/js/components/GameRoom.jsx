@@ -2,6 +2,12 @@ const GameRoom = ({ roomData, tgId, socket, setProfileModal, setModal, systemCon
     const { room, members } = roomData;
     const sortedMembers = [...members].sort((a, b) => a.joined_at - b.joined_at);
 
+    React.useEffect(() => {
+        if (roomData.room.status === 'REVEAL') {
+            setModal({ type: 'round_result' });
+        }
+    }, [roomData.room.status, setModal]);
+
     return (
         <div className="row pb-5">
             <div className="col-12 col-lg-8 mx-auto">

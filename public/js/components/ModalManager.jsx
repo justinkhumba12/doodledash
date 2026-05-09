@@ -584,6 +584,46 @@ const ModalManager = ({ modal, setModal, socket, setCurrentRoomId, idleTimer, se
                     <button className="btn btn-secondary w-100 rounded-pill mt-2" onClick={close}>Close</button>
                 </div>
             );
+        } else if (modal.type === 'round_result') {
+            title = 'Round Result';
+            const room = roomData?.room || {};
+            
+            content = (
+                <div className="text-center py-2">
+                    {(room.word_to_draw && room.end_reason !== 'timeout_predraw' && room.end_reason !== 'drawer_skipped' && room.end_reason !== 'drawer_disconnected') && (
+                        <h5 className="fw-bold mb-3">The word was: <span className="text-success text-uppercase">{room.word_to_draw}</span></h5>
+                    )}
+                    
+                    {room.end_reason === 'drawer_gave_up' ? (
+                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Gave Up</div>
+                    ) : room.end_reason === 'all_gave_up' ? (
+                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">All Players Gave Up</div>
+                    ) : room.end_reason === 'timeout_predraw' ? (
+                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped (Timeout)</div>
+                    ) : room.end_reason === 'drawer_skipped' ? (
+                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Skipped Turn</div>
+                    ) : room.end_reason === 'drawer_disconnected' ? (
+                        <div className="alert alert-danger mt-2 fw-bold shadow-sm">Drawer Disconnected</div>
+                    ) : room.last_winner_id ? (
+                        <div className="alert alert-success mt-2 d-flex flex-column align-items-center gap-2 shadow-sm py-3">
+                            {(roomData?.photos?.[room.last_winner_id]) ? (
+                                <img src={roomData.photos[room.last_winner_id]} className="rounded-circle shadow border" width="60" height="60" style={{objectFit: 'cover', borderColor: 'var(--primary)'}} alt="Winner"/>
+                            ) : (
+                                <i className="fas fa-user-circle text-secondary bg-white rounded-circle shadow-sm" style={{fontSize: '60px'}}></i>
+                            )}
+                            <span className="fs-5 mt-2">
+                                <b className={window.getStyleClass(room.winner_style || roomData?.styles?.[room.last_winner_id], systemConfig) || ''}>
+                                    {window.getDisplayName(room.last_winner_id, roomData?.names)}
+                                </b> guessed it!
+                            </span>
+                        </div>
+                    ) : (
+                        <div className="alert alert-warning mt-2 fw-bold shadow-sm">Nobody guessed it!</div>
+                    )}
+                    
+                    <button className="btn btn-primary w-100 rounded-pill mt-3 fw-bold" onClick={close}>Continue</button>
+                </div>
+            );
         }
     }
 
